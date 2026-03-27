@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use tokio::time::sleep;
 
+use crate::events::{Event, EventLog};
 use crate::model::ModelBackend;
 use crate::toolbox::{ToolMeta, Toolbox};
 
@@ -188,33 +189,47 @@ async fn process_tool(
     toolbox: &Toolbox,
     tool_name: &str,
     backend: &dyn ModelBackend,
+    log: &EventLog,
 ) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let mut meta = toolbox.load_meta(tool_name)?;
     let mut source = toolbox.load_source(tool_name)?;
 
     for attempt in 1..=MAX_FIX_ATTEMPTS {
-        eprintln!("[janitor] reviewing '{}' (attempt {attempt})", meta.name);
-
         let review = review_tool(&meta, &source, backend).await?;
 
+        log.emit(Event::JanitorReview {
+            tool: meta.name.clone(),
+            attempt,
+            passed: review.passed,
+            issues: if review.passed {
+                None
+            } else {
+                Some(review.issues.clone())
+            },
+        })
+        .await;
+
         if review.passed {
-            eprintln!("[janitor] '{}' passed review", meta.name);
             meta.validated = true;
             toolbox.save_tool(&meta, &source)?;
             return Ok(true);
         }
 
-        eprintln!("[janitor] '{}' failed review: {}", meta.name, review.issues);
-
         if attempt == MAX_FIX_ATTEMPTS {
-            eprintln!(
-                "[janitor] ESCALATE: '{}' failed after {MAX_FIX_ATTEMPTS} attempts — needs human review",
-                meta.name
-            );
+            log.emit(Event::JanitorEscalated {
+                tool: meta.name.clone(),
+                reason: format!("failed after {MAX_FIX_ATTEMPTS} attempts"),
+            })
+            .await;
             return Ok(false);
         }
 
-        eprintln!("[janitor] regenerating '{}'...", meta.name);
+        log.emit(Event::JanitorRegenerate {
+            tool: meta.name.clone(),
+            attempt,
+        })
+        .await;
+
         let (new_meta, new_source) = regenerate_tool(&meta, &source, &review, backend).await?;
         toolbox.save_tool(&new_meta, &new_source)?;
         meta = new_meta;
@@ -224,8 +239,7 @@ async fn process_tool(
     Ok(false)
 }
 
-pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend) {
-    eprintln!("[janitor] started");
+pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) {
     loop {
         let unvalidated = match toolbox.list_unvalidated() {
             Ok(tools) => tools,
@@ -242,10 +256,8 @@ pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend) {
         }
 
         for tool in &unvalidated {
-            match process_tool(toolbox, &tool.name, backend).await {
-                Ok(true) => eprintln!("[janitor] '{}' validated", tool.name),
-                Ok(false) => eprintln!("[janitor] '{}' needs human attention", tool.name),
-                Err(e) => eprintln!("[janitor] error processing '{}': {e}", tool.name),
+            if let Err(e) = process_tool(toolbox, &tool.name, backend, log).await {
+                eprintln!("[janitor] error processing '{}': {e}", tool.name);
             }
         }
     }
