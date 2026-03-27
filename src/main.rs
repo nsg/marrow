@@ -1,4 +1,5 @@
 mod backends;
+mod codegen;
 mod context;
 mod executor;
 mod model;
@@ -8,6 +9,7 @@ mod router;
 mod sandbox;
 mod sandbox_host;
 mod task;
+mod tool_selection;
 mod toolbox;
 
 use std::io::{self, Write};
@@ -48,12 +50,56 @@ async fn run_task(
     role: &str,
     registry: &TaskRegistry,
     router: &ModelRouter,
-    assembler: &ContextAssembler,
+    toolbox: &Toolbox,
+    client: Arc<Client>,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let mut task = Task::new(description);
     task.model_role = role.to_string();
 
-    let context = assembler.assemble(description, &task.context_refs).await?;
+    // Step 1: Get toolbox manifest
+    let available_tools = toolbox.list_tools().unwrap_or_default();
+
+    // Step 2: Ask the "fast" model which tools to use
+    let fast_backend = router
+        .backend("fast")
+        .or_else(|_| router.backend("default"))?;
+    let selected =
+        tool_selection::select_tools(description, &available_tools, fast_backend).await?;
+
+    // Step 3: If no tools selected, generate a new one
+    let selected = if selected.is_empty() && !description.trim().is_empty() {
+        let code_backend = router
+            .backend("code")
+            .or_else(|_| router.backend("default"))?;
+        match codegen::generate_provider(description, code_backend, toolbox).await {
+            Ok(name) => {
+                eprintln!("[marrow] generated new tool: {name}");
+                vec![name]
+            }
+            Err(e) => {
+                eprintln!("[marrow] code generation failed: {e}");
+                Vec::new()
+            }
+        }
+    } else {
+        if !selected.is_empty() {
+            eprintln!("[marrow] selected tools: {}", selected.join(", "));
+        }
+        selected
+    };
+
+    // Step 4: Assemble context from selected providers
+    let mut assembler = ContextAssembler::new(client);
+    for name in &selected {
+        match toolbox.load_provider(name) {
+            Ok(provider) => assembler.add_provider(provider),
+            Err(e) => eprintln!("[marrow] failed to load provider '{name}': {e}"),
+        }
+    }
+
+    let context = assembler.assemble(description, &selected).await?;
+
+    // Step 5: Execute task with assembled context
     let id = registry.create(task).await;
     let output = registry.run(id, router, &context).await?;
     Ok(output)
@@ -67,16 +113,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let router = ModelRouter::from_config(&config)?;
     let registry = TaskRegistry::new();
     let client = Arc::new(Client::new());
-
-    // Load toolbox providers
-    let tb = Toolbox::new(&cli.toolbox);
-    let mut assembler = ContextAssembler::new(client);
-    for provider in tb.load_all_providers().unwrap_or_default() {
-        assembler.add_provider(provider);
-    }
+    let toolbox = Toolbox::new(&cli.toolbox);
 
     if let Some(prompt) = cli.prompt {
-        match run_task(&prompt, &cli.role, &registry, &router, &assembler).await {
+        match run_task(&prompt, &cli.role, &registry, &router, &toolbox, client).await {
             Ok(output) => {
                 if let Some(text) = output.as_str() {
                     println!("{text}");
@@ -112,7 +152,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 break;
             }
 
-            match run_task(input, &cli.role, &registry, &router, &assembler).await {
+            match run_task(
+                input,
+                &cli.role,
+                &registry,
+                &router,
+                &toolbox,
+                client.clone(),
+            )
+            .await
+            {
                 Ok(output) => {
                     if let Some(text) = output.as_str() {
                         println!("\n{text}\n");

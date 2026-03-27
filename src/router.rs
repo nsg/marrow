@@ -65,10 +65,7 @@ impl ModelRouter {
         Ok(Self { backends })
     }
 
-    fn resolve_backend(
-        &self,
-        role: &str,
-    ) -> Result<&dyn ModelBackend, Box<dyn Error + Send + Sync>> {
+    pub fn backend(&self, role: &str) -> Result<&dyn ModelBackend, Box<dyn Error + Send + Sync>> {
         let backend = self
             .backends
             .get(role)
@@ -84,7 +81,7 @@ impl Executor for ModelRouter {
         task: &Task,
         context: &Context,
     ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
-        let backend = self.resolve_backend(&task.model_role)?;
+        let backend = self.backend(&task.model_role)?;
 
         let prompt = format!("Task: {}\nContext: {}", task.description, context.data);
 
