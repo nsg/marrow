@@ -30,6 +30,31 @@ impl RouterConfig {
         let config: Self = toml::from_str(&content)?;
         Ok(config)
     }
+
+    pub fn build_backend(
+        &self,
+        role: &str,
+    ) -> Result<Box<dyn ModelBackend>, Box<dyn Error + Send + Sync>> {
+        let role_config = self
+            .roles
+            .get(role)
+            .ok_or_else(|| format!("no config for role: {role}"))?;
+
+        match role_config.provider.as_str() {
+            "ollama" => {
+                let base_url = role_config
+                    .api_base
+                    .as_deref()
+                    .unwrap_or("http://localhost:11434");
+                let mut backend = OllamaBackend::from_env(base_url, &role_config.model);
+                if let Some(key) = &role_config.api_key {
+                    backend = backend.with_api_key(key);
+                }
+                Ok(Box::new(backend))
+            }
+            other => Err(format!("unknown provider: {other}").into()),
+        }
+    }
 }
 
 pub struct ModelRouter {

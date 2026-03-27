@@ -2,6 +2,7 @@ mod backends;
 mod codegen;
 mod context;
 mod executor;
+mod janitor;
 mod model;
 mod persistence;
 mod registry;
@@ -114,6 +115,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let registry = TaskRegistry::new();
     let client = Arc::new(Client::new());
     let toolbox = Toolbox::new(&cli.toolbox);
+
+    // Spawn janitor in background
+    let janitor_backend = config
+        .build_backend("code")
+        .or_else(|_| config.build_backend("default"))?;
+    let janitor_toolbox = Toolbox::new(&cli.toolbox);
+    tokio::spawn(async move {
+        janitor::run(&janitor_toolbox, janitor_backend.as_ref()).await;
+    });
 
     if let Some(prompt) = cli.prompt {
         match run_task(&prompt, &cli.role, &registry, &router, &toolbox, client).await {

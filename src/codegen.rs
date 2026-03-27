@@ -56,6 +56,7 @@ pub async fn generate_provider(
         name: name.clone(),
         description,
         provides: vec![name.clone()],
+        validated: false,
     };
 
     toolbox.ensure_dir()?;

@@ -10,6 +10,8 @@ pub struct ToolMeta {
     pub name: String,
     pub description: String,
     pub provides: Vec<String>,
+    #[serde(default)]
+    pub validated: bool,
 }
 
 pub struct Toolbox {
@@ -73,6 +75,19 @@ impl Toolbox {
         }
 
         Ok(tools)
+    }
+
+    pub fn load_source(&self, name: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
+        let lua_path = self.dir.join(format!("{name}.lua"));
+        Ok(std::fs::read_to_string(lua_path)?)
+    }
+
+    pub fn list_unvalidated(&self) -> Result<Vec<ToolMeta>, Box<dyn Error + Send + Sync>> {
+        Ok(self
+            .list_tools()?
+            .into_iter()
+            .filter(|t| !t.validated)
+            .collect())
     }
 
     pub fn load_all_providers(&self) -> Result<Vec<LuaProvider>, Box<dyn Error + Send + Sync>> {
