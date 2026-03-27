@@ -35,13 +35,6 @@ cargo build
 cargo run
 ```
 
-## What This Is Not
-
-- Not a chatbot platform or general-purpose AI assistant
-- Not a plugin marketplace
-- Not cloud-dependent
-- Not tied to any specific LLM provider, calendar, or task manager
-
 ## License
 
 MIT

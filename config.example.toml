@@ -1,0 +1,33 @@
+# Marrow model routing configuration
+# Maps role keys to model providers and models
+
+# --- Cloud (Ollama Cloud) ---
+# Uses OLLAMA_API_KEY env var if api_key is not set here
+
+[roles.default]
+provider = "ollama"
+model = "mistral"
+api_base = "https://ollama.com"
+# api_key = "your-key-here"
+
+[roles.fast]
+provider = "ollama"
+model = "mistral"
+api_base = "https://ollama.com"
+
+[roles.code]
+provider = "ollama"
+model = "deepseek-coder"
+api_base = "https://ollama.com"
+
+[roles.analytical]
+provider = "ollama"
+model = "mistral"
+api_base = "https://ollama.com"
+
+# --- Local (uncomment to use local Ollama) ---
+# api_base defaults to http://localhost:11434 if omitted
+#
+# [roles.default]
+# provider = "ollama"
+# model = "mistral"

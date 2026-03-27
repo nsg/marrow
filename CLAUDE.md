@@ -95,27 +95,6 @@ transparently for a technical user, it is ready to be tested by others.
 
 ---
 
-## What This Is Not
-
-- Not a chatbot platform
-- Not a general-purpose AI assistant
-- Not a plugin marketplace
-- Not cloud-dependent
-- Not tied to any specific LLM provider, calendar provider, or task manager
-
----
-
-## Build Priorities
-
-1. **Janitor** — the self-healing monitor is the most critical component.
-   Without it, the no-hardcoding philosophy is not safe enough to trust.
-2. **Context assembly** — lean, task-scoped context construction per workflow
-3. **Transparency layer** — status visibility and progressive detail UI
-4. **Model routing** — explicit, observable task-to-model assignment
-5. **Tool generation layer** — already prototyped, integrate and harden
-
----
-
 ## Open Source Strategy
 
 - Publish early, solve the author's own problem first

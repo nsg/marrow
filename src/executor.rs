@@ -1,0 +1,29 @@
+use std::error::Error;
+use std::future::Future;
+
+use crate::task::Task;
+
+#[derive(Debug, Clone)]
+pub struct Context {
+    pub data: serde_json::Value,
+}
+
+impl Context {
+    pub fn empty() -> Self {
+        Self {
+            data: serde_json::Value::Null,
+        }
+    }
+
+    pub fn new(data: serde_json::Value) -> Self {
+        Self { data }
+    }
+}
+
+pub trait Executor: Send + Sync {
+    fn execute(
+        &self,
+        task: &Task,
+        context: &Context,
+    ) -> impl Future<Output = Result<serde_json::Value, Box<dyn Error + Send + Sync>>> + Send;
+}
