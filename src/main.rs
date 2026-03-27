@@ -1,19 +1,26 @@
 mod backends;
+mod context;
 mod executor;
 mod model;
 mod persistence;
 mod registry;
 mod router;
+mod sandbox;
+mod sandbox_host;
 mod task;
+mod toolbox;
 
 use std::io::{self, Write};
+use std::sync::Arc;
 
 use clap::Parser;
+use reqwest::Client;
 
-use executor::Context;
+use context::ContextAssembler;
 use registry::TaskRegistry;
 use router::{ModelRouter, RouterConfig};
 use task::Task;
+use toolbox::Toolbox;
 
 #[derive(Parser)]
 #[command(
@@ -30,6 +37,26 @@ struct Cli {
     /// Run a single prompt and exit
     #[arg(short = 'p', long)]
     prompt: Option<String>,
+
+    /// Path to the toolbox directory
+    #[arg(short, long, default_value = "toolbox")]
+    toolbox: String,
+}
+
+async fn run_task(
+    description: &str,
+    role: &str,
+    registry: &TaskRegistry,
+    router: &ModelRouter,
+    assembler: &ContextAssembler,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    let mut task = Task::new(description);
+    task.model_role = role.to_string();
+
+    let context = assembler.assemble(description, &task.context_refs).await?;
+    let id = registry.create(task).await;
+    let output = registry.run(id, router, &context).await?;
+    Ok(output)
 }
 
 #[tokio::main]
@@ -39,13 +66,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = RouterConfig::from_file(&cli.config)?;
     let router = ModelRouter::from_config(&config)?;
     let registry = TaskRegistry::new();
+    let client = Arc::new(Client::new());
+
+    // Load toolbox providers
+    let tb = Toolbox::new(&cli.toolbox);
+    let mut assembler = ContextAssembler::new(client);
+    for provider in tb.load_all_providers().unwrap_or_default() {
+        assembler.add_provider(provider);
+    }
 
     if let Some(prompt) = cli.prompt {
-        let mut task = Task::new(&prompt);
-        task.model_role = cli.role.clone();
-        let id = registry.create(task).await;
-
-        match registry.run(id, &router, &Context::empty()).await {
+        match run_task(&prompt, &cli.role, &registry, &router, &assembler).await {
             Ok(output) => {
                 if let Some(text) = output.as_str() {
                     println!("{text}");
@@ -81,12 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 break;
             }
 
-            let mut task = Task::new(input);
-            task.model_role = cli.role.clone();
-
-            let id = registry.create(task).await;
-
-            match registry.run(id, &router, &Context::empty()).await {
+            match run_task(input, &cli.role, &registry, &router, &assembler).await {
                 Ok(output) => {
                     if let Some(text) = output.as_str() {
                         println!("\n{text}\n");
