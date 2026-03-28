@@ -77,58 +77,63 @@ cargo run -p marrow-cli -- --verbose -p "What time is it?"
 
 ## Discord Bot
 
-The Discord bridge connects Marrow to Discord as a bot that responds to @mentions and DMs.
+Marrow connects to Discord as a bot that responds to @mentions and DMs. Setup takes about 5 minutes.
 
-### 1. Create a Discord application
+### Create the bot
 
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**
-2. Give it a name (e.g. "Marrow") and click **Create**
+1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**
+2. Name it (e.g. "Marrow") and click **Create**
+3. Go to **Bot** in the left sidebar
 
-### 2. Configure the bot
+You need to enable one privileged intent and grab your token:
 
-In the left sidebar, click **Bot** and configure:
+- Scroll to **Privileged Gateway Intents** and turn on **Message Content Intent** — this is required, without it the bot receives empty messages
+- Leave Presence Intent and Server Members Intent off (not needed)
+- Turn off **Public Bot** so only you can invite it to servers
+- Click **Reset Token** and copy the token. Despite the name, this generates your first token — you only see it once, so save it now
 
-| Setting | Value | Why |
-|---|---|---|
-| **Public Bot** | Off | Only you can invite the bot |
-| **Message Content Intent** | On | Required — bot reads message text |
-| Presence Intent | Off | Not needed |
-| Server Members Intent | Off | Not needed |
+> Your bot token is a secret. Do not commit it to version control or share it in chat.
 
-Click **Reset Token**, copy it, and save it somewhere safe. You only see it once.
+### Invite the bot to your server
 
-### 3. Invite the bot to your server
+1. Go to **OAuth2** in the left sidebar, then scroll to **OAuth2 URL Generator**
+2. Under **Scopes**, tick `bot`
+3. Under **Bot Permissions**, tick:
+   - **Read Messages/View Channels** — see channels and read messages
+   - **Send Messages** — reply to users
+   - **Read Message History** — context for conversations
 
-In the left sidebar, click **OAuth2**, then scroll to **OAuth2 URL Generator**:
+   Do not tick Administrator — the bot only needs these three.
 
-- **Scopes**: select `bot`
-- **Bot Permissions**: select these three:
-  - Read Messages/View Channels
-  - Send Messages
-  - Read Message History
+4. Copy the generated URL at the bottom, open it in your browser, and pick the server to add the bot to
 
-This gives permission integer `68608`. Open the generated URL and add the bot to your server.
+### Configure and run
 
-### 4. Configure and run
-
-Add the `[discord]` section to `config.toml` with the token you copied:
+Add the `[discord]` section to your `config.toml`:
 
 ```toml
 [discord]
-token = "your-bot-token"
-# toolbox = "toolbox"
-# memory = "memory"
-# log = "events.jsonl"
-# verbose = false
+token = "paste-your-bot-token-here"
 ```
 
-Then run:
+Optional fields (shown with defaults):
+
+```toml
+[discord]
+token = "paste-your-bot-token-here"
+toolbox = "toolbox"
+memory = "memory"
+log = "events.jsonl"
+verbose = false
+```
+
+Start the bot:
 
 ```sh
 cargo run -p marrow-discord
 ```
 
-The bot responds when @mentioned in a channel or messaged directly via DM.
+You should see `[marrow-discord] connected as Marrow` (or whatever you named it). The bot now responds when @mentioned in a channel or messaged directly via DM.
 
 ## Configuration
 
