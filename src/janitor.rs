@@ -266,7 +266,47 @@ pub async fn review_and_fix(
     Ok(false)
 }
 
+const CONSOLIDATE_PROMPT: &str = r#"You are maintaining a knowledge file of lessons learned from code generation. The file has grown and needs cleanup.
+
+Current notes:
+{notes}
+
+Consolidate these into a clean, deduplicated list of general lessons. Rules:
+- Remove duplicates and near-duplicates
+- Merge related points into single concise lessons
+- Remove tool-specific details (tool names, specific URLs) — keep only the general pattern
+- Each lesson should be one line starting with "- "
+- Keep only lessons that would help a code generator avoid common mistakes
+- Maximum 20 lessons
+
+Respond with ONLY the cleaned list, nothing else."#;
+
+const CONSOLIDATE_THRESHOLD: usize = 500;
+
+pub async fn consolidate_knowledge(
+    toolbox: &Toolbox,
+    backend: &dyn ModelBackend,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let notes = toolbox.read_knowledge();
+    if notes.len() < CONSOLIDATE_THRESHOLD {
+        return Ok(());
+    }
+
+    let prompt = CONSOLIDATE_PROMPT.replace("{notes}", &notes);
+    let response = backend.complete(prompt).await?;
+    let cleaned = response.trim().to_string();
+
+    if !cleaned.is_empty() {
+        std::fs::write(toolbox.knowledge_path(), cleaned)?;
+        eprintln!("[janitor] consolidated codegen knowledge file");
+    }
+
+    Ok(())
+}
+
 pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) {
+    let mut cycles_since_consolidation: u32 = 0;
+
     loop {
         let unvalidated = match toolbox.list_unvalidated() {
             Ok(tools) => tools,
@@ -278,10 +318,19 @@ pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) 
         };
 
         if unvalidated.is_empty() {
+            // Consolidate knowledge every ~10 idle cycles
+            cycles_since_consolidation += 1;
+            if cycles_since_consolidation >= 10 {
+                cycles_since_consolidation = 0;
+                if let Err(e) = consolidate_knowledge(toolbox, backend).await {
+                    eprintln!("[janitor] knowledge consolidation error: {e}");
+                }
+            }
             sleep(Duration::from_secs(5)).await;
             continue;
         }
 
+        cycles_since_consolidation = 0;
         for tool in &unvalidated {
             if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log).await {
                 eprintln!("[janitor] error processing '{}': {e}", tool.name);
