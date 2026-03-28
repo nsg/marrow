@@ -83,11 +83,7 @@ cargo run -p marrow-cli -- --verbose -p "What time is it?"
 
 The Discord bridge connects Marrow to Discord as a bot that responds to @mentions and DMs.
 
-```sh
-cargo run -p marrow-discord
-```
-
-Configure the bot in `config.toml`:
+Add the `[discord]` section to `config.toml`:
 
 ```toml
 [discord]
@@ -98,9 +94,13 @@ token = "your-bot-token"
 # verbose = false
 ```
 
-The bot needs the **Message Content** privileged intent enabled in the [Discord Developer Portal](https://discord.com/developers/applications).
+Then run:
 
-All settings can be overridden with environment variables (`DISCORD_TOKEN`, `MARROW_TOOLBOX`, `MARROW_MEMORY`, `MARROW_LOG`, `MARROW_VERBOSE`). Env vars take precedence over config file values.
+```sh
+cargo run -p marrow-discord
+```
+
+The bot needs the **Message Content** privileged intent enabled in the [Discord Developer Portal](https://discord.com/developers/applications).
 
 ## Configuration
 

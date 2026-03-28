@@ -220,33 +220,29 @@ fn split_message(text: &str, max_len: usize) -> Vec<&str> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config_path = std::env::var("MARROW_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
-    let config = RouterConfig::from_file(&config_path)?;
-    let discord = config.discord.as_ref();
+    let config = RouterConfig::from_file("config.toml")?;
+    let discord = config
+        .discord
+        .as_ref()
+        .ok_or("[discord] section missing from config.toml")?;
 
-    // Config file first, env var overrides
-    let token = std::env::var("DISCORD_TOKEN")
-        .ok()
-        .or_else(|| discord.and_then(|d| d.token.clone()))
-        .ok_or("discord token not set — add [discord] token to config.toml or set DISCORD_TOKEN")?;
-
-    let toolbox_path = std::env::var("MARROW_TOOLBOX").unwrap_or_else(|_| {
-        discord
-            .and_then(|d| d.toolbox.clone())
-            .unwrap_or_else(|| "toolbox".to_string())
-    });
-    let memory_path = std::env::var("MARROW_MEMORY").unwrap_or_else(|_| {
-        discord
-            .and_then(|d| d.memory.clone())
-            .unwrap_or_else(|| "memory".to_string())
-    });
-    let log_path = std::env::var("MARROW_LOG").unwrap_or_else(|_| {
-        discord
-            .and_then(|d| d.log.clone())
-            .unwrap_or_else(|| "events.jsonl".to_string())
-    });
-    let verbose =
-        std::env::var("MARROW_VERBOSE").is_ok() || discord.is_some_and(|d| d.verbose);
+    let token = discord
+        .token
+        .as_deref()
+        .ok_or("[discord] token missing from config.toml")?;
+    let toolbox_path = discord
+        .toolbox
+        .clone()
+        .unwrap_or_else(|| "toolbox".to_string());
+    let memory_path = discord
+        .memory
+        .clone()
+        .unwrap_or_else(|| "memory".to_string());
+    let log_path = discord
+        .log
+        .clone()
+        .unwrap_or_else(|| "events.jsonl".to_string());
+    let verbose = discord.verbose;
     let router = Arc::new(ModelRouter::from_config(&config)?);
     let client = Arc::new(Client::new());
     let toolbox = Arc::new(Toolbox::new(&toolbox_path));
@@ -268,7 +264,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
 
-    let mut discord_client = serenity::Client::builder(&token, intents)
+    let mut discord_client = serenity::Client::builder(token, intents)
         .event_handler(Handler)
         .await?;
 
