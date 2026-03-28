@@ -45,6 +45,18 @@ impl Toolbox {
         Ok(())
     }
 
+    pub fn delete_tool(&self, name: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let meta_path = self.dir.join(format!("{name}.toml"));
+        let lua_path = self.dir.join(format!("{name}.lua"));
+        if meta_path.exists() {
+            std::fs::remove_file(meta_path)?;
+        }
+        if lua_path.exists() {
+            std::fs::remove_file(lua_path)?;
+        }
+        Ok(())
+    }
+
     pub fn load_provider(&self, name: &str) -> Result<LuaProvider, Box<dyn Error + Send + Sync>> {
         let lua_path = self.dir.join(format!("{name}.lua"));
         LuaProvider::from_file(name, lua_path)

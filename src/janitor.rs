@@ -216,11 +216,20 @@ async fn process_tool(
         }
 
         if attempt == MAX_FIX_ATTEMPTS {
+            let reason = format!("unfixable after {MAX_FIX_ATTEMPTS} attempts");
             log.emit(Event::JanitorEscalated {
                 tool: meta.name.clone(),
-                reason: format!("failed after {MAX_FIX_ATTEMPTS} attempts"),
+                reason: reason.clone(),
             })
             .await;
+
+            toolbox.delete_tool(&meta.name)?;
+            log.emit(Event::JanitorDeleted {
+                tool: meta.name.clone(),
+                reason,
+            })
+            .await;
+
             return Ok(false);
         }
 

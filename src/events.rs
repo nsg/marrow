@@ -44,6 +44,10 @@ pub enum Event {
         tool: String,
         reason: String,
     },
+    JanitorDeleted {
+        tool: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +122,9 @@ impl EventLog {
             }
             Event::JanitorEscalated { tool, reason } => {
                 eprintln!("[janitor] ESCALATE '{tool}': {reason}");
+            }
+            Event::JanitorDeleted { tool, reason } => {
+                eprintln!("[janitor] DELETED '{tool}': {reason}");
             }
             Event::JanitorReview {
                 tool, passed: true, ..
