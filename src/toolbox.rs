@@ -103,7 +103,7 @@ impl Toolbox {
     }
 
     pub fn knowledge_path(&self) -> PathBuf {
-        self.dir.join(".codegen_notes")
+        self.dir.join("CODEGEN_NOTES.md")
     }
 
     pub fn read_knowledge(&self) -> String {
