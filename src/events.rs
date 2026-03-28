@@ -48,6 +48,18 @@ pub enum Event {
         tool: String,
         reason: String,
     },
+    AgentAction {
+        task_id: String,
+        step: u32,
+        action_type: String,
+        detail: String,
+    },
+    AgentToolResult {
+        task_id: String,
+        step: u32,
+        tool: String,
+        success: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -131,6 +143,27 @@ impl EventLog {
             } => {
                 eprintln!("[janitor] '{tool}' validated");
             }
+            Event::AgentAction {
+                step,
+                action_type,
+                detail,
+                ..
+            } if !detail.is_empty() => {
+                eprintln!("[agent] step {step}: {action_type} — {detail}");
+            }
+            Event::AgentAction {
+                step, action_type, ..
+            } => {
+                eprintln!("[agent] step {step}: {action_type}");
+            }
+            Event::AgentToolResult {
+                step,
+                tool,
+                success: false,
+                ..
+            } => {
+                eprintln!("[agent] step {step}: tool '{tool}' failed");
+            }
             // Verbose only
             Event::TaskCreated {
                 task_id,
@@ -150,6 +183,14 @@ impl EventLog {
             }
             Event::TaskExecuted { task_id, status } if self.verbose => {
                 eprintln!("[marrow] task {task_id}: {status}");
+            }
+            Event::AgentToolResult {
+                step,
+                tool,
+                success: true,
+                ..
+            } if self.verbose => {
+                eprintln!("[agent] step {step}: tool '{tool}' succeeded");
             }
             Event::JanitorReview {
                 tool,

@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod answer_check;
 pub mod backends;
 pub mod codegen;

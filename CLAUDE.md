@@ -26,10 +26,10 @@ Model research in `docs/model-benchmarks-2026-03.md` — GLM-5 (default/code)
 and Kimi K2.5 (fast) selected based on speed, intelligence index, and tool calling benchmarks.
 
 ### What's built
-- Full task pipeline: triage → tool selection → code generation → execution
+- Agentic loop: triage → model decides actions (call tool, create tool, answer) iteratively
 - Lua sandbox with Rust host functions for all external access
 - `run_tool(name, params)` host function — tools can call other tools directly in Lua
-- Glue tool pattern: single-purpose data tools composed by glue tools via `run_tool()`
+- Runtime tool generation — model creates tools on demand when none exist for the task
 - Janitor (async background review, regeneration, escalation after 3 attempts)
 - Working memory (JSON files, model-selected per task, auto-saved post-interaction)
 - Conversation history with automatic summarization

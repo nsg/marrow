@@ -169,6 +169,59 @@ pub async fn generate_provider_with_hint(
     Ok(name)
 }
 
+pub async fn generate_provider_for_agent(
+    tool_name: &str,
+    tool_description: &str,
+    task_description: &str,
+    backend: &dyn ModelBackend,
+    toolbox: &Toolbox,
+    client: Arc<Client>,
+    available_tools: &[ToolMeta],
+) -> Result<String, Box<dyn Error + Send + Sync>> {
+    let request = ToolRequest {
+        name: tool_name.to_string(),
+        expected_params: HashMap::new(),
+    };
+    let mut prompt = build_codegen_prompt(task_description, Some(&request), available_tools);
+    prompt = prompt.replace(
+        &format!("Generate a tool named \"{tool_name}\" that the orchestrator needs.\n"),
+        &format!("Generate a tool named \"{tool_name}\": {tool_description}\n"),
+    );
+
+    let response = backend.complete(prompt).await?;
+    let (_, description, lua_code) = parse_codegen_response(&response)?;
+
+    // Test-run — tool may need params so we accept graceful errors
+    let provider = LuaProvider::new(tool_name, &lua_code);
+    if let Err(e) = provider
+        .execute_with_params(task_description, client, &HashMap::new(), None)
+        .await
+    {
+        let err_str = e.to_string();
+        // Allow graceful param-missing errors (tool returns error table), reject crashes
+        if !err_str.contains("attempt to index a nil")
+            && !err_str.contains("attempt to call a nil")
+            && !err_str.contains("stack overflow")
+        {
+            // Likely a graceful error — save the tool
+        } else {
+            return Err(format!("generated tool '{tool_name}' failed test run: {e}").into());
+        }
+    }
+
+    let meta = ToolMeta {
+        name: tool_name.to_string(),
+        description,
+        provides: vec![tool_name.to_string()],
+        validated: false,
+    };
+
+    toolbox.ensure_dir()?;
+    toolbox.save_tool(&meta, &lua_code)?;
+
+    Ok(tool_name.to_string())
+}
+
 fn parse_codegen_response(
     response: &str,
 ) -> Result<(String, String, String), Box<dyn Error + Send + Sync>> {
