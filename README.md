@@ -62,12 +62,8 @@ User Input
 ## Quick Start
 
 ```sh
-# Build all crates
 cargo build --workspace
-
-# Copy and edit config
-cp config.example.toml config.toml
-# Set your model, provider, and API key in config.toml
+cp config.example.toml config.toml   # then edit with your API keys
 
 # Interactive mode
 cargo run -p marrow-cli
@@ -104,26 +100,32 @@ The bot needs the **Message Content** privileged intent enabled in the [Discord 
 
 ## Configuration
 
-Model routing is configured in `config.toml`. Three roles control which model handles each part of the pipeline:
+All configuration lives in `config.toml`. Three roles control which model handles each part of the pipeline:
+
+| Role | Used for |
+|---|---|
+| `default` | Chat and task execution (smartest model) |
+| `fast` | Triage, tool selection, memory (fast but capable) |
+| `code` | Lua tool generation and janitor reviews |
 
 ```toml
-[roles.default]    # Chat and task execution (smartest model)
+[roles.default]
 provider = "ollama"
 model = "glm-5:cloud"
 api_base = "https://ollama.com"
-api_key = "your-key"
+api_key = "your-key-here"
 
-[roles.fast]       # Triage, tool selection, memory (fast but capable)
+[roles.fast]
 provider = "ollama"
 model = "kimi-k2.5:cloud"
 api_base = "https://ollama.com"
-api_key = "your-key"
+api_key = "your-key-here"
 
-[roles.code]       # Lua generation and janitor reviews
+[roles.code]
 provider = "ollama"
 model = "glm-5:cloud"
 api_base = "https://ollama.com"
-api_key = "your-key"
+api_key = "your-key-here"
 ```
 
 Supported providers:
