@@ -298,7 +298,7 @@ pub async fn consolidate_knowledge(
     let cleaned = response.trim().to_string();
 
     if !cleaned.is_empty() && cleaned.len() < notes.len() {
-        std::fs::write(toolbox.knowledge_path(), cleaned)?;
+        std::fs::write(toolbox.knowledge_path(), &cleaned)?;
         eprintln!("[janitor] consolidated codegen knowledge file ({} -> {} bytes)", notes.len(), cleaned.len());
         Ok(true)
     } else {
@@ -306,9 +306,177 @@ pub async fn consolidate_knowledge(
     }
 }
 
+const REDUNDANCY_PROMPT: &str = r#"You are reviewing a toolbox for redundant tools. Here are all the tools:
+
+{tool_list}
+
+Identify groups of tools that do the same or very similar thing. For each group, decide:
+1. If one tool is clearly better (more generic, better error handling), keep it and delete the others.
+2. If multiple tools have complementary features, merge them into the best one.
+3. If a tool is site-specific (hardcoded domain/URL) but could be generic, note it for refactoring.
+
+Respond in this exact JSON format:
+```json
+{{
+  "delete": ["tool_name_to_remove", ...],
+  "refactor": ["tool_name_thats_too_specific", ...],
+  "reason": "brief explanation"
+}}
+```
+
+If no redundancy found:
+```json
+{{"delete": [], "refactor": [], "reason": "no redundancy"}}
+```"#;
+
+const REFACTOR_PROMPT: &str = r#"This tool has hardcoded site-specific values that should be parameters. Refactor it to be generic and reusable.
+
+Tool: {name}
+Description: {description}
+
+Current source:
+```lua
+{source}
+```
+
+Rules:
+- Replace hardcoded URLs/domains with PARAMS values
+- Make the tool work for ANY site, not just one specific domain
+- Keep all existing functionality
+- Give it a generic name (e.g. "tag_page_extractor" not "nsg_tag_extractor")
+
+Respond in this exact format:
+```name
+<generic_tool_name>
+```
+```description
+<generic one line description>
+```
+```lua
+<refactored lua code>
+```"#;
+
+pub async fn cleanup_toolbox(
+    toolbox: &Toolbox,
+    backend: &dyn ModelBackend,
+    log: &EventLog,
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    let tools = toolbox.list_tools()?;
+    if tools.len() < 3 {
+        return Ok(false);
+    }
+
+    // Build tool list with descriptions and param info
+    let tool_list = tools
+        .iter()
+        .map(|t| {
+            let params = toolbox.extract_params(&t.name);
+            let params_str = if params.is_empty() {
+                String::new()
+            } else {
+                format!(" (params: {})", params.join(", "))
+            };
+            format!("- {}: {}{}", t.name, t.description, params_str)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let prompt = REDUNDANCY_PROMPT.replace("{tool_list}", &tool_list);
+    let response = backend.complete(prompt).await?;
+
+    // Parse response
+    let json_str = extract_json_block(&response);
+
+    #[derive(serde::Deserialize)]
+    struct CleanupResult {
+        #[serde(default)]
+        delete: Vec<String>,
+        #[serde(default)]
+        refactor: Vec<String>,
+        #[serde(default)]
+        reason: String,
+    }
+
+    let result: CleanupResult = serde_json::from_str(&json_str).unwrap_or(CleanupResult {
+        delete: Vec::new(),
+        refactor: Vec::new(),
+        reason: String::new(),
+    });
+
+    let mut changed = false;
+
+    // Delete redundant tools
+    for name in &result.delete {
+        if toolbox.load_meta(name).is_ok() {
+            toolbox.delete_tool(name)?;
+            log.emit(Event::JanitorDeleted {
+                tool: name.clone(),
+                reason: format!("redundant: {}", result.reason),
+            })
+            .await;
+            changed = true;
+        }
+    }
+
+    // Refactor site-specific tools
+    for name in &result.refactor {
+        if let Ok(meta) = toolbox.load_meta(name) {
+            if let Ok(source) = toolbox.load_source(name) {
+                let refactor_prompt = REFACTOR_PROMPT
+                    .replace("{name}", &meta.name)
+                    .replace("{description}", &meta.description)
+                    .replace("{source}", &source);
+
+                if let Ok(refactored) = backend.complete(refactor_prompt).await {
+                    if let Ok((new_name, new_desc, new_source)) =
+                        parse_codegen_response(&refactored)
+                    {
+                        let new_name = new_name.trim().to_string();
+                        let new_meta = ToolMeta {
+                            name: new_name.clone(),
+                            description: new_desc.trim().to_string(),
+                            provides: vec![new_name.clone()],
+                            validated: false,
+                        };
+                        toolbox.save_tool(&new_meta, &new_source)?;
+                        if new_name != meta.name {
+                            toolbox.delete_tool(&meta.name)?;
+                        }
+                        eprintln!(
+                            "[janitor] refactored '{}' -> '{}'",
+                            meta.name, new_name
+                        );
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(changed)
+}
+
+fn extract_json_block(response: &str) -> String {
+    // Try ```json block first
+    if let Some(start) = response.find("```json") {
+        let rest = &response[start + 7..];
+        if let Some(end) = rest.find("```") {
+            return rest[..end].trim().to_string();
+        }
+    }
+    // Fall back to first { ... }
+    if let Some(start) = response.find('{') {
+        if let Some(end) = response.rfind('}') {
+            return response[start..=end].to_string();
+        }
+    }
+    "{}".to_string()
+}
+
 pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) {
-    let mut cycles_since_consolidation: u32 = 0;
-    let mut consolidation_backed_off = false;
+    let mut idle_cycles: u32 = 0;
+    let mut knowledge_backed_off = false;
+    let mut cleanup_backed_off = false;
 
     loop {
         let unvalidated = match toolbox.list_unvalidated() {
@@ -321,24 +489,33 @@ pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) 
         };
 
         if unvalidated.is_empty() {
-            // Periodically try to consolidate knowledge
-            if !consolidation_backed_off {
-                cycles_since_consolidation += 1;
-                if cycles_since_consolidation >= 10 {
-                    cycles_since_consolidation = 0;
-                    match consolidate_knowledge(toolbox, backend).await {
-                        Ok(true) => {}
-                        Ok(false) => consolidation_backed_off = true,
-                        Err(e) => eprintln!("[janitor] knowledge consolidation error: {e}"),
-                    }
+            idle_cycles += 1;
+
+            // Consolidate knowledge file (~50s after idle)
+            if !knowledge_backed_off && idle_cycles == 10 {
+                match consolidate_knowledge(toolbox, backend).await {
+                    Ok(true) => {}
+                    Ok(false) => knowledge_backed_off = true,
+                    Err(e) => eprintln!("[janitor] knowledge consolidation error: {e}"),
                 }
             }
+
+            // Clean up redundant/site-specific tools (~100s after idle)
+            if !cleanup_backed_off && idle_cycles == 20 {
+                match cleanup_toolbox(toolbox, backend, log).await {
+                    Ok(true) => {}
+                    Ok(false) => cleanup_backed_off = true,
+                    Err(e) => eprintln!("[janitor] toolbox cleanup error: {e}"),
+                }
+            }
+
             sleep(Duration::from_secs(5)).await;
             continue;
         }
 
-        cycles_since_consolidation = 0;
-        consolidation_backed_off = false;
+        idle_cycles = 0;
+        knowledge_backed_off = false;
+        cleanup_backed_off = false;
         for tool in &unvalidated {
             if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log).await {
                 eprintln!("[janitor] error processing '{}': {e}", tool.name);

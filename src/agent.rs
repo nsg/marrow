@@ -25,17 +25,21 @@ You MUST respond with exactly one JSON object (no other text). Choose one:
 To call an existing tool:
 {{"action": "call_tool", "tool": "TOOL_NAME", "params": {{"KEY": "value"}}}}
 
-To create a new tool that doesn't exist yet:
+To create a new tool (ONLY if no existing tool can do the job):
 {{"action": "create_tool", "name": "new_tool_name", "description": "one line description of what it does"}}
 
 To give your final answer (ONLY when you have gathered enough data):
 {{"action": "answer", "text": "your complete answer to the user"}}
 
 Important:
-- After creating a tool, you MUST call it in your next turn — creation alone does nothing
+- ALWAYS prefer existing tools. Use them with different params before creating new ones.
+- A generic tool like "web_scraper" can handle many sites — just pass different URLs.
+- Only create a tool if the available tools truly cannot do what you need.
+- After creating a tool, you MUST call it in your next turn — creation alone does nothing.
+- When creating tools, make them GENERIC and reusable (e.g. "rss_reader" not "nsg_blog_reader").
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
-- If a tool returns an error, try a different approach or create a better tool
-- The answer action text should be a natural language response to the user, NOT a JSON action
+- If a tool returns an error, try different params first before creating a new tool.
+- The answer action text should be a natural language response, NOT a JSON action.
 
 {history}Your action:"#;
 
