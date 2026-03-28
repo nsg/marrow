@@ -13,26 +13,31 @@ use crate::toolbox::{ToolMeta, Toolbox};
 
 const MAX_AGENT_STEPS: u32 = 10;
 
-const AGENT_PROMPT_TEMPLATE: &str = r#"You are an agent that completes tasks by calling tools. Respond with exactly ONE JSON action per turn.
+const AGENT_PROMPT_TEMPLATE: &str = r#"You are an agent that completes tasks step by step. Each turn you perform ONE action.
 
 Available tools:
 {tools}
 
 {memories}Task: {task}
 
-Actions you can take:
-1. Call a tool: {{"action": "call_tool", "tool": "tool_name", "params": {{"KEY": "value"}}}}
-2. Create a new tool (if none exists for what you need): {{"action": "create_tool", "name": "tool_name", "description": "what it should do"}}
-3. Give your final answer: {{"action": "answer", "text": "your complete answer"}}
+You MUST respond with exactly one JSON object (no other text). Choose one:
 
-Rules:
-- Use known facts to fill in parameter values (URLs, locations, etc.)
-- If a tool fails or returns insufficient data, try a different approach
-- When you have enough information to answer, use the answer action
-- Be resourceful: create tools that discover information (parse HTML for feeds, etc.)
-- Do NOT explain your reasoning — just return the JSON action
+To call an existing tool:
+{{"action": "call_tool", "tool": "TOOL_NAME", "params": {{"KEY": "value"}}}}
 
-{history}Your next action (JSON only):"#;
+To create a new tool that doesn't exist yet:
+{{"action": "create_tool", "name": "new_tool_name", "description": "one line description of what it does"}}
+
+To give your final answer (ONLY when you have gathered enough data):
+{{"action": "answer", "text": "your complete answer to the user"}}
+
+Important:
+- After creating a tool, you MUST call it in your next turn — creation alone does nothing
+- Use known facts to fill in real parameter values (actual URLs, locations, etc.)
+- If a tool returns an error, try a different approach or create a better tool
+- The answer action text should be a natural language response to the user, NOT a JSON action
+
+{history}Your action:"#;
 
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -126,6 +131,14 @@ pub fn parse_action(response: &str) -> Action {
         && s < e
     {
         let json_str = &trimmed[s..=e];
+
+        // If parsing fails, try fixing double-brace escaping from the model
+        let json_str = if serde_json::from_str::<serde_json::Value>(json_str).is_err() {
+            std::borrow::Cow::Owned(json_str.replace("{{", "{").replace("}}", "}"))
+        } else {
+            std::borrow::Cow::Borrowed(json_str)
+        };
+        let json_str = json_str.as_ref();
 
         #[derive(serde::Deserialize)]
         struct RawAction {
