@@ -34,10 +34,11 @@ Global tables available:
 
 Review criteria:
 1. Does the code actually do what the description claims?
-2. Is the tool reusable/generic, or does it have hardcoded values that contradict a generic description? (e.g., description says "any location" but code hardcodes "London")
-3. Does the name accurately reflect what the tool does?
-4. Does the code use host functions correctly?
-5. Does the code handle errors (check HTTP status, handle parse failures)?
+2. Does the tool do ONE thing? Each tool should fetch one data source or perform one operation. If it does multiple unrelated things (e.g., fetches weather AND plans activities), FAIL it — those should be separate tools composed via stages.
+3. Is the tool reusable/generic, or does it have hardcoded values that contradict a generic description? (e.g., description says "any location" but code hardcodes "London")
+4. Does the name accurately reflect what the tool does?
+5. Does the code use host functions correctly?
+6. Does the code handle errors (check HTTP status, handle parse failures)?
 
 Respond in this exact format:
 ```verdict

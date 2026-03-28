@@ -21,13 +21,19 @@ Global tables available:
 - PARAMS (table): per-tool parameters set by the orchestrator (e.g. PARAMS["LOCATION"])
 - RESULTS (table): JSON string outputs from tools in prior stages (e.g. json_parse(RESULTS["weather"]))
 
+Design philosophy — each tool does ONE thing well:
+- A weather tool fetches weather. It does NOT plan activities.
+- A calendar tool reads events. It does NOT summarize or prioritize them.
+- Tools are composed by the orchestrator in stages — one tool's output feeds another via RESULTS.
+- If the task needs multiple capabilities, generate only the missing piece. The orchestrator handles glue.
+
 Rules:
 - Return a Lua table with the context data
+- Do ONE thing: fetch one data source, transform one input, or query one API
 - Use PARAMS for input values (location, timezone, date, etc.)
 - Use http_get/http_post for external API calls
 - Use json_parse to parse JSON responses
 - Do NOT use io, os, require, dofile, loadfile, or debug
-- Keep it simple and focused on the task
 - Handle errors gracefully (check response status)
 
 Task: {task}
