@@ -107,19 +107,22 @@ async fn run_task(
         triage::needs_external_data(description, fast_backend, history_ref, &memories).await?;
 
     // Step 3: Tool selection + generation (only if triage says yes)
+    let mut params = std::collections::HashMap::new();
     let selected = if needs_tools {
         let available_tools = toolbox.list_tools().unwrap_or_default();
-        let selected =
+        let selection =
             tool_selection::select_tools(description, &available_tools, fast_backend, history_ref)
                 .await?;
 
+        params = selection.params;
+
         log.emit(Event::ToolSelected {
             task_id: task_id.clone(),
-            tools: selected.clone(),
+            tools: selection.tools.clone(),
         })
         .await;
 
-        if selected.is_empty() && !description.trim().is_empty() {
+        if selection.tools.is_empty() && !description.trim().is_empty() {
             let code_backend = router
                 .backend("code")
                 .or_else(|_| router.backend("default"))?;
@@ -140,7 +143,7 @@ async fn run_task(
                 }
             }
         } else {
-            selected
+            selection.tools
         }
     } else {
         Vec::new()
@@ -148,6 +151,7 @@ async fn run_task(
 
     // Step 4: Assemble context from selected providers + memories
     let mut assembler = ContextAssembler::new(client);
+    assembler.set_params(params);
     for name in &selected {
         match toolbox.load_provider(name) {
             Ok(provider) => assembler.add_provider(provider),

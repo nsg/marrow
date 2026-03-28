@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::path::Path;
 use std::sync::Arc;
@@ -39,11 +40,25 @@ impl LuaProvider {
         task_description: &str,
         client: Arc<Client>,
     ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
+        self.execute_with_params(task_description, client, &HashMap::new())
+            .await
+    }
+
+    pub async fn execute_with_params(
+        &self,
+        task_description: &str,
+        client: Arc<Client>,
+        params: &HashMap<String, String>,
+    ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
         let lua = create_sandbox()?;
         register_host_functions(&lua, client)?;
 
         lua.globals()
             .set("TASK_DESCRIPTION", task_description.to_string())?;
+
+        for (key, value) in params {
+            lua.globals().set(key.as_str(), value.as_str())?;
+        }
 
         let result: mlua::Value = lua.load(&self.source).eval_async().await?;
 
@@ -55,6 +70,7 @@ impl LuaProvider {
 pub struct ContextAssembler {
     providers: Vec<LuaProvider>,
     client: Arc<Client>,
+    params: HashMap<String, String>,
 }
 
 impl ContextAssembler {
@@ -62,7 +78,12 @@ impl ContextAssembler {
         Self {
             providers: Vec::new(),
             client,
+            params: HashMap::new(),
         }
+    }
+
+    pub fn set_params(&mut self, params: HashMap<String, String>) {
+        self.params = params;
     }
 
     pub fn add_provider(&mut self, provider: LuaProvider) {
@@ -82,7 +103,7 @@ impl ContextAssembler {
             }
 
             match provider
-                .execute(task_description, self.client.clone())
+                .execute_with_params(task_description, self.client.clone(), &self.params)
                 .await
             {
                 Ok(value) => {

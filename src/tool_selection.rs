@@ -1,25 +1,35 @@
+use std::collections::HashMap;
 use std::error::Error;
 
 use crate::model::ModelBackend;
 use crate::session::Message;
 use crate::toolbox::ToolMeta;
 
-const SELECTION_PROMPT_TEMPLATE: &str = r#"You are a tool selection system. Given a task description, conversation history, and a list of available tools, decide which tools are needed to provide external context for the task.
+const SELECTION_PROMPT_TEMPLATE: &str = r#"You are a tool selection system. Given a task description, conversation history, and a list of available tools, decide which tools are needed and what parameters to pass them.
 
-IMPORTANT: If the task can be answered from conversation history alone (follow-up questions, chitchat, references to earlier messages), respond with []. Only select tools when external data is genuinely needed.
+IMPORTANT: If the task can be answered from conversation history alone (follow-up questions, chitchat, references to earlier messages), respond with empty tools.
 
 Available tools:
 {tools}
 
 {history}Task: {task}
 
-Respond with ONLY a JSON array of tool names to use. If no tools are needed, respond with [].
-Examples:
-- ["time", "calendar"]
-- ["weather"]
-- []
+Respond with ONLY a JSON object in this exact format:
+{{"tools": ["tool_name"], "params": {{"PARAM_NAME": "value"}}}}
 
-Your response (JSON array only):"#;
+The params object should contain uppercase global variables that tools will read.
+Common params: LOCATION, TIMEZONE, QUERY, DATE, URL
+
+If no tools are needed:
+{{"tools": [], "params": {{}}}}
+
+Your response (JSON only):"#;
+
+#[derive(Debug)]
+pub struct SelectionResult {
+    pub tools: Vec<String>,
+    pub params: HashMap<String, String>,
+}
 
 pub fn build_selection_prompt(
     task_description: &str,
@@ -62,29 +72,64 @@ pub async fn select_tools(
     tools: &[ToolMeta],
     backend: &dyn ModelBackend,
     history: Option<&[Message]>,
-) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+) -> Result<SelectionResult, Box<dyn Error + Send + Sync>> {
     if tools.is_empty() {
-        return Ok(Vec::new());
+        return Ok(SelectionResult {
+            tools: Vec::new(),
+            params: HashMap::new(),
+        });
     }
 
     let prompt = build_selection_prompt(task_description, tools, history);
     let response = backend.complete(prompt).await?;
 
-    parse_tool_names(&response)
+    parse_selection(&response)
 }
 
-fn parse_tool_names(response: &str) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+fn parse_selection(response: &str) -> Result<SelectionResult, Box<dyn Error + Send + Sync>> {
     let trimmed = response.trim();
 
-    let start = trimmed.find('[');
-    let end = trimmed.rfind(']');
+    let start = trimmed.find('{');
+    let end = trimmed.rfind('}');
 
     match (start, end) {
         (Some(s), Some(e)) if s < e => {
             let json_str = &trimmed[s..=e];
-            let names: Vec<String> = serde_json::from_str(json_str)?;
-            Ok(names)
+
+            #[derive(serde::Deserialize)]
+            struct RawSelection {
+                #[serde(default)]
+                tools: Vec<String>,
+                #[serde(default)]
+                params: HashMap<String, serde_json::Value>,
+            }
+
+            let raw: RawSelection = serde_json::from_str(json_str).unwrap_or(RawSelection {
+                tools: Vec::new(),
+                params: HashMap::new(),
+            });
+
+            // Convert all param values to strings
+            let params = raw
+                .params
+                .into_iter()
+                .map(|(k, v)| {
+                    let s = match v {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    (k, s)
+                })
+                .collect();
+
+            Ok(SelectionResult {
+                tools: raw.tools,
+                params,
+            })
         }
-        _ => Ok(Vec::new()),
+        _ => Ok(SelectionResult {
+            tools: Vec::new(),
+            params: HashMap::new(),
+        }),
     }
 }
