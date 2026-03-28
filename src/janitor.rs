@@ -185,7 +185,7 @@ fn extract_block(response: &str, tag: &str) -> Option<String> {
     Some(rest[..end].trim().to_string())
 }
 
-async fn process_tool(
+pub async fn review_and_fix(
     toolbox: &Toolbox,
     tool_name: &str,
     backend: &dyn ModelBackend,
@@ -268,7 +268,7 @@ pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) 
         }
 
         for tool in &unvalidated {
-            if let Err(e) = process_tool(toolbox, &tool.name, backend, log).await {
+            if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log).await {
                 eprintln!("[janitor] error processing '{}': {e}", tool.name);
             }
         }

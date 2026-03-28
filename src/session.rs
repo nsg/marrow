@@ -46,6 +46,12 @@ pub struct ChatSession {
     summary: Option<String>,
 }
 
+impl Default for ChatSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChatSession {
     pub fn new() -> Self {
         Self {

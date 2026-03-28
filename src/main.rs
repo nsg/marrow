@@ -1,23 +1,3 @@
-mod backends;
-mod codegen;
-mod context;
-mod events;
-mod executor;
-mod janitor;
-mod memory;
-mod memory_provider;
-mod memory_writer;
-mod model;
-mod registry;
-mod router;
-mod sandbox;
-mod sandbox_host;
-mod session;
-mod task;
-mod tool_selection;
-mod toolbox;
-mod triage;
-
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,14 +5,19 @@ use std::sync::Arc;
 use clap::Parser;
 use reqwest::Client;
 
-use context::ContextAssembler;
-use events::{Event, EventLog};
-use memory::MemoryStore;
-use registry::TaskRegistry;
-use router::{ModelRouter, RouterConfig};
-use session::{ChatSession, Message};
-use task::Task;
-use toolbox::Toolbox;
+use marrow::context::ContextAssembler;
+use marrow::events::{Event, EventLog};
+use marrow::memory::MemoryStore;
+use marrow::memory_provider;
+use marrow::memory_writer;
+use marrow::registry::TaskRegistry;
+use marrow::router::{ModelRouter, RouterConfig};
+use marrow::session::{ChatSession, Message};
+use marrow::task::Task;
+use marrow::tool_selection;
+use marrow::toolbox::Toolbox;
+use marrow::triage;
+use marrow::{codegen, janitor};
 
 #[derive(Parser)]
 #[command(
