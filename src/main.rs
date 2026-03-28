@@ -8,16 +8,11 @@ use reqwest::Client;
 use marrow::agent;
 use marrow::events::{Event, EventLog};
 use marrow::metrics::Metrics;
-use marrow::executor::Context;
 use marrow::memory::MemoryStore;
-use marrow::memory_provider;
 use marrow::memory_writer;
-use marrow::registry::TaskRegistry;
 use marrow::router::{ModelRouter, RouterConfig};
 use marrow::session::{ChatSession, Message};
-use marrow::task::Task;
 use marrow::toolbox::Toolbox;
-use marrow::triage;
 use marrow::janitor;
 
 #[derive(Parser)]
@@ -56,83 +51,45 @@ struct Cli {
 #[allow(clippy::too_many_arguments)]
 async fn run_task(
     description: &str,
-    role: &str,
-    registry: &TaskRegistry,
     router: &ModelRouter,
     toolbox: &Toolbox,
     toolbox_path: &str,
     memory_store: &MemoryStore,
     client: Arc<Client>,
     log: &EventLog,
-    session: Option<&ChatSession>,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    let mut task = Task::new(description);
-    task.model_role = role.to_string();
-    let task_id = task.id.to_string();
+    let task_id = uuid::Uuid::new_v4().to_string();
 
     log.emit(Event::TaskCreated {
         task_id: task_id.clone(),
         description: description.to_string(),
-        role: role.to_string(),
+        role: "agent".to_string(),
     })
     .await;
 
     let fast_backend = router
         .backend("fast")
         .or_else(|_| router.backend("default"))?;
-    let history_msgs = session.map(|s| s.build_messages(None));
-    let history_ref = history_msgs.as_deref();
+    let code_backend = router
+        .backend("code")
+        .or_else(|_| router.backend("default"))?;
 
-    // Step 1: Load all memories (no model call — just include everything)
+    // Step 1: Load all memories
     let memories = memory_store.list().unwrap_or_default();
 
-    // Step 2: Triage — does this task need external data?
-    let needs_tools =
-        triage::needs_external_data(description, fast_backend, history_ref, &memories).await?;
-
-    // Step 3: If tools needed, run agent loop; otherwise direct answer
-    let answer = if needs_tools {
-        let code_backend = router
-            .backend("code")
-            .or_else(|_| router.backend("default"))?;
-
-        agent::run_loop(
-            description,
-            &task_id,
-            fast_backend,
-            code_backend,
-            toolbox,
-            toolbox_path,
-            client,
-            &memories,
-            log,
-        )
-        .await?
-    } else {
-        // Direct answer — no tools needed
-        let memory_context = memory_provider::memories_to_context(&memories);
-        let mut context_data = serde_json::Map::new();
-        context_data.insert("memories".to_string(), memory_context);
-        let context = Context::new(serde_json::Value::Object(context_data));
-
-        let history = session.map(|s| s.build_messages(None));
-        let history_slice = history.as_deref();
-
-        let id = registry.create(task.clone()).await;
-        let result = registry.run(id, router, &context, history_slice).await;
-
-        let status = if result.is_ok() { "succeeded" } else { "failed" };
-        log.emit(Event::TaskExecuted {
-            task_id: task_id.clone(),
-            status: status.to_string(),
-        })
-        .await;
-
-        match result {
-            Ok(val) => val.as_str().unwrap_or("").to_string(),
-            Err(e) => return Err(e.into()),
-        }
-    };
+    // Step 2: Agent loop — model decides whether to use tools or answer directly
+    let answer = agent::run_loop(
+        description,
+        &task_id,
+        fast_backend,
+        code_backend,
+        toolbox,
+        toolbox_path,
+        client,
+        &memories,
+        log,
+    )
+    .await?;
 
     log.emit(Event::TaskExecuted {
         task_id: task_id.clone(),
@@ -157,7 +114,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = RouterConfig::from_file(&cli.config)?;
     let metrics = Arc::new(Metrics::new());
     let router = ModelRouter::from_config_with_metrics(&config, Some(metrics.clone()))?;
-    let registry = TaskRegistry::new();
     let client = Arc::new(Client::new());
     let toolbox = Toolbox::new(&cli.toolbox);
     let memory_store = MemoryStore::new(&cli.memory);
@@ -177,15 +133,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(prompt) = cli.prompt {
         match run_task(
             &prompt,
-            &cli.role,
-            &registry,
             &router,
             &toolbox,
             &cli.toolbox,
             &memory_store,
             client,
             &log,
-            None,
         )
         .await
         {
@@ -231,15 +184,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             match run_task(
                 input,
-                &cli.role,
-                &registry,
                 &router,
                 &toolbox,
                 &cli.toolbox,
                 &memory_store,
                 client.clone(),
                 &log,
-                Some(&session),
             )
             .await
             {
