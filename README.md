@@ -104,9 +104,9 @@ Marrow connects to Discord as a bot that responds to @mentions and DMs. Setup ta
 1. Go to **OAuth2** in the left sidebar, then scroll to **OAuth2 URL Generator**
 2. Under **Scopes**, tick `bot`
 3. Under **Bot Permissions**, tick:
-   - **Read Messages/View Channels** — see channels and read messages
-   - **Send Messages** — reply to users
-   - **Read Message History** — context for conversations
+   - **View Channels** (under General Permissions)
+   - **Send Messages** (under Text Permissions)
+   - **Read Message History** (under Text Permissions)
 
    Do not tick Administrator — the bot only needs these three.
 
