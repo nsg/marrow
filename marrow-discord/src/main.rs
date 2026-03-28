@@ -121,7 +121,7 @@ impl EventHandler for Handler {
         let http = ctx.http.clone();
         let progress_handle = tokio::spawn(async move {
             while let Some(status) = progress_rx.recv().await {
-                let _ = channel_id.say(&http, &format!("_{status}_")).await;
+                let _ = channel_id.say(&http, &status).await;
             }
         });
 

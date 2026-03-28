@@ -330,9 +330,9 @@ pub async fn run_loop(
                     .collect::<Vec<_>>()
                     .join(", ");
                 if params_preview.is_empty() {
-                    emit(format!("Calling tool \"{tool}\"..."));
+                    emit(format!("🔧 Calling tool \"{tool}\""));
                 } else {
-                    emit(format!("Calling tool \"{tool}\" ({params_preview})..."));
+                    emit(format!("🔧 Calling tool \"{tool}\" ({params_preview})"));
                 }
 
                 // Normalize param keys to uppercase
@@ -426,7 +426,7 @@ pub async fn run_loop(
                 })
                 .await;
 
-                emit(format!("Creating tool \"{name}\"..."));
+                emit(format!("⚙️ Creating tool \"{name}\""));
 
                 let output = match codegen::generate_provider_for_agent(
                     name,
@@ -471,7 +471,7 @@ pub async fn run_loop(
                 })
                 .await;
                 if !history.is_empty() {
-                    emit("Thinking...".to_string());
+                    emit("💭 Thinking...".to_string());
                 }
                 return format_answer(task, memories, &history, answer_backend).await;
             }
