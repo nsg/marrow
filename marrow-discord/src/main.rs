@@ -220,16 +220,33 @@ fn split_message(text: &str, max_len: usize) -> Vec<&str> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let token =
-        std::env::var("DISCORD_TOKEN").map_err(|_| "DISCORD_TOKEN environment variable not set")?;
-
     let config_path = std::env::var("MARROW_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
-    let toolbox_path = std::env::var("MARROW_TOOLBOX").unwrap_or_else(|_| "toolbox".to_string());
-    let memory_path = std::env::var("MARROW_MEMORY").unwrap_or_else(|_| "memory".to_string());
-    let log_path = std::env::var("MARROW_LOG").unwrap_or_else(|_| "events.jsonl".to_string());
-    let verbose = std::env::var("MARROW_VERBOSE").is_ok();
-
     let config = RouterConfig::from_file(&config_path)?;
+    let discord = config.discord.as_ref();
+
+    // Config file first, env var overrides
+    let token = std::env::var("DISCORD_TOKEN")
+        .ok()
+        .or_else(|| discord.and_then(|d| d.token.clone()))
+        .ok_or("discord token not set — add [discord] token to config.toml or set DISCORD_TOKEN")?;
+
+    let toolbox_path = std::env::var("MARROW_TOOLBOX").unwrap_or_else(|_| {
+        discord
+            .and_then(|d| d.toolbox.clone())
+            .unwrap_or_else(|| "toolbox".to_string())
+    });
+    let memory_path = std::env::var("MARROW_MEMORY").unwrap_or_else(|_| {
+        discord
+            .and_then(|d| d.memory.clone())
+            .unwrap_or_else(|| "memory".to_string())
+    });
+    let log_path = std::env::var("MARROW_LOG").unwrap_or_else(|_| {
+        discord
+            .and_then(|d| d.log.clone())
+            .unwrap_or_else(|| "events.jsonl".to_string())
+    });
+    let verbose =
+        std::env::var("MARROW_VERBOSE").is_ok() || discord.is_some_and(|d| d.verbose);
     let router = Arc::new(ModelRouter::from_config(&config)?);
     let client = Arc::new(Client::new());
     let toolbox = Arc::new(Toolbox::new(&toolbox_path));

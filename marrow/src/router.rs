@@ -13,9 +13,25 @@ use crate::model::ModelBackend;
 use crate::session::Message;
 use crate::task::Task;
 
+#[derive(Debug, Deserialize, Default)]
+pub struct DiscordConfig {
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub toolbox: Option<String>,
+    #[serde(default)]
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub log: Option<String>,
+    #[serde(default)]
+    pub verbose: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RouterConfig {
     pub roles: HashMap<String, RoleConfig>,
+    #[serde(default)]
+    pub discord: Option<DiscordConfig>,
 }
 
 #[derive(Debug, Deserialize)]

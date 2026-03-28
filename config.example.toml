@@ -25,6 +25,15 @@ model = "glm-5:cloud"
 api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
+# --- Discord bot ---
+# Used by marrow-discord. Token can also be set via DISCORD_TOKEN env var.
+# [discord]
+# token = "your-bot-token"
+# toolbox = "toolbox"
+# memory = "memory"
+# log = "events.jsonl"
+# verbose = false
+
 # --- Local Ollama (omit api_base to use localhost:11434) ---
 # [roles.default]
 # provider = "ollama"

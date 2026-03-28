@@ -84,23 +84,23 @@ cargo run -p marrow-cli -- --verbose -p "What time is it?"
 The Discord bridge connects Marrow to Discord as a bot that responds to @mentions and DMs.
 
 ```sh
-# Build
-cargo build -p marrow-discord
+cargo run -p marrow-discord
+```
 
-# Run (requires a Discord bot token)
-DISCORD_TOKEN=your-bot-token cargo run -p marrow-discord
+Configure the bot in `config.toml`:
+
+```toml
+[discord]
+token = "your-bot-token"
+# toolbox = "toolbox"
+# memory = "memory"
+# log = "events.jsonl"
+# verbose = false
 ```
 
 The bot needs the **Message Content** privileged intent enabled in the [Discord Developer Portal](https://discord.com/developers/applications).
 
-| Environment Variable | Default | Description |
-|---|---|---|
-| `DISCORD_TOKEN` | — | **Required.** Discord bot token |
-| `MARROW_CONFIG` | `config.toml` | Path to config file |
-| `MARROW_TOOLBOX` | `toolbox` | Path to toolbox directory |
-| `MARROW_MEMORY` | `memory` | Path to memory directory |
-| `MARROW_LOG` | `events.jsonl` | Path to event log file |
-| `MARROW_VERBOSE` | unset | Set to enable verbose logging |
+All settings can be overridden with environment variables (`DISCORD_TOKEN`, `MARROW_TOOLBOX`, `MARROW_MEMORY`, `MARROW_LOG`, `MARROW_VERBOSE`). Env vars take precedence over config file values.
 
 ## Configuration
 
