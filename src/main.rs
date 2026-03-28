@@ -94,28 +94,32 @@ async fn select_and_assemble(
         .backend("code")
         .or_else(|_| router.backend("default"))?;
 
-    for name in &tool_names {
-        if toolbox.load_meta(name).is_err() {
-            match codegen::generate_provider(description, code_backend, toolbox, client.clone())
+    for stage in &selection.stages {
+        for (name, params) in &stage.tools {
+            if toolbox.load_meta(name).is_err() {
+                let request = codegen::ToolRequest {
+                    name: name.clone(),
+                    expected_params: params.clone(),
+                };
+                match codegen::generate_provider_with_hint(
+                    description,
+                    code_backend,
+                    toolbox,
+                    client.clone(),
+                    Some(&request),
+                )
                 .await
-            {
-                Ok(generated_name) => {
-                    log.emit(Event::ToolGenerated {
-                        name: generated_name.clone(),
-                        description: description.to_string(),
-                    })
-                    .await;
-                    // If the model named it differently, update the stage
-                    if &generated_name != name {
-                        for stage in &mut selection.stages {
-                            if let Some(params) = stage.tools.remove(name) {
-                                stage.tools.insert(generated_name.clone(), params);
-                            }
-                        }
+                {
+                    Ok(generated_name) => {
+                        log.emit(Event::ToolGenerated {
+                            name: generated_name,
+                            description: description.to_string(),
+                        })
+                        .await;
                     }
-                }
-                Err(e) => {
-                    eprintln!("[marrow] code generation for '{name}' failed: {e}");
+                    Err(e) => {
+                        eprintln!("[marrow] code generation for '{name}' failed: {e}");
+                    }
                 }
             }
         }

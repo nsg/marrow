@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -30,15 +31,15 @@ Design philosophy — each tool does ONE thing well:
 Rules:
 - Return a Lua table with the context data
 - Do ONE thing: fetch one data source, transform one input, or query one API
-- Use PARAMS for input values (location, timezone, date, etc.)
+- Use PARAMS for input values (location, timezone, date, url, etc.)
 - Use http_get/http_post for external API calls
 - Use json_parse to parse JSON responses
 - Do NOT use io, os, require, dofile, loadfile, or debug
 - Handle errors gracefully (check response status)
 
-Task: {task}
+{tool_hint}Task: {task}
 
-Also provide a short name (lowercase, no spaces) and one-line description for this tool.
+{name_instruction}
 
 Respond in this exact format:
 ```name
@@ -51,8 +52,52 @@ Respond in this exact format:
 <your lua code>
 ```"#;
 
-pub fn build_codegen_prompt(task_description: &str) -> String {
-    CODEGEN_PROMPT_TEMPLATE.replace("{task}", task_description)
+/// Optional hint for codegen about what specific tool to generate.
+pub struct ToolRequest {
+    /// The name the orchestrator expects for this tool
+    pub name: String,
+    /// Parameters the orchestrator will pass to this tool
+    pub expected_params: HashMap<String, String>,
+}
+
+pub fn build_codegen_prompt(task_description: &str, request: Option<&ToolRequest>) -> String {
+    let (tool_hint, name_instruction) = if let Some(req) = request {
+        let params_desc = if req.expected_params.is_empty() {
+            String::new()
+        } else {
+            let params: Vec<String> = req
+                .expected_params
+                .iter()
+                .map(|(k, v)| format!("  - PARAMS[\"{k}\"] = \"{v}\""))
+                .collect();
+            format!(
+                "\nThe orchestrator will pass these parameters:\n{}\n",
+                params.join("\n")
+            )
+        };
+
+        (
+            format!(
+                "Generate a tool named \"{name}\" that the orchestrator needs.\n{params_desc}\n",
+                name = req.name
+            ),
+            format!(
+                "IMPORTANT: The tool MUST be named \"{}\". Use exactly this name.",
+                req.name
+            ),
+        )
+    } else {
+        (
+            String::new(),
+            "Also provide a short name (lowercase, no spaces) and one-line description for this tool."
+                .to_string(),
+        )
+    };
+
+    CODEGEN_PROMPT_TEMPLATE
+        .replace("{tool_hint}", &tool_hint)
+        .replace("{task}", task_description)
+        .replace("{name_instruction}", &name_instruction)
 }
 
 pub async fn generate_provider(
@@ -61,10 +106,25 @@ pub async fn generate_provider(
     toolbox: &Toolbox,
     client: Arc<Client>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
-    let prompt = build_codegen_prompt(task_description);
+    generate_provider_with_hint(task_description, backend, toolbox, client, None).await
+}
+
+pub async fn generate_provider_with_hint(
+    task_description: &str,
+    backend: &dyn ModelBackend,
+    toolbox: &Toolbox,
+    client: Arc<Client>,
+    request: Option<&ToolRequest>,
+) -> Result<String, Box<dyn Error + Send + Sync>> {
+    let prompt = build_codegen_prompt(task_description, request);
     let response = backend.complete(prompt).await?;
 
-    let (name, description, lua_code) = parse_codegen_response(&response)?;
+    let (mut name, description, lua_code) = parse_codegen_response(&response)?;
+
+    // If we requested a specific name, enforce it regardless of what the model returned
+    if let Some(req) = request {
+        name = req.name.clone();
+    }
 
     // Test-run the generated Lua before saving
     let provider = LuaProvider::new(&name, &lua_code);
