@@ -54,11 +54,6 @@ impl Task {
         }
     }
 
-    pub fn with_persistence(mut self) -> Self {
-        self.persist = true;
-        self
-    }
-
     pub fn transition(&mut self, next: TaskStatus) -> Result<(), InvalidTransition> {
         if self.status.can_transition_to(next) {
             self.status = next;

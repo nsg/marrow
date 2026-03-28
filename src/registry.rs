@@ -70,16 +70,6 @@ impl TaskRegistry {
             }
         }
     }
-
-    pub async fn list_by_status(&self, status: TaskStatus) -> Vec<Task> {
-        self.tasks
-            .read()
-            .await
-            .values()
-            .filter(|t| t.status == status)
-            .cloned()
-            .collect()
-    }
 }
 
 impl Default for TaskRegistry {

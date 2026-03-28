@@ -115,8 +115,4 @@ impl ChatSession {
 
         Ok(())
     }
-
-    pub fn message_count(&self) -> usize {
-        self.messages.len()
-    }
 }

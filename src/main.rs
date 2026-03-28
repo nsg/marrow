@@ -8,7 +8,6 @@ mod memory;
 mod memory_provider;
 mod memory_writer;
 mod model;
-mod persistence;
 mod registry;
 mod router;
 mod sandbox;

@@ -31,10 +31,6 @@ impl LuaProvider {
         Ok(Self::new(name, source))
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     pub async fn execute(
         &self,
         task_description: &str,

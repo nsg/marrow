@@ -89,15 +89,4 @@ impl Toolbox {
             .filter(|t| !t.validated)
             .collect())
     }
-
-    pub fn load_all_providers(&self) -> Result<Vec<LuaProvider>, Box<dyn Error + Send + Sync>> {
-        let mut providers = Vec::new();
-        for meta in self.list_tools()? {
-            match self.load_provider(&meta.name) {
-                Ok(p) => providers.push(p),
-                Err(e) => eprintln!("failed to load tool '{}': {e}", meta.name),
-            }
-        }
-        Ok(providers)
-    }
 }

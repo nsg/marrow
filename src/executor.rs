@@ -10,12 +10,6 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn empty() -> Self {
-        Self {
-            data: serde_json::Value::Null,
-        }
-    }
-
     pub fn new(data: serde_json::Value) -> Self {
         Self { data }
     }
