@@ -29,3 +29,24 @@ api_base = "https://ollama.com"
 # [roles.default]
 # provider = "ollama"
 # model = "mistral"
+
+# --- OpenAI-compatible API ---
+# Works with OpenAI, OpenRouter, Together, Groq, etc.
+# [roles.default]
+# provider = "openai"
+# model = "gpt-4o"
+# api_base = "https://api.openai.com/v1"
+# api_key = "sk-..."
+#
+# [roles.fast]
+# provider = "openai"
+# model = "gpt-4o-mini"
+# api_base = "https://api.openai.com/v1"
+# api_key = "sk-..."
+#
+# --- OpenRouter ---
+# [roles.default]
+# provider = "openai"
+# model = "anthropic/claude-sonnet-4"
+# api_base = "https://openrouter.ai/api/v1"
+# api_key = "sk-or-..."

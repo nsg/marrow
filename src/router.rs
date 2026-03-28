@@ -6,6 +6,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use crate::backends::ollama::OllamaBackend;
+use crate::backends::openai::OpenAIBackend;
 use crate::executor::{Context, Executor};
 use crate::metrics::Metrics;
 use crate::model::ModelBackend;
@@ -67,6 +68,22 @@ impl RouterConfig {
                 }
                 Ok(Box::new(backend))
             }
+            "openai" => {
+                let base_url = role_config
+                    .api_base
+                    .as_deref()
+                    .unwrap_or("https://api.openai.com/v1");
+                let api_key = role_config
+                    .api_key
+                    .as_deref()
+                    .ok_or_else(|| format!("openai provider for role '{role}' requires api_key"))?;
+                let mut backend =
+                    OpenAIBackend::new(base_url, &role_config.model, api_key).with_role(role);
+                if let Some(m) = metrics {
+                    backend = backend.with_metrics(m);
+                }
+                Ok(Box::new(backend))
+            }
             other => Err(format!("unknown provider: {other}").into()),
         }
     }
@@ -105,6 +122,21 @@ impl ModelRouter {
                         backend = backend.with_metrics(m.clone());
                     }
 
+                    Box::new(backend)
+                }
+                "openai" => {
+                    let base_url = role_config
+                        .api_base
+                        .as_deref()
+                        .unwrap_or("https://api.openai.com/v1");
+                    let api_key = role_config.api_key.as_deref().ok_or_else(|| {
+                        format!("openai provider for role '{role}' requires api_key")
+                    })?;
+                    let mut backend =
+                        OpenAIBackend::new(base_url, &role_config.model, api_key).with_role(role);
+                    if let Some(ref m) = metrics {
+                        backend = backend.with_metrics(m.clone());
+                    }
                     Box::new(backend)
                 }
                 other => return Err(format!("unknown provider: {other}").into()),
