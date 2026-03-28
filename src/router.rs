@@ -110,7 +110,10 @@ impl Executor for ModelRouter {
     ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
         let backend = self.backend(&task.model_role)?;
 
-        let system_context = format!("Context: {}", context.data);
+        let system_context = format!(
+            "You are a helpful assistant. Tools have already been executed and their results are provided below. Use this data to answer the user's question directly. Do NOT suggest running more tools — all available data is here.\n\nTool results:\n{}",
+            context.data
+        );
 
         let response = if let Some(msgs) = history {
             // Build full message list: system context + history + current user message

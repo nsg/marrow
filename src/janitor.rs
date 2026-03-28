@@ -30,11 +30,10 @@ Available host functions in the sandbox:
 Global tables available:
 - TASK.description (string): the user's task description
 - PARAMS (table): per-tool parameters (e.g. PARAMS["LOCATION"])
-- RESULTS (table): JSON string outputs from tools in prior stages
 
 Review criteria:
 1. Does the code actually do what the description claims?
-2. Does the tool do ONE thing? Each tool should fetch one data source or perform one operation. If it does multiple unrelated things (e.g., fetches weather AND plans activities), FAIL it — those should be separate tools composed via stages.
+2. Tool design: A data tool should do ONE thing (fetch one data source). A glue tool may call run_tool() to compose data tools — that is fine. But a data tool should NOT do multiple unrelated things.
 3. Is the tool reusable/generic, or does it have hardcoded values that contradict a generic description? (e.g., description says "any location" but code hardcodes "London")
 4. Does the name accurately reflect what the tool does?
 5. Does the code use host functions correctly?
@@ -78,7 +77,6 @@ Available host functions in the sandbox:
 Global tables available:
 - TASK.description (string): the user's task description
 - PARAMS (table): per-tool parameters (e.g. PARAMS["LOCATION"])
-- RESULTS (table): JSON string outputs from tools in prior stages
 
 Rules:
 - Return a Lua table with the context data

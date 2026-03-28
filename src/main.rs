@@ -5,9 +5,8 @@ use std::sync::Arc;
 use clap::Parser;
 use reqwest::Client;
 
-use marrow::answer_check;
-use marrow::context::{ContextAssembler, Stage};
 use marrow::events::{Event, EventLog};
+use marrow::executor::Context;
 use marrow::memory::MemoryStore;
 use marrow::memory_provider;
 use marrow::memory_writer;
@@ -15,12 +14,10 @@ use marrow::registry::TaskRegistry;
 use marrow::router::{ModelRouter, RouterConfig};
 use marrow::session::{ChatSession, Message};
 use marrow::task::Task;
-use marrow::tool_selection::{self, PriorAttempt, SelectionResult};
+use marrow::tool_selection;
 use marrow::toolbox::Toolbox;
 use marrow::triage;
 use marrow::{codegen, janitor};
-
-const MAX_REPLAN_ATTEMPTS: u32 = 2;
 
 #[derive(Parser)]
 #[command(
@@ -55,118 +52,6 @@ struct Cli {
     log: String,
 }
 
-/// Select tools (with optional re-plan context), generate missing tools, assemble context.
-#[allow(clippy::too_many_arguments)]
-async fn select_and_assemble(
-    description: &str,
-    task_id: &str,
-    router: &ModelRouter,
-    toolbox: &Toolbox,
-    client: Arc<Client>,
-    log: &EventLog,
-    fast_backend: &dyn marrow::model::ModelBackend,
-    history_ref: Option<&[Message]>,
-    prior_attempt: Option<&PriorAttempt>,
-) -> Result<
-    (SelectionResult, marrow::executor::Context),
-    Box<dyn std::error::Error + Send + Sync>,
-> {
-    let available_tools = toolbox.list_tools().unwrap_or_default();
-    let mut selection = tool_selection::select_tools_with_retry_context(
-        description,
-        &available_tools,
-        fast_backend,
-        history_ref,
-        prior_attempt,
-    )
-    .await?;
-
-    let tool_names = selection.all_tool_names();
-
-    log.emit(Event::ToolSelected {
-        task_id: task_id.to_string(),
-        tools: tool_names.clone(),
-    })
-    .await;
-
-    // Generate any tools that don't exist yet
-    let code_backend = router
-        .backend("code")
-        .or_else(|_| router.backend("default"))?;
-
-    for stage in &selection.stages {
-        for (name, params) in &stage.tools {
-            if toolbox.load_meta(name).is_err() {
-                let request = codegen::ToolRequest {
-                    name: name.clone(),
-                    expected_params: params.clone(),
-                };
-                match codegen::generate_provider_with_hint(
-                    description,
-                    code_backend,
-                    toolbox,
-                    client.clone(),
-                    Some(&request),
-                )
-                .await
-                {
-                    Ok(generated_name) => {
-                        log.emit(Event::ToolGenerated {
-                            name: generated_name,
-                            description: description.to_string(),
-                        })
-                        .await;
-                    }
-                    Err(e) => {
-                        eprintln!("[marrow] code generation for '{name}' failed: {e}");
-                    }
-                }
-            }
-        }
-    }
-
-    // If selection was empty and no prior attempt, try generating a single tool
-    if selection.is_empty() && prior_attempt.is_none() && !description.trim().is_empty() {
-        match codegen::generate_provider(description, code_backend, toolbox, client.clone()).await {
-            Ok(name) => {
-                log.emit(Event::ToolGenerated {
-                    name: name.clone(),
-                    description: description.to_string(),
-                })
-                .await;
-                let mut tools = std::collections::HashMap::new();
-                tools.insert(name, std::collections::HashMap::new());
-                selection.stages = vec![Stage { tools }];
-            }
-            Err(e) => {
-                eprintln!("[marrow] code generation failed: {e}");
-            }
-        }
-    }
-
-    // Load providers and assemble context
-    let all_tools = selection.all_tool_names();
-    let mut assembler = ContextAssembler::new(client);
-    for name in &all_tools {
-        match toolbox.load_provider(name) {
-            Ok(provider) => assembler.add_provider(provider),
-            Err(e) => eprintln!("[marrow] failed to load provider '{name}': {e}"),
-        }
-    }
-
-    let context = assembler
-        .assemble(description, &selection.stages)
-        .await?;
-
-    log.emit(Event::ContextAssembled {
-        task_id: task_id.to_string(),
-        providers: all_tools,
-    })
-    .await;
-
-    Ok((selection, context))
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn run_task(
     description: &str,
@@ -174,12 +59,15 @@ async fn run_task(
     registry: &TaskRegistry,
     router: &ModelRouter,
     toolbox: &Toolbox,
+    toolbox_path: &str,
     memory_store: &MemoryStore,
     client: Arc<Client>,
     log: &EventLog,
     session: Option<&ChatSession>,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    let task_id = uuid::Uuid::new_v4().to_string();
+    let mut task = Task::new(description);
+    task.model_role = role.to_string();
+    let task_id = task.id.to_string();
 
     log.emit(Event::TaskCreated {
         task_id: task_id.clone(),
@@ -199,132 +87,151 @@ async fn run_task(
         memory_provider::select_memories(description, memory_store, fast_backend).await?;
     let memory_context = memory_provider::memories_to_context(&memories);
 
-    // Step 2: Triage
+    // Step 2: Triage — does this task need external data?
     let needs_tools =
         triage::needs_external_data(description, fast_backend, history_ref, &memories).await?;
 
-    // Step 3-6: Select tools, assemble context, execute — with retry loop
-    let mut prior_attempt: Option<PriorAttempt> = None;
-    let mut final_result: Option<Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>>> = None;
+    // Step 3: Tool selection + generation + execution
+    let tool_context = if needs_tools {
+        let available_tools = toolbox.list_tools().unwrap_or_default();
+        let selection =
+            tool_selection::select_tools(description, &available_tools, fast_backend, history_ref, &memories)
+                .await?;
 
-    let max_attempts = if needs_tools {
-        MAX_REPLAN_ATTEMPTS + 1
-    } else {
-        1
-    };
-
-    for attempt in 0..max_attempts {
-        // Tool selection + context assembly
-        let (selection, mut context) = if needs_tools {
-            select_and_assemble(
-                description,
-                &task_id,
-                router,
-                toolbox,
-                client.clone(),
-                log,
-                fast_backend,
-                history_ref,
-                prior_attempt.as_ref(),
-            )
-            .await?
-        } else {
-            let assembler = ContextAssembler::new(client.clone());
-            let context = assembler.assemble(description, &[]).await?;
-            (SelectionResult { stages: Vec::new() }, context)
-        };
-
-        // Inject memories
-        if let Some(obj) = context.data.as_object_mut() {
-            obj.insert("memories".to_string(), memory_context.clone());
-        }
-
-        // Execute
-        let history = session.map(|s| s.build_messages(None));
-        let history_slice = history.as_deref();
-
-        let mut task = Task::new(description);
-        task.model_role = role.to_string();
-        let id = registry.create(task).await;
-        let result = registry.run(id, router, &context, history_slice).await;
-
-        let status = if result.is_ok() {
-            "succeeded"
-        } else {
-            "failed"
-        };
-
-        log.emit(Event::TaskExecuted {
-            task_id: task_id.clone(),
-            status: status.to_string(),
-        })
-        .await;
-
-        // If execution failed, don't retry — that's a system error
-        let output = match result {
-            Ok(output) => output,
-            Err(e) => {
-                final_result = Some(Err(e.into()));
-                break;
-            }
-        };
-
-        // Check if we should retry (only if tools were used and we have retries left)
-        let response_text = output.as_str().unwrap_or("");
-        let is_last_attempt = attempt >= MAX_REPLAN_ATTEMPTS;
-
-        if needs_tools && !selection.is_empty() && !is_last_attempt {
-            let tool_output_summary = format!("{}", context.data);
-
-            let check = answer_check::check_answer(
-                description,
-                &tool_output_summary,
-                response_text,
-                fast_backend,
-            )
+        let tool_name = if let Some(name) = &selection.tool {
+            log.emit(Event::ToolSelected {
+                task_id: task_id.clone(),
+                tools: vec![name.clone()],
+            })
             .await;
 
-            if let Ok(check_result) = check
-                && !check_result.answered
-            {
-                let tool_outputs: Vec<(String, String)> = selection
-                    .all_tool_names()
-                    .into_iter()
-                    .map(|name| {
-                        let output = context
-                            .data
-                            .get(&name)
-                            .map(|v| v.to_string())
-                            .unwrap_or_default();
-                        (name, output)
-                    })
-                    .collect();
-
-                prior_attempt = Some(PriorAttempt {
-                    tool_outputs,
-                    reason: check_result.reason.clone(),
-                });
-
-                log.emit(Event::Replanning {
-                    task_id: task_id.clone(),
-                    attempt: attempt + 1,
-                    reason: check_result.reason,
-                })
-                .await;
-
-                continue;
+            // Generate if missing
+            if toolbox.load_meta(name).is_err() {
+                let code_backend = router
+                    .backend("code")
+                    .or_else(|_| router.backend("default"))?;
+                let request = codegen::ToolRequest {
+                    name: name.clone(),
+                    expected_params: selection.params.clone(),
+                };
+                match codegen::generate_provider_with_hint(
+                    description,
+                    code_backend,
+                    toolbox,
+                    client.clone(),
+                    Some(&request),
+                    &available_tools,
+                )
+                .await
+                {
+                    Ok(generated) => {
+                        log.emit(Event::ToolGenerated {
+                            name: generated,
+                            description: description.to_string(),
+                        })
+                        .await;
+                    }
+                    Err(e) => {
+                        eprintln!("[marrow] code generation for '{name}' failed: {e}");
+                    }
+                }
             }
+
+            Some(name.clone())
+        } else if !description.trim().is_empty() {
+            // No tool selected — try generating one
+            log.emit(Event::ToolSelected {
+                task_id: task_id.clone(),
+                tools: vec![],
+            })
+            .await;
+
+            let code_backend = router
+                .backend("code")
+                .or_else(|_| router.backend("default"))?;
+            match codegen::generate_provider(description, code_backend, toolbox, client.clone())
+                .await
+            {
+                Ok(name) => {
+                    log.emit(Event::ToolGenerated {
+                        name: name.clone(),
+                        description: description.to_string(),
+                    })
+                    .await;
+                    Some(name)
+                }
+                Err(e) => {
+                    eprintln!("[marrow] code generation failed: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Execute the tool
+        if let Some(ref name) = tool_name {
+            match toolbox.load_provider(name) {
+                Ok(provider) => {
+                    let toolbox_dir = Some(PathBuf::from(toolbox_path));
+                    match provider
+                        .execute_with_params(description, client.clone(), &selection.params, toolbox_dir)
+                        .await
+                    {
+                        Ok(value) => {
+                            log.emit(Event::ContextAssembled {
+                                task_id: task_id.clone(),
+                                providers: vec![name.clone()],
+                            })
+                            .await;
+                            Some(value)
+                        }
+                        Err(e) => {
+                            eprintln!("[marrow] tool '{name}' failed: {e}");
+                            Some(serde_json::json!({ "error": e.to_string() }))
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[marrow] failed to load tool '{name}': {e}");
+                    None
+                }
+            }
+        } else {
+            None
         }
+    } else {
+        None
+    };
 
-        final_result = Some(Ok(output));
-        break;
+    // Step 4: Build context
+    let mut context_data = serde_json::Map::new();
+    if let Some(tool_output) = tool_context {
+        context_data.insert("tool_output".to_string(), tool_output);
     }
+    context_data.insert("memories".to_string(), memory_context);
+    let context = Context::new(serde_json::Value::Object(context_data));
 
-    let result = final_result.unwrap_or_else(|| {
-        Err("max re-plan attempts exceeded".into())
-    });
+    // Step 5: Execute task
+    let history = session.map(|s| s.build_messages(None));
+    let history_slice = history.as_deref();
 
-    // Post-task memory writer
+    let id = registry.create(task).await;
+    let result = registry.run(id, router, &context, history_slice).await;
+
+    let status = if result.is_ok() {
+        "succeeded"
+    } else {
+        "failed"
+    };
+
+    log.emit(Event::TaskExecuted {
+        task_id: task_id.clone(),
+        status: status.to_string(),
+    })
+    .await;
+
+    // Step 6: Post-task memory writer
     if let Ok(ref output) = result {
         let response_text = output.as_str().unwrap_or("");
         if let Err(e) = memory_writer::process_interaction(
@@ -339,7 +246,7 @@ async fn run_task(
         }
     }
 
-    result
+    result.map_err(|e| e.into())
 }
 
 #[tokio::main]
@@ -371,6 +278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             &registry,
             &router,
             &toolbox,
+            &cli.toolbox,
             &memory_store,
             client,
             &log,
@@ -424,6 +332,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 &registry,
                 &router,
                 &toolbox,
+                &cli.toolbox,
                 &memory_store,
                 client.clone(),
                 &log,
@@ -435,11 +344,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     let text = output.as_str().unwrap_or("").to_string();
                     println!("\n{text}\n");
 
-                    // Append to session history
                     session.append(Message::user(input));
                     session.append(Message::assistant(&text));
 
-                    // Summarize if needed
                     if session.needs_summarization()
                         && let Err(e) = session.summarize(fast_backend).await
                     {

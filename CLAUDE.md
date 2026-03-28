@@ -26,8 +26,10 @@ Model research in `docs/model-benchmarks-2026-03.md` — GLM-5 (default/code)
 and Kimi K2.5 (fast) selected based on speed, intelligence index, and tool calling benchmarks.
 
 ### What's built
-- Full task pipeline: triage → tool selection → code generation → context assembly → execution
+- Full task pipeline: triage → tool selection → code generation → execution
 - Lua sandbox with Rust host functions for all external access
+- `run_tool(name, params)` host function — tools can call other tools directly in Lua
+- Glue tool pattern: single-purpose data tools composed by glue tools via `run_tool()`
 - Janitor (async background review, regeneration, escalation after 3 attempts)
 - Working memory (JSON files, model-selected per task, auto-saved post-interaction)
 - Conversation history with automatic summarization
@@ -62,6 +64,10 @@ Context that isn't obvious from the code:
 - **Janitor deletes unfixable tools** — after 3 failed fix attempts, the janitor escalates
   (logged as event) and deletes the tool from the toolbox. Auto-generated tools are disposable;
   they'll be regenerated fresh if needed again
+- **run_tool for composition** — tools compose via `run_tool()` in Lua, not via orchestrator
+  staging. Keeps composition logic in testable code, avoids multi-model-call orchestration
+  that hallucinated in practice. Data tools do one thing; glue tools compose them.
+  Recursion depth capped at 5. New sandbox per nested call for isolation
 
 ---
 
