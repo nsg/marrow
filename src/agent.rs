@@ -108,7 +108,12 @@ pub fn build_agent_prompt(
                     }
                     Action::Answer { .. } => "Answered".to_string(),
                 };
-                format!("[Step {}] {}\nResult: {}\n", s.step, action_desc, s.output)
+                let output_display = if s.output.len() > 1000 {
+                    format!("{}... (truncated)", &s.output[..1000])
+                } else {
+                    s.output.clone()
+                };
+                format!("[Step {}] {}\nResult: {}\n", s.step, action_desc, output_display)
             })
             .collect();
         format!("Previous actions:\n{}\n", entries.join("\n"))
@@ -224,19 +229,26 @@ pub async fn run_loop(
                 })
                 .await;
 
+                // Normalize param keys to uppercase
+                let upper_params: HashMap<String, String> = params
+                    .iter()
+                    .map(|(k, v)| (k.to_uppercase(), v.clone()))
+                    .collect();
+
                 let output = match toolbox.load_provider(tool) {
                     Ok(provider) => {
                         let toolbox_dir = Some(PathBuf::from(toolbox_path));
                         match provider
-                            .execute_with_params(task, client.clone(), params, toolbox_dir)
+                            .execute_with_params(task, client.clone(), &upper_params, toolbox_dir)
                             .await
                         {
                             Ok(value) => {
+                                let has_error = value.get("error").is_some();
                                 log.emit(Event::AgentToolResult {
                                     task_id: task_id.to_string(),
                                     step,
                                     tool: tool.clone(),
-                                    success: true,
+                                    success: !has_error,
                                 })
                                 .await;
                                 value.to_string()
