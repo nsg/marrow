@@ -11,7 +11,8 @@ use marrow::model::{CompletionResult, ModelBackend};
 use marrow::registry::TaskRegistry;
 use marrow::session::{ChatSession, Message};
 use marrow::task::Task;
-use marrow::tool_selection;
+use marrow::answer_check;
+use marrow::tool_selection::{self, PriorAttempt};
 use marrow::toolbox::{ToolMeta, Toolbox};
 use marrow::triage;
 
@@ -1162,4 +1163,256 @@ async fn pipeline_multi_stage_composition() {
 
     // Stage 2 used stage 1's output
     assert_eq!(ctx.data["planner"]["activity"], "go to the park in Portland");
+}
+
+// ---------------------------------------------------------------------------
+// Answer check tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn answer_check_detects_successful_answer() {
+    let backend = MockBackend::new(vec![
+        "```verdict\nYES\n```\n```reason\nThe response contains the weather information.\n```",
+    ]);
+
+    let result = answer_check::check_answer(
+        "what's the weather?",
+        r#"{"temp": 22, "condition": "sunny"}"#,
+        "The weather is 22°C and sunny.",
+        &backend,
+    )
+    .await
+    .unwrap();
+
+    assert!(result.answered);
+}
+
+#[tokio::test]
+async fn answer_check_detects_insufficient_answer() {
+    let backend = MockBackend::new(vec![
+        "```verdict\nNO\n```\n```reason\nOnly HTML headers were returned, no blog content visible.\n```",
+    ]);
+
+    let result = answer_check::check_answer(
+        "what is my latest blog post about?",
+        r#"{"body_preview": "<head>...</head>"}"#,
+        "I cannot determine what your latest blog post is about.",
+        &backend,
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.answered);
+    assert!(result.reason.contains("HTML headers"));
+}
+
+// ---------------------------------------------------------------------------
+// Tool selection with prior attempt (re-planning) tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tool_selection_replan_with_prior_attempt() {
+    let tools = vec![
+        ToolMeta {
+            name: "blog_access".to_string(),
+            description: "Fetch a web page".to_string(),
+            provides: vec!["blog_access".to_string()],
+            validated: true,
+        },
+        ToolMeta {
+            name: "rss_reader".to_string(),
+            description: "Parse an RSS feed".to_string(),
+            provides: vec!["rss_reader".to_string()],
+            validated: true,
+        },
+    ];
+
+    let prior = PriorAttempt {
+        tool_outputs: vec![
+            ("blog_access".to_string(), r#"{"body_preview": "<head>...</head>"}"#.to_string()),
+        ],
+        reason: "Only HTML headers returned, no blog content visible".to_string(),
+    };
+
+    let backend = MockBackend::new(vec![
+        r#"{"stages": [{"tools": {"rss_reader": {"URL": "https://nsg.cc/index.xml"}}}]}"#,
+    ]);
+
+    let result = tool_selection::select_tools_with_retry_context(
+        "what is my latest blog post about?",
+        &tools,
+        &backend,
+        None,
+        Some(&prior),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.stages.len(), 1);
+    assert!(result.stages[0].tools.contains_key("rss_reader"));
+}
+
+#[tokio::test]
+async fn tool_selection_replan_allows_empty_toolbox() {
+    // When re-planning, empty toolbox should still call the model
+    // (new tools can be generated)
+    let prior = PriorAttempt {
+        tool_outputs: vec![],
+        reason: "no tools were available".to_string(),
+    };
+
+    let backend = MockBackend::new(vec![
+        r#"{"stages": [{"tools": {"new_tool": {"PARAM": "value"}}}]}"#,
+    ]);
+
+    let result = tool_selection::select_tools_with_retry_context(
+        "do something",
+        &[],
+        &backend,
+        None,
+        Some(&prior),
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.is_empty());
+    assert!(result.stages[0].tools.contains_key("new_tool"));
+}
+
+// ---------------------------------------------------------------------------
+// Full pipeline: re-planning after insufficient answer
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pipeline_replan_after_insufficient_answer() {
+    let tb_dir = temp_dir("marrow_tb");
+    let mem_dir = temp_dir("marrow_mem");
+    let toolbox = Toolbox::new(tb_dir.path());
+    let _memory_store = MemoryStore::new(mem_dir.path());
+    let client = Arc::new(Client::new());
+
+    // First tool: returns insufficient data (HTML headers only)
+    let blog_meta = ToolMeta {
+        name: "blog_access".to_string(),
+        description: "Fetch blog homepage".to_string(),
+        provides: vec!["blog_access".to_string()],
+        validated: true,
+    };
+    toolbox
+        .save_tool(
+            &blog_meta,
+            r#"return { body_preview = "<head>scripts and meta tags</head>" }"#,
+        )
+        .unwrap();
+
+    // Second tool: returns actual content (RSS feed)
+    let rss_meta = ToolMeta {
+        name: "rss_reader".to_string(),
+        description: "Parse RSS feed".to_string(),
+        provides: vec!["rss_reader".to_string()],
+        validated: true,
+    };
+    toolbox
+        .save_tool(
+            &rss_meta,
+            r#"return { latest_post = { title = "Building Marrow", summary = "A lean agent framework" } }"#,
+        )
+        .unwrap();
+
+    // Simulate the re-planning pipeline manually:
+    // Attempt 1: select blog_access → insufficient → answer check says NO
+    // Re-plan: select rss_reader → sufficient → answer check says YES
+
+    let backend = MockBackend::new(vec![
+        // Attempt 1: tool selection picks blog_access
+        r#"{"stages": [{"tools": {"blog_access": {}}}]}"#,
+        // Attempt 1: model can't answer with HTML headers
+        "I cannot determine what your latest blog post is about from the HTML headers.",
+        // Answer check: NO
+        "```verdict\nNO\n```\n```reason\nOnly HTML head section returned, no actual content.\n```",
+        // Re-plan: tool selection picks rss_reader
+        r#"{"stages": [{"tools": {"rss_reader": {"URL": "https://nsg.cc/index.xml"}}}]}"#,
+        // Attempt 2: model answers from RSS data
+        "Your latest blog post is 'Building Marrow' — about a lean agent framework.",
+        // Answer check: YES
+        "```verdict\nYES\n```\n```reason\nThe response answers the question with specific post details.\n```",
+    ]);
+
+    let fast = &backend as &dyn ModelBackend;
+
+    // Attempt 1
+    let available = toolbox.list_tools().unwrap();
+    let selection1 = tool_selection::select_tools("latest blog post?", &available, fast, None)
+        .await
+        .unwrap();
+    assert!(selection1.stages[0].tools.contains_key("blog_access"));
+
+    let mut assembler1 = ContextAssembler::new(client.clone());
+    for name in selection1.all_tool_names() {
+        assembler1.add_provider(toolbox.load_provider(&name).unwrap());
+    }
+    let context1 = assembler1.assemble("latest blog post?", &selection1.stages).await.unwrap();
+
+    // Execute attempt 1
+    let response1 = fast
+        .complete(format!("Context: {}\n\nTask: latest blog post?", context1.data))
+        .await
+        .unwrap();
+    assert!(response1.contains("cannot determine"));
+
+    // Answer check says NO
+    let check1 = answer_check::check_answer(
+        "latest blog post?",
+        &context1.data.to_string(),
+        &response1,
+        fast,
+    )
+    .await
+    .unwrap();
+    assert!(!check1.answered);
+
+    // Build prior attempt for re-planning
+    let prior = PriorAttempt {
+        tool_outputs: vec![(
+            "blog_access".to_string(),
+            context1.data["blog_access"].to_string(),
+        )],
+        reason: check1.reason,
+    };
+
+    // Re-plan: tool selection with prior attempt context
+    let selection2 = tool_selection::select_tools_with_retry_context(
+        "latest blog post?",
+        &available,
+        fast,
+        None,
+        Some(&prior),
+    )
+    .await
+    .unwrap();
+    assert!(selection2.stages[0].tools.contains_key("rss_reader"));
+
+    // Execute attempt 2
+    let mut assembler2 = ContextAssembler::new(client);
+    for name in selection2.all_tool_names() {
+        assembler2.add_provider(toolbox.load_provider(&name).unwrap());
+    }
+    let context2 = assembler2.assemble("latest blog post?", &selection2.stages).await.unwrap();
+
+    let response2 = fast
+        .complete(format!("Context: {}\n\nTask: latest blog post?", context2.data))
+        .await
+        .unwrap();
+    assert!(response2.contains("Building Marrow"));
+
+    // Answer check says YES
+    let check2 = answer_check::check_answer(
+        "latest blog post?",
+        &context2.data.to_string(),
+        &response2,
+        fast,
+    )
+    .await
+    .unwrap();
+    assert!(check2.answered);
 }

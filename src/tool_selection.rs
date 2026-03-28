@@ -13,9 +13,11 @@ IMPORTANT: If the task can be answered from conversation history alone (follow-u
 Available tools:
 {tools}
 
-{history}Task: {task}
+{history}{prior_attempt}Task: {task}
 
 Respond with ONLY a JSON object. Each stage runs its tools in parallel. Later stages receive earlier stage outputs via RESULTS["tool_name"]. Each tool gets its own params.
+
+If you need a tool that doesn't exist yet, include it anyway — it will be generated. Prefer composing small single-purpose tools in stages over one big tool.
 
 Example with dependencies (weather first, then planner uses weather output):
 {{"stages": [{{"tools": {{"weather": {{"LOCATION": "Portland"}}}}}}, {{"tools": {{"weekend_planner": {{}}}}}}]}}
@@ -27,6 +29,15 @@ If no tools are needed:
 {{"stages": []}}
 
 Your response (JSON only):"#;
+
+/// Context from a prior failed attempt, used for re-planning.
+#[derive(Debug, Clone)]
+pub struct PriorAttempt {
+    /// Tools that were used and their raw output
+    pub tool_outputs: Vec<(String, String)>,
+    /// Why the attempt was insufficient
+    pub reason: String,
+}
 
 #[derive(Debug)]
 pub struct SelectionResult {
@@ -50,6 +61,7 @@ pub fn build_selection_prompt(
     task_description: &str,
     tools: &[ToolMeta],
     history: Option<&[Message]>,
+    prior_attempt: Option<&PriorAttempt>,
 ) -> String {
     let tools_list = if tools.is_empty() {
         "(none available)".to_string()
@@ -76,9 +88,32 @@ pub fn build_selection_prompt(
         String::new()
     };
 
+    let prior_section = if let Some(attempt) = prior_attempt {
+        let outputs = attempt
+            .tool_outputs
+            .iter()
+            .map(|(name, output)| {
+                let truncated = if output.len() > 500 {
+                    format!("{}... (truncated)", &output[..500])
+                } else {
+                    output.clone()
+                };
+                format!("- {name}: {truncated}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "PRIOR ATTEMPT FAILED. The previous approach did not produce a sufficient answer.\nReason: {}\nTools used and their output:\n{}\n\nYou MUST choose a different approach. Consider: different tools, different stages, new tools that don't exist yet, or different parameters.\n\n",
+            attempt.reason, outputs
+        )
+    } else {
+        String::new()
+    };
+
     SELECTION_PROMPT_TEMPLATE
         .replace("{tools}", &tools_list)
         .replace("{history}", &history_section)
+        .replace("{prior_attempt}", &prior_section)
         .replace("{task}", task_description)
 }
 
@@ -88,13 +123,24 @@ pub async fn select_tools(
     backend: &dyn ModelBackend,
     history: Option<&[Message]>,
 ) -> Result<SelectionResult, Box<dyn Error + Send + Sync>> {
-    if tools.is_empty() {
+    select_tools_with_retry_context(task_description, tools, backend, history, None).await
+}
+
+pub async fn select_tools_with_retry_context(
+    task_description: &str,
+    tools: &[ToolMeta],
+    backend: &dyn ModelBackend,
+    history: Option<&[Message]>,
+    prior_attempt: Option<&PriorAttempt>,
+) -> Result<SelectionResult, Box<dyn Error + Send + Sync>> {
+    // When re-planning, allow empty toolbox — new tools will be generated
+    if tools.is_empty() && prior_attempt.is_none() {
         return Ok(SelectionResult {
             stages: Vec::new(),
         });
     }
 
-    let prompt = build_selection_prompt(task_description, tools, history);
+    let prompt = build_selection_prompt(task_description, tools, history, prior_attempt);
     let response = backend.complete(prompt).await?;
 
     parse_selection(&response)

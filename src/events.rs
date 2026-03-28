@@ -48,6 +48,11 @@ pub enum Event {
         tool: String,
         reason: String,
     },
+    Replanning {
+        task_id: String,
+        attempt: u32,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -130,6 +135,11 @@ impl EventLog {
                 tool, passed: true, ..
             } => {
                 eprintln!("[janitor] '{tool}' validated");
+            }
+            Event::Replanning {
+                attempt, reason, ..
+            } => {
+                eprintln!("[marrow] re-planning (attempt {attempt}): {reason}");
             }
 
             // Verbose only
