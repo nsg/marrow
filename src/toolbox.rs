@@ -114,16 +114,62 @@ impl Toolbox {
 
     pub fn tool_usage(&self, meta: &ToolMeta) -> String {
         let params = self.extract_params(&meta.name);
-        if params.is_empty() {
-            format!("- {}: {}", meta.name, meta.description)
-        } else {
-            format!(
-                "- {}: {} (params: {})",
-                meta.name,
-                meta.description,
-                params.join(", ")
-            )
+        let returns = self.extract_return_fields(&meta.name);
+
+        let mut line = format!("- {}: {}", meta.name, meta.description);
+        if !params.is_empty() {
+            line.push_str(&format!(" (params: {})", params.join(", ")));
         }
+        if !returns.is_empty() {
+            line.push_str(&format!(" (returns: {})", returns.join(", ")));
+        }
+        line
+    }
+
+    pub fn extract_return_fields(&self, name: &str) -> Vec<String> {
+        let source = match self.load_source(name) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+
+        // Find the last "return {" block and extract top-level keys
+        let mut fields = Vec::new();
+        if let Some(ret_start) = source.rfind("return {") {
+            let rest = &source[ret_start..];
+            // Extract field names from "key =" patterns at the top level
+            let mut depth = 0;
+            for line in rest.lines() {
+                for ch in line.chars() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => depth -= 1,
+                        _ => {}
+                    }
+                }
+                // Only extract from depth 1 (top-level of return table)
+                if depth >= 1 {
+                    let trimmed = line.trim();
+                    if let Some(eq_pos) = trimmed.find('=') {
+                        let key = trimmed[..eq_pos].trim().trim_matches(',');
+                        if !key.is_empty()
+                            && !key.contains(' ')
+                            && !key.contains('{')
+                            && !key.starts_with('-')
+                            && key != "return"
+                        {
+                            let key = key.to_string();
+                            if !fields.contains(&key) {
+                                fields.push(key);
+                            }
+                        }
+                    }
+                }
+                if depth <= 0 && !fields.is_empty() {
+                    break;
+                }
+            }
+        }
+        fields
     }
 
     pub fn list_unvalidated(&self) -> Result<Vec<ToolMeta>, Box<dyn Error + Send + Sync>> {

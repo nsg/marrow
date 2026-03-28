@@ -104,6 +104,10 @@ impl EventLog {
         })
     }
 
+    pub fn is_verbose(&self) -> bool {
+        self.verbose
+    }
+
     pub async fn emit(&self, event: Event) {
         let entry = LogEntry {
             timestamp_ms: now_ms(),

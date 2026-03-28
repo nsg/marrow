@@ -31,14 +31,17 @@ To create a new tool (ONLY if no existing tool can do the job):
 To give your final answer (ONLY when you have gathered enough data):
 {{"action": "answer", "text": "your complete answer to the user"}}
 
-Important:
-- ALWAYS prefer existing tools. Use them with different params before creating new ones.
-- A generic tool like "web_scraper" can handle many sites — just pass different URLs.
-- Only create a tool if the available tools truly cannot do what you need.
+Rules:
+- ALWAYS prefer existing tools over creating new ones. The same tool can serve many requests with different param values.
+- Match tool to purpose: read each tool's description and output fields carefully. Only use a tool for what it was designed to do. Do NOT repurpose a tool for an unrelated task (e.g. don't use a blog scraper to look up time data).
+- Consider ALL data a tool returns. Check the "returns" fields — a weather tool may also return local time, a web scraper may return dates, etc. If an existing tool's output already contains the data you need, use it instead of creating a new tool.
+- Only create a tool if no existing tool can provide the data you need, even as a secondary field.
 - After creating a tool, you MUST call it in your next turn — creation alone does nothing.
 - When creating tools, make them GENERIC and reusable (e.g. "rss_reader" not "nsg_blog_reader").
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
-- If a tool returns an error, try different params first before creating a new tool.
+- STRICT RETRY LIMIT: if a tool fails, you may try it ONCE more with different params. After two failures with the same tool, you MUST move on — either use a different tool or create a new one. NEVER call the same tool more than twice total.
+- When a tool expects a URL but fails, consider trying common URL variations (e.g. /feed.xml, /rss, /atom.xml for feeds; /api/ for APIs) before giving up.
+- For fetching blog posts: RSS/Atom feeds are far more reliable than HTML scraping. If no feed parser tool exists, create one early rather than repeatedly failing with HTML scrapers. Most blogs have feeds at /feed.xml, /rss, /feed, or /atom.xml.
 - The answer action text should be a natural language response, NOT a JSON action.
 
 {history}Your action:"#;
@@ -213,6 +216,7 @@ pub async fn run_loop(
     log: &EventLog,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let mut history: Vec<StepResult> = Vec::new();
+    let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
 
     for step in 1..=MAX_AGENT_STEPS {
         let available_tools = toolbox.list_tools().unwrap_or_default();
@@ -221,12 +225,66 @@ pub async fn run_loop(
             .map(|t| toolbox.tool_usage(t))
             .collect::<Vec<_>>()
             .join("\n");
+
+        if log.is_verbose() {
+            eprintln!("[agent] step {step}: tools shown to model:\n{tools_section}");
+        }
+
         let prompt = build_agent_prompt(task, &tools_section, memories, &history);
         let response = backend.complete(prompt).await?;
+
+        if log.is_verbose() {
+            eprintln!("[agent] step {step}: raw model response:\n{response}");
+        }
+
         let action = parse_action(&response);
+
+        if log.is_verbose() {
+            match &action {
+                Action::CallTool { tool, params } => {
+                    let params_str = params
+                        .iter()
+                        .map(|(k, v)| format!("  {k} = \"{v}\""))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let expected = toolbox.extract_params(tool);
+                    eprintln!(
+                        "[agent] step {step}: parsed call_tool \"{tool}\"\n  params passed:\n{params_str}\n  tool expects: {:?}",
+                        expected
+                    );
+                }
+                Action::CreateTool { name, description } => {
+                    eprintln!(
+                        "[agent] step {step}: parsed create_tool \"{name}\" — {description}"
+                    );
+                }
+                Action::Answer { text } => {
+                    let preview = if text.len() > 200 {
+                        format!("{}...", &text[..200])
+                    } else {
+                        text.clone()
+                    };
+                    eprintln!("[agent] step {step}: parsed answer — {preview}");
+                }
+            }
+        }
 
         match &action {
             Action::CallTool { tool, params } => {
+                // Enforce retry limit: skip tools that have failed too many times
+                let fail_count = tool_fail_counts.get(tool.as_str()).copied().unwrap_or(0);
+                if fail_count >= 2 {
+                    if log.is_verbose() {
+                        eprintln!("[agent] step {step}: BLOCKED tool \"{tool}\" — failed {fail_count} times already, forcing move on");
+                    }
+                    history.push(StepResult {
+                        step,
+                        action: action.clone(),
+                        output: format!("{{\"error\": \"tool '{tool}' has failed {fail_count} times already. You MUST use a different tool or create a new one.\"}}"),
+                    });
+                    continue;
+                }
+
                 log.emit(Event::AgentAction {
                     task_id: task_id.to_string(),
                     step,
@@ -241,6 +299,15 @@ pub async fn run_loop(
                     .map(|(k, v)| (k.to_uppercase(), v.clone()))
                     .collect();
 
+                if log.is_verbose() {
+                    let upper_str = upper_params
+                        .iter()
+                        .map(|(k, v)| format!("  {k} = \"{v}\""))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    eprintln!("[agent] step {step}: executing tool \"{tool}\" with uppercase params:\n{upper_str}");
+                }
+
                 let output = match toolbox.load_provider(tool) {
                     Ok(provider) => {
                         let toolbox_dir = Some(PathBuf::from(toolbox_path));
@@ -250,6 +317,16 @@ pub async fn run_loop(
                         {
                             Ok(value) => {
                                 let has_error = value.get("error").is_some();
+                                if log.is_verbose() {
+                                    let preview = {
+                                        let s = value.to_string();
+                                        if s.len() > 500 { format!("{}...", &s[..500]) } else { s }
+                                    };
+                                    eprintln!("[agent] step {step}: tool \"{tool}\" output: {preview}");
+                                }
+                                if has_error {
+                                    *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
+                                }
                                 log.emit(Event::AgentToolResult {
                                     task_id: task_id.to_string(),
                                     step,
@@ -260,6 +337,7 @@ pub async fn run_loop(
                                 value.to_string()
                             }
                             Err(e) => {
+                                *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
                                 log.emit(Event::AgentToolResult {
                                     task_id: task_id.to_string(),
                                     step,
