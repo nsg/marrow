@@ -83,9 +83,8 @@ async fn run_task(
     let history_msgs = session.map(|s| s.build_messages(None));
     let history_ref = history_msgs.as_deref();
 
-    // Step 1: Retrieve relevant memories
-    let memories =
-        memory_provider::select_memories(description, memory_store, fast_backend).await?;
+    // Step 1: Load all memories (no model call — just include everything)
+    let memories = memory_store.list().unwrap_or_default();
 
     // Step 2: Triage — does this task need external data?
     let needs_tools =
