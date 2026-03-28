@@ -79,7 +79,39 @@ cargo run -p marrow-cli -- --verbose -p "What time is it?"
 
 The Discord bridge connects Marrow to Discord as a bot that responds to @mentions and DMs.
 
-Add the `[discord]` section to `config.toml`:
+### 1. Create a Discord application
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**
+2. Give it a name (e.g. "Marrow") and click **Create**
+
+### 2. Configure the bot
+
+In the left sidebar, click **Bot** and configure:
+
+| Setting | Value | Why |
+|---|---|---|
+| **Public Bot** | Off | Only you can invite the bot |
+| **Message Content Intent** | On | Required — bot reads message text |
+| Presence Intent | Off | Not needed |
+| Server Members Intent | Off | Not needed |
+
+Click **Reset Token**, copy it, and save it somewhere safe. You only see it once.
+
+### 3. Invite the bot to your server
+
+In the left sidebar, click **OAuth2**, then scroll to **OAuth2 URL Generator**:
+
+- **Scopes**: select `bot`
+- **Bot Permissions**: select these three:
+  - Read Messages/View Channels
+  - Send Messages
+  - Read Message History
+
+This gives permission integer `68608`. Open the generated URL and add the bot to your server.
+
+### 4. Configure and run
+
+Add the `[discord]` section to `config.toml` with the token you copied:
 
 ```toml
 [discord]
@@ -96,7 +128,7 @@ Then run:
 cargo run -p marrow-discord
 ```
 
-The bot needs the **Message Content** privileged intent enabled in the [Discord Developer Portal](https://discord.com/developers/applications).
+The bot responds when @mentioned in a channel or messaged directly via DM.
 
 ## Configuration
 
