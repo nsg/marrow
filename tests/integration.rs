@@ -165,18 +165,21 @@ async fn agent_loop_call_tool_then_answer() {
         r#"return { msg = "hello world" }"#,
     ).unwrap();
 
-    // Step 1: model calls greeter tool
-    // Step 2: model sees result, gives answer
-    let backend = MockBackend::new(vec![
+    // Step 1: agent calls greeter tool
+    // Step 2: agent says answer
+    // Step 3: answer_backend formulates final response
+    let agent_backend = MockBackend::new(vec![
         r#"{"action": "call_tool", "tool": "greeter", "params": {}}"#,
-        r#"{"action": "answer", "text": "The greeting is: hello world"}"#,
+        r#"{"action": "answer", "text": ""}"#,
     ]);
+    let answer_backend = MockBackend::new(vec!["The greeting is: hello world"]);
 
     let result = agent::run_loop(
         "say hello",
         "test-task",
-        &backend,
-        &backend,
+        &agent_backend,
+        &answer_backend,
+        &agent_backend,
         &toolbox,
         dir.path().to_str().unwrap(),
         client,
@@ -203,17 +206,19 @@ async fn agent_loop_create_tool_then_call_then_answer() {
     let agent_backend = MockBackend::new(vec![
         r#"{"action": "create_tool", "name": "echo_tool", "description": "Echoes a message"}"#,
         r#"{"action": "call_tool", "tool": "echo_tool", "params": {"MSG": "hi"}}"#,
-        r#"{"action": "answer", "text": "Echo says: hi"}"#,
+        r#"{"action": "answer", "text": ""}"#,
     ]);
 
     let code_backend = MockBackend::new(vec![
         "```name\necho_tool\n```\n```description\nEchoes a message\n```\n```lua\nreturn { echo = PARAMS[\"MSG\"] or \"no message\" }\n```",
     ]);
+    let answer_backend = MockBackend::new(vec!["Echo says: hi"]);
 
     let result = agent::run_loop(
         "echo something",
         "test-task",
         &agent_backend,
+        &answer_backend,
         &code_backend,
         &toolbox,
         dir.path().to_str().unwrap(),
@@ -234,15 +239,17 @@ async fn agent_loop_direct_answer() {
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
-    let backend = MockBackend::new(vec![
-        r#"{"action": "answer", "text": "2 + 2 = 4"}"#,
+    let agent_backend = MockBackend::new(vec![
+        r#"{"action": "answer", "text": ""}"#,
     ]);
+    let answer_backend = MockBackend::new(vec!["2 + 2 = 4"]);
 
     let result = agent::run_loop(
         "what is 2+2?",
         "test-task",
-        &backend,
-        &backend,
+        &agent_backend,
+        &answer_backend,
+        &agent_backend,
         &toolbox,
         dir.path().to_str().unwrap(),
         client,
@@ -262,18 +269,21 @@ async fn agent_loop_tool_failure_recovery() {
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
-    // Step 1: model tries nonexistent tool → gets error
-    // Step 2: model answers with what it knows
-    let backend = MockBackend::new(vec![
+    // Step 1: agent tries nonexistent tool → gets error
+    // Step 2: agent says answer
+    // Step 3: answer_backend formulates response
+    let agent_backend = MockBackend::new(vec![
         r#"{"action": "call_tool", "tool": "missing_tool", "params": {}}"#,
-        r#"{"action": "answer", "text": "Tool was not available, but I can tell you..."}"#,
+        r#"{"action": "answer", "text": ""}"#,
     ]);
+    let answer_backend = MockBackend::new(vec!["Tool was not available, but I can tell you..."]);
 
     let result = agent::run_loop(
         "do something",
         "test-task",
-        &backend,
-        &backend,
+        &agent_backend,
+        &answer_backend,
+        &agent_backend,
         &toolbox,
         dir.path().to_str().unwrap(),
         client,

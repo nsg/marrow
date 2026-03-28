@@ -70,6 +70,9 @@ async fn run_task(
     let fast_backend = router
         .backend("fast")
         .or_else(|_| router.backend("default"))?;
+    let answer_backend = router
+        .backend("default")
+        .or_else(|_| router.backend("fast"))?;
     let code_backend = router
         .backend("code")
         .or_else(|_| router.backend("default"))?;
@@ -77,11 +80,12 @@ async fn run_task(
     // Step 1: Load all memories
     let memories = memory_store.list().unwrap_or_default();
 
-    // Step 2: Agent loop — model decides whether to use tools or answer directly
+    // Step 2: Agent loop — fast model decides actions, default model answers
     let answer = agent::run_loop(
         description,
         &task_id,
         fast_backend,
+        answer_backend,
         code_backend,
         toolbox,
         toolbox_path,

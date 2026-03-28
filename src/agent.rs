@@ -204,6 +204,7 @@ pub async fn run_loop(
     task: &str,
     task_id: &str,
     backend: &dyn ModelBackend,
+    answer_backend: &dyn ModelBackend,
     code_backend: &dyn ModelBackend,
     toolbox: &Toolbox,
     toolbox_path: &str,
@@ -310,7 +311,7 @@ pub async fn run_loop(
                 });
             }
 
-            Action::Answer { text } => {
+            Action::Answer { .. } => {
                 log.emit(Event::AgentAction {
                     task_id: task_id.to_string(),
                     step,
@@ -318,31 +319,49 @@ pub async fn run_loop(
                     detail: String::new(),
                 })
                 .await;
-                return Ok(text.clone());
+                return format_answer(task, memories, &history, answer_backend).await;
             }
         }
     }
 
-    // Max steps reached — ask model for best-effort answer
-    let available_tools = toolbox.list_tools().unwrap_or_default();
-    let mut prompt = build_agent_prompt(task, &available_tools, memories, &history);
-    prompt.push_str("\nYou have reached the maximum number of steps. You MUST give your final answer now using the answer action based on whatever information you have gathered.");
-    let response = backend.complete(prompt).await?;
-    let action = parse_action(&response);
+    // Max steps reached — force an answer with what we have
+    format_answer(task, memories, &history, answer_backend).await
+}
 
-    match action {
-        Action::Answer { text } => Ok(text),
-        _ => {
-            // Extract any useful text from history
-            let last_output = history
-                .last()
-                .map(|s| s.output.clone())
-                .unwrap_or_default();
-            Ok(format!(
-                "I was unable to fully complete the task after {MAX_AGENT_STEPS} steps. Last result: {last_output}"
-            ))
+async fn format_answer(
+    task: &str,
+    memories: &[Memory],
+    history: &[StepResult],
+    answer_backend: &dyn ModelBackend,
+) -> Result<String, Box<dyn Error + Send + Sync>> {
+    if history.is_empty() {
+        // No tools were called — just answer directly
+        let mut context = format!("Task: {task}\n");
+        if !memories.is_empty() {
+            let facts = memories.iter().map(|m| format!("- {}", m.fact)).collect::<Vec<_>>().join("\n");
+            context.push_str(&format!("\nKnown facts:\n{facts}\n"));
         }
+        context.push_str("\nAnswer the user's question directly.");
+        return answer_backend.complete(context).await;
     }
+
+    let data = history
+        .iter()
+        .filter_map(|s| match &s.action {
+            Action::CallTool { tool, .. } => Some(format!("[{tool}]: {}", s.output)),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let mut context = format!("Task: {task}\n\nCollected data:\n{data}\n");
+    if !memories.is_empty() {
+        let facts = memories.iter().map(|m| format!("- {}", m.fact)).collect::<Vec<_>>().join("\n");
+        context.push_str(&format!("\nKnown facts:\n{facts}\n"));
+    }
+    context.push_str("\nUsing the collected data above, answer the user's question. Be specific and include relevant details.");
+
+    answer_backend.complete(context).await
 }
 
 #[cfg(test)]
