@@ -9,6 +9,7 @@ use crate::codegen;
 use crate::events::{Event, EventLog};
 use crate::memory::Memory;
 use crate::model::ModelBackend;
+use crate::secrets::Secrets;
 use crate::toolbox::Toolbox;
 
 const MAX_AGENT_STEPS: u32 = 10;
@@ -73,6 +74,7 @@ pub fn build_agent_prompt(
     tools_section: &str,
     memories: &[Memory],
     history: &[StepResult],
+    secret_keys: &[&str],
 ) -> String {
     let tools_section = if tools_section.is_empty() {
         "(none available — create one if needed)"
@@ -125,9 +127,20 @@ pub fn build_agent_prompt(
         format!("Previous actions:\n{}\n", entries.join("\n"))
     };
 
+    let secrets_section = if secret_keys.is_empty() {
+        String::new()
+    } else {
+        let list = secret_keys
+            .iter()
+            .map(|k| format!("- {k}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("Available secrets (use secret(\"name\") in Lua tools):\n{list}\n\n")
+    };
+
     AGENT_PROMPT_TEMPLATE
         .replace("{tools}", tools_section)
-        .replace("{memories}", &memories_section)
+        .replace("{memories}", &format!("{memories_section}{secrets_section}"))
         .replace("{task}", task)
         .replace("{history}", &history_section)
 }
@@ -217,6 +230,7 @@ pub async fn run_loop(
     client: Arc<Client>,
     memories: &[Memory],
     log: &EventLog,
+    secrets: Option<&Secrets>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let mut history: Vec<StepResult> = Vec::new();
     let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
@@ -233,7 +247,9 @@ pub async fn run_loop(
             eprintln!("[agent] step {step}: tools shown to model:\n{tools_section}");
         }
 
-        let prompt = build_agent_prompt(task, &tools_section, memories, &history);
+        let secret_keys = secrets.map(|s| s.keys()).unwrap_or_default();
+        let secret_key_refs: Vec<&str> = secret_keys.to_vec();
+        let prompt = build_agent_prompt(task, &tools_section, memories, &history, &secret_key_refs);
         let response = backend.complete(prompt).await?;
 
         if log.is_verbose() {
@@ -317,7 +333,13 @@ pub async fn run_loop(
                     Ok(provider) => {
                         let toolbox_dir = Some(PathBuf::from(toolbox_path));
                         match provider
-                            .execute_with_params(task, client.clone(), &upper_params, toolbox_dir)
+                            .execute_with_params(
+                                task,
+                                client.clone(),
+                                &upper_params,
+                                toolbox_dir,
+                                secrets,
+                            )
                             .await
                         {
                             Ok(value) => {
@@ -389,6 +411,7 @@ pub async fn run_loop(
                     toolbox,
                     client.clone(),
                     &available_tools,
+                    &secret_key_refs,
                 )
                 .await
                 {

@@ -12,6 +12,7 @@ use marrow::memory::MemoryStore;
 use marrow::memory_writer;
 use marrow::metrics::Metrics;
 use marrow::router::{ModelRouter, RouterConfig};
+use marrow::secrets::Secrets;
 use marrow::session::{ChatSession, Message};
 use marrow::toolbox::Toolbox;
 
@@ -57,6 +58,7 @@ async fn run_task(
     memory_store: &MemoryStore,
     client: Arc<Client>,
     log: &EventLog,
+    secrets: &Secrets,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let task_id = uuid::Uuid::new_v4().to_string();
 
@@ -92,6 +94,7 @@ async fn run_task(
         client,
         &memories,
         log,
+        Some(secrets),
     )
     .await?;
 
@@ -122,6 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let toolbox = Toolbox::new(&cli.toolbox);
     let memory_store = MemoryStore::new(&cli.memory);
     let log = EventLog::new(Some(PathBuf::from(&cli.log)), cli.verbose).await?;
+    let secrets = Secrets::load_or_empty("secrets.toml");
     let verbose = cli.verbose;
 
     // Spawn janitor in background (no metrics for janitor — it's background work)
@@ -143,6 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             &memory_store,
             client,
             &log,
+            &secrets,
         )
         .await
         {
@@ -194,6 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 &memory_store,
                 client.clone(),
                 &log,
+                &secrets,
             )
             .await
             {

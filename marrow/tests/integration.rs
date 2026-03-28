@@ -189,6 +189,7 @@ async fn agent_loop_call_tool_then_answer() {
         client,
         &[],
         &log,
+        None,
     )
     .await
     .unwrap();
@@ -229,6 +230,7 @@ async fn agent_loop_create_tool_then_call_then_answer() {
         client,
         &[],
         &log,
+        None,
     )
     .await
     .unwrap();
@@ -257,6 +259,7 @@ async fn agent_loop_direct_answer() {
         client,
         &[],
         &log,
+        None,
     )
     .await
     .unwrap();
@@ -291,6 +294,7 @@ async fn agent_loop_tool_failure_recovery() {
         client,
         &[],
         &log,
+        None,
     )
     .await
     .unwrap();
@@ -317,7 +321,7 @@ async fn lua_provider_receives_params_table() {
     let mut params = HashMap::new();
     params.insert("LOCATION".to_string(), "Paris".to_string());
     let result = provider
-        .execute_with_params("test", client, &params, None)
+        .execute_with_params("test", client, &params, None, None)
         .await
         .unwrap();
     assert_eq!(result["city"], "Paris");
@@ -371,6 +375,7 @@ async fn run_tool_calls_another_tool() {
             client,
             &HashMap::new(),
             Some(dir.path().to_path_buf()),
+            None,
         )
         .await
         .unwrap();
@@ -402,6 +407,7 @@ async fn run_tool_passes_params() {
             client,
             &HashMap::new(),
             Some(dir.path().to_path_buf()),
+            None,
         )
         .await
         .unwrap();
@@ -433,6 +439,7 @@ async fn run_tool_recursion_guard() {
             client,
             &HashMap::new(),
             Some(dir.path().to_path_buf()),
+            None,
         )
         .await;
     assert!(result.is_err());
@@ -499,6 +506,7 @@ async fn run_tool_glue_composition() {
             client,
             &params,
             Some(dir.path().to_path_buf()),
+            None,
         )
         .await
         .unwrap();

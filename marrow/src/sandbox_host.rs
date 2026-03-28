@@ -1,5 +1,6 @@
 use mlua::{Lua, LuaSerdeExt, Result, Value};
 use reqwest::Client;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -13,6 +14,7 @@ pub struct HostConfig {
     pub toolbox_dir: Option<PathBuf>,
     pub task_description: String,
     pub recursion_depth: Arc<AtomicU32>,
+    pub secrets: Arc<HashMap<String, String>>,
 }
 
 impl HostConfig {
@@ -22,6 +24,7 @@ impl HostConfig {
             toolbox_dir: None,
             task_description: String::new(),
             recursion_depth: Arc::new(AtomicU32::new(0)),
+            secrets: Arc::new(HashMap::new()),
         }
     }
 }
@@ -32,6 +35,7 @@ pub fn register_host_functions(lua: &Lua, config: &HostConfig) -> Result<()> {
     register_json_parse(lua)?;
     register_json_encode(lua)?;
     register_log(lua)?;
+    register_secret(lua, config.secrets.clone())?;
 
     if let Some(ref toolbox_dir) = config.toolbox_dir {
         register_run_tool(
@@ -40,6 +44,7 @@ pub fn register_host_functions(lua: &Lua, config: &HostConfig) -> Result<()> {
             toolbox_dir.clone(),
             config.task_description.clone(),
             config.recursion_depth.clone(),
+            config.secrets.clone(),
         )?;
     }
 
@@ -52,6 +57,7 @@ fn register_run_tool(
     toolbox_dir: PathBuf,
     task_description: String,
     depth: Arc<AtomicU32>,
+    secrets: Arc<HashMap<String, String>>,
 ) -> Result<()> {
     let func =
         lua.create_async_function(move |lua, (name, params): (String, Option<mlua::Table>)| {
@@ -59,6 +65,7 @@ fn register_run_tool(
             let toolbox_dir = toolbox_dir.clone();
             let task_description = task_description.clone();
             let depth = depth.clone();
+            let secrets = secrets.clone();
             async move {
                 let current = depth.fetch_add(1, Ordering::SeqCst);
                 if current >= MAX_RECURSION_DEPTH {
@@ -75,6 +82,7 @@ fn register_run_tool(
                     &toolbox_dir,
                     &task_description,
                     &depth,
+                    &secrets,
                 )
                 .await;
 
@@ -97,6 +105,7 @@ async fn run_tool_inner(
     toolbox_dir: &Path,
     task_description: &str,
     depth: &Arc<AtomicU32>,
+    secrets: &Arc<HashMap<String, String>>,
 ) -> std::result::Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let lua_path = toolbox_dir.join(format!("{name}.lua"));
     let source = std::fs::read_to_string(&lua_path)
@@ -109,6 +118,7 @@ async fn run_tool_inner(
         toolbox_dir: Some(toolbox_dir.to_path_buf()),
         task_description: task_description.to_string(),
         recursion_depth: depth.clone(),
+        secrets: secrets.clone(),
     };
     register_host_functions(&inner_lua, &inner_config)?;
 
@@ -210,5 +220,16 @@ fn register_log(lua: &Lua) -> Result<()> {
         Ok(())
     })?;
     lua.globals().set("log", func)?;
+    Ok(())
+}
+
+fn register_secret(lua: &Lua, secrets: Arc<HashMap<String, String>>) -> Result<()> {
+    let func = lua.create_function(move |_, name: String| {
+        secrets
+            .get(&name)
+            .cloned()
+            .ok_or_else(|| mlua::Error::external(format!("secret '{name}' not found")))
+    })?;
+    lua.globals().set("secret", func)?;
     Ok(())
 }

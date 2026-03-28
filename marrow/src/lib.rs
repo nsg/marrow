@@ -14,6 +14,7 @@ pub mod model;
 pub mod registry;
 pub mod router;
 pub mod sandbox;
+pub mod secrets;
 pub mod sandbox_host;
 pub mod session;
 pub mod task;

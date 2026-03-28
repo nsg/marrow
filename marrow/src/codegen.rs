@@ -17,12 +17,13 @@ The sandbox has these host functions available:
 - json_encode(table) -> string
 - log(message) -> nil
 - run_tool(name, params_table) -> table (call another tool by name, passing it a params table)
+- secret(name) -> string (retrieve a secret by name, e.g. API keys)
 
 Global tables available:
 - TASK.description (string): the user's task description
 - PARAMS (table): per-tool parameters set by the orchestrator (e.g. PARAMS["LOCATION"])
 
-{available_tools}{knowledge}Design philosophy — each tool does ONE thing well:
+{available_tools}{secrets}{knowledge}Design philosophy — each tool does ONE thing well:
 - A data tool fetches one data source (weather, calendar, RSS feed, etc.)
 - A glue tool composes data tools using run_tool() to build a combined result
 - Example glue tool:
@@ -66,6 +67,7 @@ pub fn build_codegen_prompt(
     request: Option<&ToolRequest>,
     available_tools: &[ToolMeta],
     knowledge: &str,
+    secret_keys: &[&str],
 ) -> String {
     let available_section = if available_tools.is_empty() {
         String::new()
@@ -111,8 +113,20 @@ pub fn build_codegen_prompt(
         )
     };
 
+    let secrets_section = if secret_keys.is_empty() {
+        String::new()
+    } else {
+        let list = secret_keys
+            .iter()
+            .map(|k| format!("- \"{k}\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("Available secrets via secret(name):\n{list}\nUse these for authenticated API calls instead of hardcoding keys.\n\n")
+    };
+
     CODEGEN_PROMPT_TEMPLATE
         .replace("{available_tools}", &available_section)
+        .replace("{secrets}", &secrets_section)
         .replace(
             "{knowledge}",
             &if knowledge.is_empty() {
@@ -147,7 +161,7 @@ pub async fn generate_provider_with_hint(
     available_tools: &[ToolMeta],
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let knowledge = toolbox.read_knowledge();
-    let prompt = build_codegen_prompt(task_description, request, available_tools, &knowledge);
+    let prompt = build_codegen_prompt(task_description, request, available_tools, &knowledge, &[]);
     let response = backend.complete(prompt).await?;
 
     let (mut name, description, lua_code) = parse_codegen_response(&response)?;
@@ -162,7 +176,7 @@ pub async fn generate_provider_with_hint(
         .map(|r| r.expected_params.clone())
         .unwrap_or_default();
     if let Err(e) = provider
-        .execute_with_params(task_description, client, &test_params, None)
+        .execute_with_params(task_description, client, &test_params, None, None)
         .await
     {
         return Err(format!("generated tool '{name}' failed test run: {e}").into());
@@ -181,6 +195,7 @@ pub async fn generate_provider_with_hint(
     Ok(name)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn generate_provider_for_agent(
     tool_name: &str,
     tool_description: &str,
@@ -189,6 +204,7 @@ pub async fn generate_provider_for_agent(
     toolbox: &Toolbox,
     client: Arc<Client>,
     available_tools: &[ToolMeta],
+    secret_keys: &[&str],
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let request = ToolRequest {
         name: tool_name.to_string(),
@@ -200,6 +216,7 @@ pub async fn generate_provider_for_agent(
         Some(&request),
         available_tools,
         &knowledge,
+        secret_keys,
     );
     prompt = prompt.replace(
         &format!("Generate a tool named \"{tool_name}\" that the orchestrator needs.\n"),
@@ -212,7 +229,7 @@ pub async fn generate_provider_for_agent(
     // Test-run — tool may need params so we accept graceful errors
     let provider = LuaProvider::new(tool_name, &lua_code);
     if let Err(e) = provider
-        .execute_with_params(task_description, client, &HashMap::new(), None)
+        .execute_with_params(task_description, client, &HashMap::new(), None, None)
         .await
     {
         let err_str = e.to_string();
@@ -327,14 +344,14 @@ return { ok = true }
             provides: vec![],
             validated: true,
         }];
-        let prompt = build_codegen_prompt("test task", None, &tools, "");
+        let prompt = build_codegen_prompt("test task", None, &tools, "", &[]);
         assert!(prompt.contains("weather: Get weather data"));
         assert!(prompt.contains("run_tool"));
     }
 
     #[test]
     fn codegen_prompt_empty_tools() {
-        let prompt = build_codegen_prompt("test task", None, &[], "");
+        let prompt = build_codegen_prompt("test task", None, &[], "", &[]);
         assert!(!prompt.contains("Existing tools available"));
     }
 }

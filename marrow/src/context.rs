@@ -9,6 +9,7 @@ use reqwest::Client;
 
 use crate::sandbox::create_sandbox;
 use crate::sandbox_host::{HostConfig, register_host_functions};
+use crate::secrets::Secrets;
 
 pub struct LuaProvider {
     pub name: String,
@@ -36,7 +37,7 @@ impl LuaProvider {
         task_description: &str,
         client: Arc<Client>,
     ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
-        self.execute_with_params(task_description, client, &HashMap::new(), None)
+        self.execute_with_params(task_description, client, &HashMap::new(), None, None)
             .await
     }
 
@@ -46,14 +47,25 @@ impl LuaProvider {
         client: Arc<Client>,
         params: &HashMap<String, String>,
         toolbox_dir: Option<PathBuf>,
+        secrets: Option<&Secrets>,
     ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
         let lua = create_sandbox()?;
+
+        let secrets_map: HashMap<String, String> = secrets
+            .map(|s| {
+                s.keys()
+                    .iter()
+                    .filter_map(|k| s.get(k).map(|v| (k.to_string(), v.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let config = HostConfig {
             client,
             toolbox_dir,
             task_description: task_description.to_string(),
             recursion_depth: Arc::new(AtomicU32::new(0)),
+            secrets: Arc::new(secrets_map),
         };
         register_host_functions(&lua, &config)?;
 

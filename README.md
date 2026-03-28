@@ -51,7 +51,7 @@ User Input
 | **Triage** | Fast model decides if tools are needed before selection |
 | **Tool Selection** | Model picks tools + extracts parameters from task description |
 | **Code Generation** | Model writes Lua scripts when no existing tool matches |
-| **Lua Sandbox** | Secure runtime — all I/O through controlled Rust host functions (`http_get`, `http_post`, `json_parse`, `json_encode`, `log`, `run_tool`) |
+| **Lua Sandbox** | Secure runtime — all I/O through controlled Rust host functions (`http_get`, `http_post`, `json_parse`, `json_encode`, `log`, `run_tool`, `secret`) |
 | **Toolbox** | Directory of validated Lua scripts with TOML metadata |
 | **Janitor** | Async reviewer — validates code matches description, regenerates on failure, escalates after 3 attempts |
 | **Working Memory** | JSON files (one fact per file), model-selected per task, auto-saved post-interaction |
@@ -181,6 +181,30 @@ api_key = "your-key-here"
 Supported providers:
 - **`ollama`** — Ollama Cloud or local. Omit `api_base` for local at `localhost:11434`. Omit `api_key` for local instances.
 - **`openai`** — Any OpenAI-compatible API (OpenAI, OpenRouter, Together, Groq, etc.). Requires `api_key`.
+
+## Secrets
+
+API keys and tokens for generated tools live in `secrets.toml`:
+
+```sh
+cp secrets.example.toml secrets.toml
+```
+
+```toml
+github_token = "ghp_..."
+slack_token = "xoxb-..."
+openweather_key = "abc123"
+```
+
+Tools access secrets via the `secret()` host function:
+
+```lua
+local token = secret("github_token")
+local resp = http_get("https://api.github.com/user",
+    { Authorization = "Bearer " .. token })
+```
+
+The codegen model sees secret **names** (not values) so it can generate tools that use them. `secrets.toml` is in `.gitignore` by default.
 
 ## CLI Reference
 

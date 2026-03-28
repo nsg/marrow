@@ -14,6 +14,7 @@ use marrow::janitor;
 use marrow::memory::MemoryStore;
 use marrow::memory_writer;
 use marrow::router::{ModelRouter, RouterConfig};
+use marrow::secrets::Secrets;
 use marrow::toolbox::Toolbox;
 
 // ---------------------------------------------------------------------------
@@ -53,6 +54,11 @@ impl TypeMapKey for EventLogKey {
 struct ChannelsKey;
 impl TypeMapKey for ChannelsKey {
     type Value = Arc<Vec<u64>>;
+}
+
+struct SecretsKey;
+impl TypeMapKey for SecretsKey {
+    type Value = Arc<Secrets>;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +106,7 @@ impl EventHandler for Handler {
         let memory_store = data.get::<MemoryKey>().unwrap().clone();
         let client = data.get::<HttpClientKey>().unwrap().clone();
         let log = data.get::<EventLogKey>().unwrap().clone();
+        let secrets = data.get::<SecretsKey>().unwrap().clone();
         drop(data);
 
         // Show typing indicator while processing
@@ -114,6 +121,7 @@ impl EventHandler for Handler {
             &memory_store,
             client,
             &log,
+            &secrets,
         )
         .await
         {
@@ -136,6 +144,7 @@ impl EventHandler for Handler {
 // Agent task runner (mirrors marrow-cli's run_task)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 async fn run_task(
     description: &str,
     router: &ModelRouter,
@@ -144,6 +153,7 @@ async fn run_task(
     memory_store: &MemoryStore,
     client: Arc<Client>,
     log: &EventLog,
+    secrets: &Secrets,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let task_id = uuid::Uuid::new_v4().to_string();
 
@@ -177,6 +187,7 @@ async fn run_task(
         client,
         &memories,
         log,
+        Some(secrets),
     )
     .await?;
 
@@ -258,6 +269,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let toolbox = Arc::new(Toolbox::new(&toolbox_path));
     let memory_store = Arc::new(MemoryStore::new(&memory_path));
     let log = Arc::new(EventLog::new(Some(PathBuf::from(&log_path)), verbose).await?);
+    let secrets = Arc::new(Secrets::load_or_empty("secrets.toml"));
 
     // Spawn janitor in background
     let janitor_backend = config
@@ -290,6 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         data.insert::<HttpClientKey>(client);
         data.insert::<EventLogKey>(log);
         data.insert::<ChannelsKey>(channels);
+        data.insert::<SecretsKey>(secrets);
     }
 
     eprintln!("[marrow-discord] starting...");
