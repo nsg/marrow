@@ -299,7 +299,11 @@ pub async fn consolidate_knowledge(
 
     if !cleaned.is_empty() && cleaned.len() < notes.len() {
         std::fs::write(toolbox.knowledge_path(), &cleaned)?;
-        eprintln!("[janitor] consolidated codegen knowledge file ({} -> {} bytes)", notes.len(), cleaned.len());
+        eprintln!(
+            "[janitor] consolidated codegen knowledge file ({} -> {} bytes)",
+            notes.len(),
+            cleaned.len()
+        );
         Ok(true)
     } else {
         Ok(false)
@@ -420,35 +424,30 @@ pub async fn cleanup_toolbox(
 
     // Refactor site-specific tools
     for name in &result.refactor {
-        if let Ok(meta) = toolbox.load_meta(name) {
-            if let Ok(source) = toolbox.load_source(name) {
-                let refactor_prompt = REFACTOR_PROMPT
-                    .replace("{name}", &meta.name)
-                    .replace("{description}", &meta.description)
-                    .replace("{source}", &source);
+        if let Ok(meta) = toolbox.load_meta(name)
+            && let Ok(source) = toolbox.load_source(name)
+        {
+            let refactor_prompt = REFACTOR_PROMPT
+                .replace("{name}", &meta.name)
+                .replace("{description}", &meta.description)
+                .replace("{source}", &source);
 
-                if let Ok(refactored) = backend.complete(refactor_prompt).await {
-                    if let Ok((new_name, new_desc, new_source)) =
-                        parse_codegen_response(&refactored)
-                    {
-                        let new_name = new_name.trim().to_string();
-                        let new_meta = ToolMeta {
-                            name: new_name.clone(),
-                            description: new_desc.trim().to_string(),
-                            provides: vec![new_name.clone()],
-                            validated: false,
-                        };
-                        toolbox.save_tool(&new_meta, &new_source)?;
-                        if new_name != meta.name {
-                            toolbox.delete_tool(&meta.name)?;
-                        }
-                        eprintln!(
-                            "[janitor] refactored '{}' -> '{}'",
-                            meta.name, new_name
-                        );
-                        changed = true;
-                    }
+            if let Ok(refactored) = backend.complete(refactor_prompt).await
+                && let Ok((new_name, new_desc, new_source)) = parse_codegen_response(&refactored)
+            {
+                let new_name = new_name.trim().to_string();
+                let new_meta = ToolMeta {
+                    name: new_name.clone(),
+                    description: new_desc.trim().to_string(),
+                    provides: vec![new_name.clone()],
+                    validated: false,
+                };
+                toolbox.save_tool(&new_meta, &new_source)?;
+                if new_name != meta.name {
+                    toolbox.delete_tool(&meta.name)?;
                 }
+                eprintln!("[janitor] refactored '{}' -> '{}'", meta.name, new_name);
+                changed = true;
             }
         }
     }
@@ -465,10 +464,10 @@ fn extract_json_block(response: &str) -> String {
         }
     }
     // Fall back to first { ... }
-    if let Some(start) = response.find('{') {
-        if let Some(end) = response.rfind('}') {
-            return response[start..=end].to_string();
-        }
+    if let Some(start) = response.find('{')
+        && let Some(end) = response.rfind('}')
+    {
+        return response[start..=end].to_string();
     }
     "{}".to_string()
 }
@@ -579,7 +578,10 @@ FAIL
 
     #[test]
     fn extract_block_basic() {
-        assert_eq!(extract_block("```lua\ncode here\n```", "lua").unwrap(), "code here");
+        assert_eq!(
+            extract_block("```lua\ncode here\n```", "lua").unwrap(),
+            "code here"
+        );
     }
 
     #[test]

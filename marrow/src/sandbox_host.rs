@@ -1,8 +1,8 @@
 use mlua::{Lua, LuaSerdeExt, Result, Value};
 use reqwest::Client;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::sandbox::create_sandbox;
 
@@ -80,9 +80,8 @@ fn register_run_tool(
 
                 depth.fetch_sub(1, Ordering::SeqCst);
 
-                let json_value = result.map_err(|e| {
-                    mlua::Error::external(format!("run_tool('{name}'): {e}"))
-                })?;
+                let json_value = result
+                    .map_err(|e| mlua::Error::external(format!("run_tool('{name}'): {e}")))?;
 
                 lua.to_value(&json_value)
             }
@@ -123,7 +122,10 @@ async fn run_tool_inner(
     if let Some(p) = params {
         for pair in p.pairs::<String, mlua::Value>() {
             let (k, v) = pair?;
-            params_table.set(k, inner_lua.to_value(&inner_lua.from_value::<serde_json::Value>(v)?)?)?;
+            params_table.set(
+                k,
+                inner_lua.to_value(&inner_lua.from_value::<serde_json::Value>(v)?)?,
+            )?;
         }
     }
     inner_lua.globals().set("PARAMS", params_table)?;

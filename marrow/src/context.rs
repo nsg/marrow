@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 
 use mlua::LuaSerdeExt;
 use reqwest::Client;
 
 use crate::sandbox::create_sandbox;
-use crate::sandbox_host::{register_host_functions, HostConfig};
+use crate::sandbox_host::{HostConfig, register_host_functions};
 
 pub struct LuaProvider {
     pub name: String,

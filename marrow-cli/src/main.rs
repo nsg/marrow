@@ -7,13 +7,13 @@ use reqwest::Client;
 
 use marrow::agent;
 use marrow::events::{Event, EventLog};
-use marrow::metrics::Metrics;
+use marrow::janitor;
 use marrow::memory::MemoryStore;
 use marrow::memory_writer;
+use marrow::metrics::Metrics;
 use marrow::router::{ModelRouter, RouterConfig};
 use marrow::session::{ChatSession, Message};
 use marrow::toolbox::Toolbox;
-use marrow::janitor;
 
 #[derive(Parser)]
 #[command(

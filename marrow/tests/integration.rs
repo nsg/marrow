@@ -76,7 +76,9 @@ async fn noop_log() -> EventLog {
 #[tokio::test]
 async fn triage_says_no_for_greeting() {
     let backend = MockBackend::new(vec!["NO"]);
-    let result = triage::needs_external_data("hello", &backend, None, &[]).await.unwrap();
+    let result = triage::needs_external_data("hello", &backend, None, &[])
+        .await
+        .unwrap();
     assert!(!result);
 }
 
@@ -155,15 +157,17 @@ async fn agent_loop_call_tool_then_answer() {
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
-    toolbox.save_tool(
-        &ToolMeta {
-            name: "greeter".to_string(),
-            description: "Returns greeting".to_string(),
-            provides: vec![],
-            validated: true,
-        },
-        r#"return { msg = "hello world" }"#,
-    ).unwrap();
+    toolbox
+        .save_tool(
+            &ToolMeta {
+                name: "greeter".to_string(),
+                description: "Returns greeting".to_string(),
+                provides: vec![],
+                validated: true,
+            },
+            r#"return { msg = "hello world" }"#,
+        )
+        .unwrap();
 
     // Step 1: agent calls greeter tool
     // Step 2: agent says answer
@@ -239,9 +243,7 @@ async fn agent_loop_direct_answer() {
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
-    let agent_backend = MockBackend::new(vec![
-        r#"{"action": "answer", "text": ""}"#,
-    ]);
+    let agent_backend = MockBackend::new(vec![r#"{"action": "answer", "text": ""}"#]);
     let answer_backend = MockBackend::new(vec!["2 + 2 = 4"]);
 
     let result = agent::run_loop(
@@ -346,14 +348,32 @@ async fn run_tool_calls_another_tool() {
     let dir = temp_dir("marrow_tb");
     let toolbox = Toolbox::new(dir.path());
 
-    toolbox.save_tool(
-        &ToolMeta { name: "greeter".to_string(), description: "Returns greeting".to_string(), provides: vec![], validated: true },
-        r#"return { msg = "hello from greeter" }"#,
-    ).unwrap();
+    toolbox
+        .save_tool(
+            &ToolMeta {
+                name: "greeter".to_string(),
+                description: "Returns greeting".to_string(),
+                provides: vec![],
+                validated: true,
+            },
+            r#"return { msg = "hello from greeter" }"#,
+        )
+        .unwrap();
 
-    let caller = LuaProvider::new("caller", r#"local result = run_tool("greeter", {}); return { got = result.msg }"#);
+    let caller = LuaProvider::new(
+        "caller",
+        r#"local result = run_tool("greeter", {}); return { got = result.msg }"#,
+    );
     let client = Arc::new(Client::new());
-    let result = caller.execute_with_params("test", client, &HashMap::new(), Some(dir.path().to_path_buf())).await.unwrap();
+    let result = caller
+        .execute_with_params(
+            "test",
+            client,
+            &HashMap::new(),
+            Some(dir.path().to_path_buf()),
+        )
+        .await
+        .unwrap();
     assert_eq!(result["got"], "hello from greeter");
 }
 
@@ -362,14 +382,29 @@ async fn run_tool_passes_params() {
     let dir = temp_dir("marrow_tb");
     let toolbox = Toolbox::new(dir.path());
 
-    toolbox.save_tool(
-        &ToolMeta { name: "echo".to_string(), description: "Echoes".to_string(), provides: vec![], validated: true },
-        r#"return { city = PARAMS["CITY"] }"#,
-    ).unwrap();
+    toolbox
+        .save_tool(
+            &ToolMeta {
+                name: "echo".to_string(),
+                description: "Echoes".to_string(),
+                provides: vec![],
+                validated: true,
+            },
+            r#"return { city = PARAMS["CITY"] }"#,
+        )
+        .unwrap();
 
     let caller = LuaProvider::new("caller", r#"return run_tool("echo", {CITY = "Tokyo"})"#);
     let client = Arc::new(Client::new());
-    let result = caller.execute_with_params("test", client, &HashMap::new(), Some(dir.path().to_path_buf())).await.unwrap();
+    let result = caller
+        .execute_with_params(
+            "test",
+            client,
+            &HashMap::new(),
+            Some(dir.path().to_path_buf()),
+        )
+        .await
+        .unwrap();
     assert_eq!(result["city"], "Tokyo");
 }
 
@@ -378,16 +413,35 @@ async fn run_tool_recursion_guard() {
     let dir = temp_dir("marrow_tb");
     let toolbox = Toolbox::new(dir.path());
 
-    toolbox.save_tool(
-        &ToolMeta { name: "infinite".to_string(), description: "Loop".to_string(), provides: vec![], validated: true },
-        r#"return run_tool("infinite", {})"#,
-    ).unwrap();
+    toolbox
+        .save_tool(
+            &ToolMeta {
+                name: "infinite".to_string(),
+                description: "Loop".to_string(),
+                provides: vec![],
+                validated: true,
+            },
+            r#"return run_tool("infinite", {})"#,
+        )
+        .unwrap();
 
     let caller = LuaProvider::new("caller", r#"return run_tool("infinite", {})"#);
     let client = Arc::new(Client::new());
-    let result = caller.execute_with_params("test", client, &HashMap::new(), Some(dir.path().to_path_buf())).await;
+    let result = caller
+        .execute_with_params(
+            "test",
+            client,
+            &HashMap::new(),
+            Some(dir.path().to_path_buf()),
+        )
+        .await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("max recursion depth"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("max recursion depth")
+    );
 }
 
 #[tokio::test]
@@ -403,26 +457,51 @@ async fn run_tool_glue_composition() {
     let dir = temp_dir("marrow_tb");
     let toolbox = Toolbox::new(dir.path());
 
-    toolbox.save_tool(
-        &ToolMeta { name: "weather".to_string(), description: "Get weather".to_string(), provides: vec![], validated: true },
-        r#"return { temp = 22, condition = "sunny", location = PARAMS["LOCATION"] }"#,
-    ).unwrap();
+    toolbox
+        .save_tool(
+            &ToolMeta {
+                name: "weather".to_string(),
+                description: "Get weather".to_string(),
+                provides: vec![],
+                validated: true,
+            },
+            r#"return { temp = 22, condition = "sunny", location = PARAMS["LOCATION"] }"#,
+        )
+        .unwrap();
 
-    toolbox.save_tool(
-        &ToolMeta { name: "calendar".to_string(), description: "Get events".to_string(), provides: vec![], validated: true },
-        r#"return { events = {"hiking", "lunch"} }"#,
-    ).unwrap();
+    toolbox
+        .save_tool(
+            &ToolMeta {
+                name: "calendar".to_string(),
+                description: "Get events".to_string(),
+                provides: vec![],
+                validated: true,
+            },
+            r#"return { events = {"hiking", "lunch"} }"#,
+        )
+        .unwrap();
 
-    let glue = LuaProvider::new("planner", r#"
+    let glue = LuaProvider::new(
+        "planner",
+        r#"
         local weather = run_tool("weather", {LOCATION = PARAMS["LOCATION"]})
         local cal = run_tool("calendar", {})
         return { weather = weather, events = cal.events, recommendation = weather.condition .. " in " .. weather.location }
-    "#);
+    "#,
+    );
 
     let client = Arc::new(Client::new());
     let mut params = HashMap::new();
     params.insert("LOCATION".to_string(), "Portland".to_string());
-    let result = glue.execute_with_params("plan weekend", client, &params, Some(dir.path().to_path_buf())).await.unwrap();
+    let result = glue
+        .execute_with_params(
+            "plan weekend",
+            client,
+            &params,
+            Some(dir.path().to_path_buf()),
+        )
+        .await
+        .unwrap();
     assert_eq!(result["weather"]["temp"], 22);
     assert_eq!(result["recommendation"], "sunny in Portland");
 }
@@ -463,7 +542,9 @@ async fn memory_provider_selects_relevant() {
     let id = mem.id;
     store.save(&mem).unwrap();
     let backend = MockBackend::new(vec![&format!(r#"["{id}"]"#)]);
-    let result = memory_provider::select_memories("theme?", &store, &backend).await.unwrap();
+    let result = memory_provider::select_memories("theme?", &store, &backend)
+        .await
+        .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].fact, "user prefers dark mode");
 }
@@ -475,7 +556,9 @@ async fn memory_writer_saves_new_facts() {
     let backend = MockBackend::new(vec![
         r#"{"save": ["User prefers UTC"], "update": {}, "delete": []}"#,
     ]);
-    memory_writer::process_interaction("time?", "3pm UTC", &store, &backend).await.unwrap();
+    memory_writer::process_interaction("time?", "3pm UTC", &store, &backend)
+        .await
+        .unwrap();
     let all = store.list().unwrap();
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].fact, "User prefers UTC");
@@ -489,7 +572,12 @@ async fn memory_writer_saves_new_facts() {
 async fn toolbox_save_load_list() {
     let dir = temp_dir("marrow_tb");
     let toolbox = Toolbox::new(dir.path());
-    let meta = ToolMeta { name: "test_tool".to_string(), description: "A test".to_string(), provides: vec![], validated: false };
+    let meta = ToolMeta {
+        name: "test_tool".to_string(),
+        description: "A test".to_string(),
+        provides: vec![],
+        validated: false,
+    };
     toolbox.save_tool(&meta, "return { ok = true }").unwrap();
     assert_eq!(toolbox.load_meta("test_tool").unwrap().name, "test_tool");
     assert_eq!(toolbox.list_tools().unwrap().len(), 1);
@@ -500,7 +588,12 @@ async fn toolbox_save_load_list() {
 async fn toolbox_delete_tool() {
     let dir = temp_dir("marrow_tb");
     let toolbox = Toolbox::new(dir.path());
-    let meta = ToolMeta { name: "x".to_string(), description: "x".to_string(), provides: vec![], validated: false };
+    let meta = ToolMeta {
+        name: "x".to_string(),
+        description: "x".to_string(),
+        provides: vec![],
+        validated: false,
+    };
     toolbox.save_tool(&meta, "return {}").unwrap();
     toolbox.delete_tool("x").unwrap();
     assert!(toolbox.list_tools().unwrap().is_empty());
@@ -521,8 +614,12 @@ async fn knowledge_file_read_empty() {
 async fn knowledge_file_append_and_read() {
     let dir = temp_dir("marrow_tb");
     let toolbox = Toolbox::new(dir.path());
-    toolbox.append_knowledge("Use pattern matching for XML attributes").unwrap();
-    toolbox.append_knowledge("Always check HTTP status before parsing").unwrap();
+    toolbox
+        .append_knowledge("Use pattern matching for XML attributes")
+        .unwrap();
+    toolbox
+        .append_knowledge("Always check HTTP status before parsing")
+        .unwrap();
     let content = toolbox.read_knowledge();
     assert!(content.contains("Use pattern matching for XML attributes"));
     assert!(content.contains("Always check HTTP status before parsing"));
@@ -568,7 +665,12 @@ async fn registry_run_succeeds() {
     use marrow::executor::Executor;
     struct MockExecutor;
     impl Executor for MockExecutor {
-        async fn execute(&self, _: &Task, _: &Context, _: Option<&[Message]>) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+        async fn execute(
+            &self,
+            _: &Task,
+            _: &Context,
+            _: Option<&[Message]>,
+        ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
             Ok(serde_json::json!("done"))
         }
     }
@@ -588,7 +690,9 @@ async fn registry_run_succeeds() {
 async fn session_summarization() {
     let backend = MockBackend::new(vec!["Summary of discussion."]);
     let mut session = ChatSession::new();
-    for i in 0..22 { session.append(Message::user(format!("msg {i}"))); }
+    for i in 0..22 {
+        session.append(Message::user(format!("msg {i}")));
+    }
     assert!(session.needs_summarization());
     session.summarize(&backend).await.unwrap();
     let msgs = session.build_messages(None);
@@ -605,12 +709,19 @@ async fn janitor_validates_passing_tool() {
     let dir = temp_dir("marrow_tb");
     let toolbox = Toolbox::new(dir.path());
     let log = noop_log().await;
-    let meta = ToolMeta { name: "good".to_string(), description: "Good".to_string(), provides: vec![], validated: false };
+    let meta = ToolMeta {
+        name: "good".to_string(),
+        description: "Good".to_string(),
+        provides: vec![],
+        validated: false,
+    };
     toolbox.save_tool(&meta, "return { ok = true }").unwrap();
     let backend = MockBackend::new(vec![
         "```verdict\nPASS\n```\n```issues\nnone\n```\n```suggestions\nnone\n```",
     ]);
-    marrow::janitor::review_and_fix(&toolbox, "good", &backend, &log).await.unwrap();
+    marrow::janitor::review_and_fix(&toolbox, "good", &backend, &log)
+        .await
+        .unwrap();
     assert!(toolbox.load_meta("good").unwrap().validated);
 }
 
@@ -619,7 +730,12 @@ async fn janitor_deletes_after_max_failures() {
     let dir = temp_dir("marrow_tb");
     let toolbox = Toolbox::new(dir.path());
     let log = noop_log().await;
-    let meta = ToolMeta { name: "bad".to_string(), description: "Bad".to_string(), provides: vec![], validated: false };
+    let meta = ToolMeta {
+        name: "bad".to_string(),
+        description: "Bad".to_string(),
+        provides: vec![],
+        validated: false,
+    };
     toolbox.save_tool(&meta, "return {}").unwrap();
     let backend = MockBackend::new(vec![
         "```verdict\nFAIL\n```\n```issues\n- broken\n```\n```suggestions\n- fix\n```",
@@ -628,7 +744,9 @@ async fn janitor_deletes_after_max_failures() {
         "```name\nbad\n```\n```description\nBad\n```\n```lua\nreturn {}\n```",
         "```verdict\nFAIL\n```\n```issues\n- broken\n```\n```suggestions\n- fix\n```",
     ]);
-    marrow::janitor::review_and_fix(&toolbox, "bad", &backend, &log).await.unwrap();
+    marrow::janitor::review_and_fix(&toolbox, "bad", &backend, &log)
+        .await
+        .unwrap();
     assert!(toolbox.list_tools().unwrap().is_empty());
 }
 
@@ -641,8 +759,17 @@ async fn event_log_writes_to_file() {
     let dir = temp_dir("marrow_log");
     let log_path = dir.path().join("test.jsonl");
     let log = EventLog::new(Some(log_path.clone()), false).await.unwrap();
-    log.emit(Event::TaskCreated { task_id: "t1".to_string(), description: "test".to_string(), role: "default".to_string() }).await;
-    log.emit(Event::TaskExecuted { task_id: "t1".to_string(), status: "succeeded".to_string() }).await;
+    log.emit(Event::TaskCreated {
+        task_id: "t1".to_string(),
+        description: "test".to_string(),
+        role: "default".to_string(),
+    })
+    .await;
+    log.emit(Event::TaskExecuted {
+        task_id: "t1".to_string(),
+        status: "succeeded".to_string(),
+    })
+    .await;
     let content = tokio::fs::read_to_string(&log_path).await.unwrap();
     assert!(content.contains("task_created"));
 }
@@ -653,10 +780,10 @@ async fn event_log_writes_to_file() {
 
 #[tokio::test]
 async fn answer_check_detects_success() {
-    let backend = MockBackend::new(vec![
-        "```verdict\nYES\n```\n```reason\nGood answer.\n```",
-    ]);
-    let result = answer_check::check_answer("q?", "{}", "The answer.", &backend).await.unwrap();
+    let backend = MockBackend::new(vec!["```verdict\nYES\n```\n```reason\nGood answer.\n```"]);
+    let result = answer_check::check_answer("q?", "{}", "The answer.", &backend)
+        .await
+        .unwrap();
     assert!(result.answered);
 }
 
@@ -665,7 +792,9 @@ async fn answer_check_detects_failure() {
     let backend = MockBackend::new(vec![
         "```verdict\nNO\n```\n```reason\nInsufficient data.\n```",
     ]);
-    let result = answer_check::check_answer("q?", "{}", "I can't answer.", &backend).await.unwrap();
+    let result = answer_check::check_answer("q?", "{}", "I can't answer.", &backend)
+        .await
+        .unwrap();
     assert!(!result.answered);
 }
 
@@ -681,7 +810,9 @@ async fn codegen_generates_and_saves_tool() {
     let backend = MockBackend::new(vec![
         "```name\ngreeter\n```\n```description\nGreets\n```\n```lua\nreturn { greeting = \"hello\" }\n```",
     ]);
-    let name = marrow::codegen::generate_provider("greet", &backend, &toolbox, client).await.unwrap();
+    let name = marrow::codegen::generate_provider("greet", &backend, &toolbox, client)
+        .await
+        .unwrap();
     assert_eq!(name, "greeter");
     assert!(toolbox.load_meta("greeter").is_ok());
 }

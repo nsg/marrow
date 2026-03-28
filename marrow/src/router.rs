@@ -58,8 +58,8 @@ impl RouterConfig {
                     .api_base
                     .as_deref()
                     .unwrap_or("http://localhost:11434");
-                let mut backend = OllamaBackend::from_env(base_url, &role_config.model)
-                    .with_role(role);
+                let mut backend =
+                    OllamaBackend::from_env(base_url, &role_config.model).with_role(role);
                 if let Some(key) = &role_config.api_key {
                     backend = backend.with_api_key(key);
                 }

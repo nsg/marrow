@@ -116,7 +116,10 @@ pub fn build_agent_prompt(
                 } else {
                     s.output.clone()
                 };
-                format!("[Step {}] {}\nResult: {}\n", s.step, action_desc, output_display)
+                format!(
+                    "[Step {}] {}\nResult: {}\n",
+                    s.step, action_desc, output_display
+                )
             })
             .collect();
         format!("Previous actions:\n{}\n", entries.join("\n"))
@@ -254,9 +257,7 @@ pub async fn run_loop(
                     );
                 }
                 Action::CreateTool { name, description } => {
-                    eprintln!(
-                        "[agent] step {step}: parsed create_tool \"{name}\" — {description}"
-                    );
+                    eprintln!("[agent] step {step}: parsed create_tool \"{name}\" — {description}");
                 }
                 Action::Answer { text } => {
                     let preview = if text.len() > 200 {
@@ -275,7 +276,9 @@ pub async fn run_loop(
                 let fail_count = tool_fail_counts.get(tool.as_str()).copied().unwrap_or(0);
                 if fail_count >= 2 {
                     if log.is_verbose() {
-                        eprintln!("[agent] step {step}: BLOCKED tool \"{tool}\" — failed {fail_count} times already, forcing move on");
+                        eprintln!(
+                            "[agent] step {step}: BLOCKED tool \"{tool}\" — failed {fail_count} times already, forcing move on"
+                        );
                     }
                     history.push(StepResult {
                         step,
@@ -305,7 +308,9 @@ pub async fn run_loop(
                         .map(|(k, v)| format!("  {k} = \"{v}\""))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    eprintln!("[agent] step {step}: executing tool \"{tool}\" with uppercase params:\n{upper_str}");
+                    eprintln!(
+                        "[agent] step {step}: executing tool \"{tool}\" with uppercase params:\n{upper_str}"
+                    );
                 }
 
                 let output = match toolbox.load_provider(tool) {
@@ -320,9 +325,15 @@ pub async fn run_loop(
                                 if log.is_verbose() {
                                     let preview = {
                                         let s = value.to_string();
-                                        if s.len() > 500 { format!("{}...", &s[..500]) } else { s }
+                                        if s.len() > 500 {
+                                            format!("{}...", &s[..500])
+                                        } else {
+                                            s
+                                        }
                                     };
-                                    eprintln!("[agent] step {step}: tool \"{tool}\" output: {preview}");
+                                    eprintln!(
+                                        "[agent] step {step}: tool \"{tool}\" output: {preview}"
+                                    );
                                 }
                                 if has_error {
                                     *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
@@ -370,22 +381,31 @@ pub async fn run_loop(
                 })
                 .await;
 
-                let output =
-                    match codegen::generate_provider_for_agent(name, description, task, code_backend, toolbox, client.clone(), &available_tools)
-                        .await
-                    {
-                        Ok(generated_name) => {
-                            log.emit(Event::ToolGenerated {
-                                name: generated_name.clone(),
-                                description: description.clone(),
-                            })
-                            .await;
-                            format!("Tool \"{generated_name}\" created successfully. You can now call it.")
-                        }
-                        Err(e) => {
-                            format!("Failed to create tool: {e}")
-                        }
-                    };
+                let output = match codegen::generate_provider_for_agent(
+                    name,
+                    description,
+                    task,
+                    code_backend,
+                    toolbox,
+                    client.clone(),
+                    &available_tools,
+                )
+                .await
+                {
+                    Ok(generated_name) => {
+                        log.emit(Event::ToolGenerated {
+                            name: generated_name.clone(),
+                            description: description.clone(),
+                        })
+                        .await;
+                        format!(
+                            "Tool \"{generated_name}\" created successfully. You can now call it."
+                        )
+                    }
+                    Err(e) => {
+                        format!("Failed to create tool: {e}")
+                    }
+                };
 
                 history.push(StepResult {
                     step,
@@ -421,7 +441,11 @@ async fn format_answer(
         // No tools were called — just answer directly
         let mut context = format!("Task: {task}\n");
         if !memories.is_empty() {
-            let facts = memories.iter().map(|m| format!("- {}", m.fact)).collect::<Vec<_>>().join("\n");
+            let facts = memories
+                .iter()
+                .map(|m| format!("- {}", m.fact))
+                .collect::<Vec<_>>()
+                .join("\n");
             context.push_str(&format!("\nKnown facts:\n{facts}\n"));
         }
         context.push_str("\nAnswer the user's question directly.");
@@ -439,7 +463,11 @@ async fn format_answer(
 
     let mut context = format!("Task: {task}\n\nCollected data:\n{data}\n");
     if !memories.is_empty() {
-        let facts = memories.iter().map(|m| format!("- {}", m.fact)).collect::<Vec<_>>().join("\n");
+        let facts = memories
+            .iter()
+            .map(|m| format!("- {}", m.fact))
+            .collect::<Vec<_>>()
+            .join("\n");
         context.push_str(&format!("\nKnown facts:\n{facts}\n"));
     }
     context.push_str("\nUsing the collected data above, answer the user's question. Be specific and include relevant details.");
@@ -453,7 +481,8 @@ mod tests {
 
     #[test]
     fn parse_call_tool_action() {
-        let input = r#"{"action": "call_tool", "tool": "weather", "params": {"LOCATION": "Tokyo"}}"#;
+        let input =
+            r#"{"action": "call_tool", "tool": "weather", "params": {"LOCATION": "Tokyo"}}"#;
         match parse_action(input) {
             Action::CallTool { tool, params } => {
                 assert_eq!(tool, "weather");

@@ -93,10 +93,7 @@ impl OpenAIBackend {
         &self,
         messages: Vec<Message>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!(
-            "{}/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
         let api_messages: Vec<ApiMessage> = messages.iter().map(ApiMessage::from).collect();
 

@@ -113,11 +113,16 @@ pub fn build_codegen_prompt(
 
     CODEGEN_PROMPT_TEMPLATE
         .replace("{available_tools}", &available_section)
-        .replace("{knowledge}", &if knowledge.is_empty() {
-            String::new()
-        } else {
-            format!("Lessons learned from previous code generation (follow these):\n{knowledge}\n\n")
-        })
+        .replace(
+            "{knowledge}",
+            &if knowledge.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "Lessons learned from previous code generation (follow these):\n{knowledge}\n\n"
+                )
+            },
+        )
         .replace("{tool_hint}", &tool_hint)
         .replace("{task}", task_description)
         .replace("{name_instruction}", &name_instruction)
@@ -190,7 +195,12 @@ pub async fn generate_provider_for_agent(
         expected_params: HashMap::new(),
     };
     let knowledge = toolbox.read_knowledge();
-    let mut prompt = build_codegen_prompt(task_description, Some(&request), available_tools, &knowledge);
+    let mut prompt = build_codegen_prompt(
+        task_description,
+        Some(&request),
+        available_tools,
+        &knowledge,
+    );
     prompt = prompt.replace(
         &format!("Generate a tool named \"{tool_name}\" that the orchestrator needs.\n"),
         &format!("Generate a tool named \"{tool_name}\": {tool_description}\n"),

@@ -37,10 +37,7 @@ impl Metrics {
 
     pub fn summary(&self) -> Vec<(String, RoleMetrics)> {
         let roles = self.roles.lock().unwrap();
-        let mut entries: Vec<_> = roles
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut entries: Vec<_> = roles.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         entries.sort_by_key(|(k, _)| k.clone());
         entries
     }

@@ -173,10 +173,8 @@ mod tests {
 
     #[test]
     fn parse_json_with_surrounding_text() {
-        let r = parse_selection(
-            r#"Here: {"tool": "time", "params": {"TIMEZONE": "UTC"}} done"#,
-        )
-        .unwrap();
+        let r = parse_selection(r#"Here: {"tool": "time", "params": {"TIMEZONE": "UTC"}} done"#)
+            .unwrap();
         assert_eq!(r.tool.as_deref(), Some("time"));
         assert_eq!(r.params.get("TIMEZONE").unwrap(), "UTC");
     }
