@@ -17,6 +17,7 @@ mod session;
 mod task;
 mod tool_selection;
 mod toolbox;
+mod triage;
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -90,54 +91,62 @@ async fn run_task(
     })
     .await;
 
-    // Step 1: Get toolbox manifest
-    let available_tools = toolbox.list_tools().unwrap_or_default();
-
-    // Step 2: Ask the "fast" model which tools to use
     let fast_backend = router
         .backend("fast")
         .or_else(|_| router.backend("default"))?;
     let history_msgs = session.map(|s| s.build_messages(None));
     let history_ref = history_msgs.as_deref();
-    let selected =
-        tool_selection::select_tools(description, &available_tools, fast_backend, history_ref)
-            .await?;
 
-    log.emit(Event::ToolSelected {
-        task_id: task_id.clone(),
-        tools: selected.clone(),
-    })
-    .await;
-
-    // Step 3: If no tools selected, generate a new one
-    let selected = if selected.is_empty() && !description.trim().is_empty() {
-        let code_backend = router
-            .backend("code")
-            .or_else(|_| router.backend("default"))?;
-        match codegen::generate_provider(description, code_backend, toolbox, client.clone()).await {
-            Ok(name) => {
-                log.emit(Event::ToolGenerated {
-                    name: name.clone(),
-                    description: description.to_string(),
-                })
-                .await;
-                vec![name]
-            }
-            Err(e) => {
-                eprintln!("[marrow] code generation failed: {e}");
-                Vec::new()
-            }
-        }
-    } else {
-        selected
-    };
-
-    // Step 4: Retrieve relevant memories
+    // Step 1: Retrieve relevant memories (always — they're cheap)
     let memories =
         memory_provider::select_memories(description, memory_store, fast_backend).await?;
     let memory_context = memory_provider::memories_to_context(&memories);
 
-    // Step 5: Assemble context from selected providers + memories
+    // Step 2: Triage — does this task need external data?
+    let needs_tools =
+        triage::needs_external_data(description, fast_backend, history_ref, &memories).await?;
+
+    // Step 3: Tool selection + generation (only if triage says yes)
+    let selected = if needs_tools {
+        let available_tools = toolbox.list_tools().unwrap_or_default();
+        let selected =
+            tool_selection::select_tools(description, &available_tools, fast_backend, history_ref)
+                .await?;
+
+        log.emit(Event::ToolSelected {
+            task_id: task_id.clone(),
+            tools: selected.clone(),
+        })
+        .await;
+
+        if selected.is_empty() && !description.trim().is_empty() {
+            let code_backend = router
+                .backend("code")
+                .or_else(|_| router.backend("default"))?;
+            match codegen::generate_provider(description, code_backend, toolbox, client.clone())
+                .await
+            {
+                Ok(name) => {
+                    log.emit(Event::ToolGenerated {
+                        name: name.clone(),
+                        description: description.to_string(),
+                    })
+                    .await;
+                    vec![name]
+                }
+                Err(e) => {
+                    eprintln!("[marrow] code generation failed: {e}");
+                    Vec::new()
+                }
+            }
+        } else {
+            selected
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Step 4: Assemble context from selected providers + memories
     let mut assembler = ContextAssembler::new(client);
     for name in &selected {
         match toolbox.load_provider(name) {
