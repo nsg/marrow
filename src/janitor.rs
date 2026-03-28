@@ -240,7 +240,6 @@ async fn process_tool(
         .await;
 
         let (new_meta, new_source) = regenerate_tool(&meta, &source, &review, backend).await?;
-        // If the regenerated tool has a new name, delete the old one
         if new_meta.name != meta.name {
             toolbox.delete_tool(&meta.name)?;
         }
