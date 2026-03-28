@@ -97,8 +97,11 @@ async fn run_task(
     let fast_backend = router
         .backend("fast")
         .or_else(|_| router.backend("default"))?;
+    let history_msgs = session.map(|s| s.build_messages(None));
+    let history_ref = history_msgs.as_deref();
     let selected =
-        tool_selection::select_tools(description, &available_tools, fast_backend).await?;
+        tool_selection::select_tools(description, &available_tools, fast_backend, history_ref)
+            .await?;
 
     log.emit(Event::ToolSelected {
         task_id: task_id.clone(),
