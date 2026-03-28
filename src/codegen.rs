@@ -104,3 +104,55 @@ fn extract_block(response: &str, tag: &str) -> Option<String> {
     let end = rest.find("```")?;
     Some(rest[..end].trim().to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_block_basic() {
+        let input = "```name\nweather\n```";
+        assert_eq!(extract_block(input, "name").unwrap(), "weather");
+    }
+
+    #[test]
+    fn extract_block_with_surrounding_text() {
+        let input = "Here is the tool:\n```lua\nreturn {}\n```\nDone.";
+        assert_eq!(extract_block(input, "lua").unwrap(), "return {}");
+    }
+
+    #[test]
+    fn extract_block_missing() {
+        assert!(extract_block("no blocks here", "name").is_none());
+    }
+
+    #[test]
+    fn extract_block_trims_whitespace() {
+        let input = "```name\n  weather_tool  \n```";
+        assert_eq!(extract_block(input, "name").unwrap(), "weather_tool");
+    }
+
+    #[test]
+    fn parse_codegen_response_full() {
+        let input = r#"Here is the tool:
+```name
+my_tool
+```
+```description
+Does something useful
+```
+```lua
+return { ok = true }
+```"#;
+        let (name, desc, code) = parse_codegen_response(input).unwrap();
+        assert_eq!(name, "my_tool");
+        assert_eq!(desc, "Does something useful");
+        assert_eq!(code, "return { ok = true }");
+    }
+
+    #[test]
+    fn parse_codegen_response_missing_block() {
+        let input = "```name\ntest\n```\n```lua\nreturn {}\n```";
+        assert!(parse_codegen_response(input).is_err());
+    }
+}

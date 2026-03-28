@@ -84,3 +84,61 @@ impl std::fmt::Display for InvalidTransition {
 }
 
 impl std::error::Error for InvalidTransition {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_transitions() {
+        assert!(TaskStatus::Pending.can_transition_to(TaskStatus::Running));
+        assert!(TaskStatus::Running.can_transition_to(TaskStatus::Succeeded));
+        assert!(TaskStatus::Running.can_transition_to(TaskStatus::Failed));
+        assert!(TaskStatus::Failed.can_transition_to(TaskStatus::Healing));
+        assert!(TaskStatus::Healing.can_transition_to(TaskStatus::Succeeded));
+        assert!(TaskStatus::Healing.can_transition_to(TaskStatus::Escalated));
+    }
+
+    #[test]
+    fn invalid_transitions() {
+        assert!(!TaskStatus::Pending.can_transition_to(TaskStatus::Succeeded));
+        assert!(!TaskStatus::Pending.can_transition_to(TaskStatus::Failed));
+        assert!(!TaskStatus::Running.can_transition_to(TaskStatus::Pending));
+        assert!(!TaskStatus::Succeeded.can_transition_to(TaskStatus::Running));
+        assert!(!TaskStatus::Failed.can_transition_to(TaskStatus::Succeeded));
+        assert!(!TaskStatus::Escalated.can_transition_to(TaskStatus::Healing));
+        assert!(!TaskStatus::Pending.can_transition_to(TaskStatus::Pending));
+    }
+
+    #[test]
+    fn task_transition_updates_status() {
+        let mut task = Task::new("test");
+        assert_eq!(task.status, TaskStatus::Pending);
+
+        task.transition(TaskStatus::Running).unwrap();
+        assert_eq!(task.status, TaskStatus::Running);
+
+        task.transition(TaskStatus::Failed).unwrap();
+        assert_eq!(task.status, TaskStatus::Failed);
+    }
+
+    #[test]
+    fn task_invalid_transition_returns_error() {
+        let mut task = Task::new("test");
+        let err = task.transition(TaskStatus::Succeeded).unwrap_err();
+        assert_eq!(err.from, TaskStatus::Pending);
+        assert_eq!(err.to, TaskStatus::Succeeded);
+        assert_eq!(task.status, TaskStatus::Pending);
+    }
+
+    #[test]
+    fn task_new_defaults() {
+        let task = Task::new("do something");
+        assert_eq!(task.description, "do something");
+        assert_eq!(task.status, TaskStatus::Pending);
+        assert_eq!(task.model_role, "default");
+        assert!(!task.persist);
+        assert!(task.output.is_none());
+        assert!(task.error.is_none());
+    }
+}

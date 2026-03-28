@@ -133,3 +133,48 @@ fn parse_selection(response: &str) -> Result<SelectionResult, Box<dyn Error + Se
         }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_clean_json() {
+        let r = parse_selection(r#"{"tools": ["weather"], "params": {"LOCATION": "Tokyo"}}"#).unwrap();
+        assert_eq!(r.tools, vec!["weather"]);
+        assert_eq!(r.params.get("LOCATION").unwrap(), "Tokyo");
+    }
+
+    #[test]
+    fn parse_json_with_surrounding_text() {
+        let r = parse_selection(r#"Here is my answer: {"tools": ["time"], "params": {"TIMEZONE": "UTC"}} hope that helps"#).unwrap();
+        assert_eq!(r.tools, vec!["time"]);
+        assert_eq!(r.params.get("TIMEZONE").unwrap(), "UTC");
+    }
+
+    #[test]
+    fn parse_empty_tools() {
+        let r = parse_selection(r#"{"tools": [], "params": {}}"#).unwrap();
+        assert!(r.tools.is_empty());
+        assert!(r.params.is_empty());
+    }
+
+    #[test]
+    fn parse_no_json() {
+        let r = parse_selection("I don't know what tools to use").unwrap();
+        assert!(r.tools.is_empty());
+        assert!(r.params.is_empty());
+    }
+
+    #[test]
+    fn parse_numeric_param_converted_to_string() {
+        let r = parse_selection(r#"{"tools": ["test"], "params": {"COUNT": 5}}"#).unwrap();
+        assert_eq!(r.params.get("COUNT").unwrap(), "5");
+    }
+
+    #[test]
+    fn parse_multiple_tools() {
+        let r = parse_selection(r#"{"tools": ["weather", "time"], "params": {"LOCATION": "Paris"}}"#).unwrap();
+        assert_eq!(r.tools, vec!["weather", "time"]);
+    }
+}

@@ -274,3 +274,67 @@ pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) 
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_review_pass() {
+        let input = r#"```verdict
+PASS
+```
+```issues
+none
+```
+```suggestions
+none
+```"#;
+        let r = parse_review_response(input).unwrap();
+        assert!(r.passed);
+        assert_eq!(r.issues, "none");
+    }
+
+    #[test]
+    fn parse_review_fail() {
+        let input = r#"```verdict
+FAIL
+```
+```issues
+- hardcoded URL
+- no error handling
+```
+```suggestions
+- make URL configurable
+```"#;
+        let r = parse_review_response(input).unwrap();
+        assert!(!r.passed);
+        assert!(r.issues.contains("hardcoded URL"));
+        assert!(r.suggestions.contains("configurable"));
+    }
+
+    #[test]
+    fn parse_review_missing_blocks_defaults() {
+        let r = parse_review_response("some random text").unwrap();
+        assert!(!r.passed);
+        assert_eq!(r.issues, "unknown");
+        assert_eq!(r.suggestions, "unknown");
+    }
+
+    #[test]
+    fn parse_review_pass_case_insensitive() {
+        let input = "```verdict\nPass\n```\n```issues\nnone\n```\n```suggestions\nnone\n```";
+        let r = parse_review_response(input).unwrap();
+        assert!(r.passed);
+    }
+
+    #[test]
+    fn extract_block_basic() {
+        assert_eq!(extract_block("```lua\ncode here\n```", "lua").unwrap(), "code here");
+    }
+
+    #[test]
+    fn extract_block_missing() {
+        assert!(extract_block("no blocks", "lua").is_none());
+    }
+}

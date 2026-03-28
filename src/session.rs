@@ -116,3 +116,77 @@ impl ChatSession {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_session_is_empty() {
+        let s = ChatSession::new();
+        assert!(!s.needs_summarization());
+        let msgs = s.build_messages(None);
+        assert!(msgs.is_empty());
+    }
+
+    #[test]
+    fn append_and_build() {
+        let mut s = ChatSession::new();
+        s.append(Message::user("hello"));
+        s.append(Message::assistant("hi"));
+
+        let msgs = s.build_messages(None);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[1].role, "assistant");
+    }
+
+    #[test]
+    fn build_with_system_context() {
+        let mut s = ChatSession::new();
+        s.append(Message::user("test"));
+
+        let msgs = s.build_messages(Some("You are helpful"));
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "system");
+        assert!(msgs[0].content.contains("You are helpful"));
+    }
+
+    #[test]
+    fn build_with_summary() {
+        let mut s = ChatSession::new();
+        s.summary = Some("User asked about weather".to_string());
+        s.append(Message::user("and now?"));
+
+        let msgs = s.build_messages(None);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "system");
+        assert!(msgs[0].content.contains("Previous conversation summary"));
+        assert!(msgs[0].content.contains("weather"));
+    }
+
+    #[test]
+    fn build_with_context_and_summary() {
+        let mut s = ChatSession::new();
+        s.summary = Some("talked about code".to_string());
+        s.append(Message::user("next"));
+
+        let msgs = s.build_messages(Some("Be concise"));
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "system");
+        assert!(msgs[0].content.contains("Be concise"));
+        assert!(msgs[0].content.contains("talked about code"));
+    }
+
+    #[test]
+    fn needs_summarization_threshold() {
+        let mut s = ChatSession::new();
+        for i in 0..SUMMARIZE_THRESHOLD {
+            s.append(Message::user(format!("msg {i}")));
+        }
+        assert!(!s.needs_summarization());
+
+        s.append(Message::user("one more"));
+        assert!(s.needs_summarization());
+    }
+}

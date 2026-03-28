@@ -128,3 +128,54 @@ fn parse_writer_response(response: &str) -> Result<WriterResponse, Box<dyn Error
 
     Ok(parsed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_save_facts() {
+        let input = r#"{"save": ["User prefers UTC"], "update": {}, "delete": []}"#;
+        let r = parse_writer_response(input).unwrap();
+        assert_eq!(r.save, vec!["User prefers UTC"]);
+        assert!(r.update.is_empty());
+        assert!(r.delete.is_empty());
+    }
+
+    #[test]
+    fn parse_wrapped_in_json_block() {
+        let input = "Here is what to remember:\n```json\n{\"save\": [\"likes coffee\"], \"update\": {}, \"delete\": []}\n```";
+        let r = parse_writer_response(input).unwrap();
+        assert_eq!(r.save, vec!["likes coffee"]);
+    }
+
+    #[test]
+    fn parse_with_update_and_delete() {
+        let input = r#"{"save": [], "update": {"abc-123": "updated fact"}, "delete": ["def-456"]}"#;
+        let r = parse_writer_response(input).unwrap();
+        assert!(r.save.is_empty());
+        assert_eq!(r.update.get("abc-123").unwrap(), "updated fact");
+        assert_eq!(r.delete, vec!["def-456"]);
+    }
+
+    #[test]
+    fn parse_no_json_returns_empty() {
+        let r = parse_writer_response("Nothing to remember here.").unwrap();
+        assert!(r.save.is_empty());
+        assert!(r.update.is_empty());
+        assert!(r.delete.is_empty());
+    }
+
+    #[test]
+    fn parse_json_with_surrounding_text() {
+        let input = r#"I think we should save this: {"save": ["fact one"], "update": {}, "delete": []} that's all"#;
+        let r = parse_writer_response(input).unwrap();
+        assert_eq!(r.save, vec!["fact one"]);
+    }
+
+    #[test]
+    fn parse_malformed_json_returns_empty() {
+        let r = parse_writer_response("{broken json").unwrap();
+        assert!(r.save.is_empty());
+    }
+}
