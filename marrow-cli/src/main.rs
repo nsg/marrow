@@ -95,6 +95,7 @@ async fn run_task(
         &memories,
         log,
         Some(secrets),
+        None,
     )
     .await?;
 

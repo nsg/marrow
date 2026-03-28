@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use reqwest::Client;
+use tokio::sync::mpsc;
 
 use crate::codegen;
 use crate::events::{Event, EventLog};
@@ -11,6 +12,10 @@ use crate::memory::Memory;
 use crate::model::ModelBackend;
 use crate::secrets::Secrets;
 use crate::toolbox::Toolbox;
+
+/// Sender for progress updates from the agent loop.
+/// Each message is a human-readable status string.
+pub type ProgressTx = mpsc::UnboundedSender<String>;
 
 const MAX_AGENT_STEPS: u32 = 10;
 
@@ -231,7 +236,14 @@ pub async fn run_loop(
     memories: &[Memory],
     log: &EventLog,
     secrets: Option<&Secrets>,
+    progress: Option<&ProgressTx>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
+    let emit = |msg: String| {
+        if let Some(tx) = progress {
+            let _ = tx.send(msg);
+        }
+    };
+
     let mut history: Vec<StepResult> = Vec::new();
     let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
 
@@ -311,6 +323,17 @@ pub async fn run_loop(
                     detail: tool.clone(),
                 })
                 .await;
+
+                let params_preview = params
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if params_preview.is_empty() {
+                    emit(format!("Calling tool \"{tool}\"..."));
+                } else {
+                    emit(format!("Calling tool \"{tool}\" ({params_preview})..."));
+                }
 
                 // Normalize param keys to uppercase
                 let upper_params: HashMap<String, String> = params
@@ -403,6 +426,8 @@ pub async fn run_loop(
                 })
                 .await;
 
+                emit(format!("Creating tool \"{name}\"..."));
+
                 let output = match codegen::generate_provider_for_agent(
                     name,
                     description,
@@ -445,6 +470,9 @@ pub async fn run_loop(
                     detail: String::new(),
                 })
                 .await;
+                if !history.is_empty() {
+                    emit("Thinking...".to_string());
+                }
                 return format_answer(task, memories, &history, answer_backend).await;
             }
         }

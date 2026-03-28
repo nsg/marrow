@@ -8,7 +8,10 @@ use serenity::model::gateway::GatewayIntents;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
 
+use tokio::sync::mpsc;
+
 use marrow::agent;
+use marrow::agent::ProgressTx;
 use marrow::events::{Event, EventLog};
 use marrow::janitor;
 use marrow::memory::MemoryStore;
@@ -112,6 +115,16 @@ impl EventHandler for Handler {
         // Show typing indicator while processing
         let typing = msg.channel_id.start_typing(&ctx.http);
 
+        // Progress channel — agent sends updates, we forward to Discord
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
+        let channel_id = msg.channel_id;
+        let http = ctx.http.clone();
+        let progress_handle = tokio::spawn(async move {
+            while let Some(status) = progress_rx.recv().await {
+                let _ = channel_id.say(&http, &format!("_{status}_")).await;
+            }
+        });
+
         // Run the agent
         let response = match run_task(
             content,
@@ -122,6 +135,7 @@ impl EventHandler for Handler {
             client,
             &log,
             &secrets,
+            &progress_tx,
         )
         .await
         {
@@ -129,6 +143,9 @@ impl EventHandler for Handler {
             Err(e) => format!("Error: {e}"),
         };
 
+        // Close channel and wait for remaining progress messages
+        drop(progress_tx);
+        let _ = progress_handle.await;
         drop(typing);
 
         // Send response, splitting if it exceeds Discord's 2000 char limit
@@ -154,6 +171,7 @@ async fn run_task(
     client: Arc<Client>,
     log: &EventLog,
     secrets: &Secrets,
+    progress: &ProgressTx,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let task_id = uuid::Uuid::new_v4().to_string();
 
@@ -188,6 +206,7 @@ async fn run_task(
         &memories,
         log,
         Some(secrets),
+        Some(progress),
     )
     .await?;
 
