@@ -146,7 +146,13 @@ pub async fn generate_provider_with_hint(
 
     // Test-run without run_tool access (toolbox_dir = None)
     let provider = LuaProvider::new(&name, &lua_code);
-    if let Err(e) = provider.execute(task_description, client).await {
+    let test_params = request
+        .map(|r| r.expected_params.clone())
+        .unwrap_or_default();
+    if let Err(e) = provider
+        .execute_with_params(task_description, client, &test_params, None)
+        .await
+    {
         return Err(format!("generated tool '{name}' failed test run: {e}").into());
     }
 
