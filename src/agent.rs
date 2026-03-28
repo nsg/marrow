@@ -63,18 +63,14 @@ pub struct StepResult {
 
 pub fn build_agent_prompt(
     task: &str,
-    tools: &[ToolMeta],
+    tools_section: &str,
     memories: &[Memory],
     history: &[StepResult],
 ) -> String {
-    let tools_section = if tools.is_empty() {
-        "(none available — create one if needed)".to_string()
+    let tools_section = if tools_section.is_empty() {
+        "(none available — create one if needed)"
     } else {
-        tools
-            .iter()
-            .map(|t| format!("- {}: {}", t.name, t.description))
-            .collect::<Vec<_>>()
-            .join("\n")
+        tools_section
     };
 
     let memories_section = if memories.is_empty() {
@@ -216,7 +212,12 @@ pub async fn run_loop(
 
     for step in 1..=MAX_AGENT_STEPS {
         let available_tools = toolbox.list_tools().unwrap_or_default();
-        let prompt = build_agent_prompt(task, &available_tools, memories, &history);
+        let tools_section = available_tools
+            .iter()
+            .map(|t| toolbox.tool_usage(t))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = build_agent_prompt(task, &tools_section, memories, &history);
         let response = backend.complete(prompt).await?;
         let action = parse_action(&response);
 

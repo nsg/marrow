@@ -94,6 +94,38 @@ impl Toolbox {
         Ok(std::fs::read_to_string(lua_path)?)
     }
 
+    pub fn extract_params(&self, name: &str) -> Vec<String> {
+        let source = match self.load_source(name) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let mut params = Vec::new();
+        for cap in source.match_indices("PARAMS[\"") {
+            let rest = &source[cap.0 + 8..];
+            if let Some(end) = rest.find('"') {
+                let key = &rest[..end];
+                if !params.contains(&key.to_string()) {
+                    params.push(key.to_string());
+                }
+            }
+        }
+        params
+    }
+
+    pub fn tool_usage(&self, meta: &ToolMeta) -> String {
+        let params = self.extract_params(&meta.name);
+        if params.is_empty() {
+            format!("- {}: {}", meta.name, meta.description)
+        } else {
+            format!(
+                "- {}: {} (params: {})",
+                meta.name,
+                meta.description,
+                params.join(", ")
+            )
+        }
+    }
+
     pub fn list_unvalidated(&self) -> Result<Vec<ToolMeta>, Box<dyn Error + Send + Sync>> {
         Ok(self
             .list_tools()?
