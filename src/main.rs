@@ -7,6 +7,7 @@ use reqwest::Client;
 
 use marrow::agent;
 use marrow::events::{Event, EventLog};
+use marrow::metrics::Metrics;
 use marrow::executor::Context;
 use marrow::memory::MemoryStore;
 use marrow::memory_provider;
@@ -155,14 +156,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
 
     let config = RouterConfig::from_file(&cli.config)?;
-    let router = ModelRouter::from_config(&config)?;
+    let metrics = Arc::new(Metrics::new());
+    let router = ModelRouter::from_config_with_metrics(&config, Some(metrics.clone()))?;
     let registry = TaskRegistry::new();
     let client = Arc::new(Client::new());
     let toolbox = Toolbox::new(&cli.toolbox);
     let memory_store = MemoryStore::new(&cli.memory);
     let log = EventLog::new(Some(PathBuf::from(&cli.log)), cli.verbose).await?;
+    let verbose = cli.verbose;
 
-    // Spawn janitor in background
+    // Spawn janitor in background (no metrics for janitor — it's background work)
     let janitor_backend = config
         .build_backend("code")
         .or_else(|_| config.build_backend("default"))?;
@@ -257,6 +260,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Err(e) => eprintln!("\nerror: {e}\n"),
             }
         }
+    }
+
+    if verbose {
+        metrics.display();
     }
 
     Ok(())

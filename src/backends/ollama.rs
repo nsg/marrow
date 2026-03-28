@@ -1,6 +1,10 @@
+use std::sync::Arc;
+use std::time::Instant;
+
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::metrics::Metrics;
 use crate::model::{CompletionResult, ModelBackend};
 use crate::session::Message;
 
@@ -14,6 +18,10 @@ struct ChatRequest {
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     message: ChatMessage,
+    #[serde(default)]
+    prompt_eval_count: Option<u64>,
+    #[serde(default)]
+    eval_count: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -26,6 +34,8 @@ pub struct OllamaBackend {
     base_url: String,
     api_key: Option<String>,
     model: String,
+    role: String,
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl OllamaBackend {
@@ -35,11 +45,23 @@ impl OllamaBackend {
             base_url: base_url.into(),
             api_key: None,
             model: model.into(),
+            role: String::new(),
+            metrics: None,
         }
     }
 
     pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
         self.api_key = Some(key.into());
+        self
+    }
+
+    pub fn with_role(mut self, role: impl Into<String>) -> Self {
+        self.role = role.into();
+        self
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = Some(metrics);
         self
     }
 
@@ -69,7 +91,9 @@ impl OllamaBackend {
             req = req.bearer_auth(key);
         }
 
+        let start = Instant::now();
         let resp = req.send().await?;
+        let duration = start.elapsed();
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -78,6 +102,16 @@ impl OllamaBackend {
         }
 
         let chat_resp: ChatResponse = resp.json().await?;
+
+        if let Some(ref metrics) = self.metrics {
+            metrics.record(
+                &self.role,
+                duration,
+                chat_resp.prompt_eval_count.unwrap_or(0),
+                chat_resp.eval_count.unwrap_or(0),
+            );
+        }
+
         Ok(chat_resp.message.content)
     }
 }

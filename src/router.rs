@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::Deserialize;
 
 use crate::backends::ollama::OllamaBackend;
 use crate::executor::{Context, Executor};
+use crate::metrics::Metrics;
 use crate::model::ModelBackend;
 use crate::session::Message;
 use crate::task::Task;
@@ -36,6 +38,14 @@ impl RouterConfig {
         &self,
         role: &str,
     ) -> Result<Box<dyn ModelBackend>, Box<dyn Error + Send + Sync>> {
+        self.build_backend_with_metrics(role, None)
+    }
+
+    pub fn build_backend_with_metrics(
+        &self,
+        role: &str,
+        metrics: Option<Arc<Metrics>>,
+    ) -> Result<Box<dyn ModelBackend>, Box<dyn Error + Send + Sync>> {
         let role_config = self
             .roles
             .get(role)
@@ -47,9 +57,13 @@ impl RouterConfig {
                     .api_base
                     .as_deref()
                     .unwrap_or("http://localhost:11434");
-                let mut backend = OllamaBackend::from_env(base_url, &role_config.model);
+                let mut backend = OllamaBackend::from_env(base_url, &role_config.model)
+                    .with_role(role);
                 if let Some(key) = &role_config.api_key {
                     backend = backend.with_api_key(key);
+                }
+                if let Some(m) = metrics {
+                    backend = backend.with_metrics(m);
                 }
                 Ok(Box::new(backend))
             }
@@ -64,6 +78,13 @@ pub struct ModelRouter {
 
 impl ModelRouter {
     pub fn from_config(config: &RouterConfig) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        Self::from_config_with_metrics(config, None)
+    }
+
+    pub fn from_config_with_metrics(
+        config: &RouterConfig,
+        metrics: Option<Arc<Metrics>>,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut backends: HashMap<String, Box<dyn ModelBackend>> = HashMap::new();
 
         for (role, role_config) in &config.roles {
@@ -74,10 +95,14 @@ impl ModelRouter {
                         .as_deref()
                         .unwrap_or("http://localhost:11434");
 
-                    let mut backend = OllamaBackend::from_env(base_url, &role_config.model);
+                    let mut backend =
+                        OllamaBackend::from_env(base_url, &role_config.model).with_role(role);
 
                     if let Some(key) = &role_config.api_key {
                         backend = backend.with_api_key(key);
+                    }
+                    if let Some(ref m) = metrics {
+                        backend = backend.with_metrics(m.clone());
                     }
 
                     Box::new(backend)

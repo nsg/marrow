@@ -7,6 +7,7 @@ pub mod events;
 pub mod executor;
 pub mod janitor;
 pub mod memory;
+pub mod metrics;
 pub mod memory_provider;
 pub mod memory_writer;
 pub mod model;
