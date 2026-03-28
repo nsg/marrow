@@ -4,6 +4,9 @@ mod context;
 mod events;
 mod executor;
 mod janitor;
+mod memory;
+mod memory_provider;
+mod memory_writer;
 mod model;
 mod persistence;
 mod registry;
@@ -23,6 +26,7 @@ use reqwest::Client;
 
 use context::ContextAssembler;
 use events::{Event, EventLog};
+use memory::MemoryStore;
 use registry::TaskRegistry;
 use router::{ModelRouter, RouterConfig};
 use task::Task;
@@ -48,6 +52,10 @@ struct Cli {
     #[arg(short, long, default_value = "toolbox")]
     toolbox: String,
 
+    /// Path to the memory directory
+    #[arg(short, long, default_value = "memory")]
+    memory: String,
+
     /// Show full event stream
     #[arg(short, long)]
     verbose: bool,
@@ -63,6 +71,7 @@ async fn run_task(
     registry: &TaskRegistry,
     router: &ModelRouter,
     toolbox: &Toolbox,
+    memory_store: &MemoryStore,
     client: Arc<Client>,
     log: &EventLog,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
@@ -116,7 +125,12 @@ async fn run_task(
         selected
     };
 
-    // Step 4: Assemble context from selected providers
+    // Step 4: Retrieve relevant memories
+    let memories =
+        memory_provider::select_memories(description, memory_store, fast_backend).await?;
+    let memory_context = memory_provider::memories_to_context(&memories);
+
+    // Step 5: Assemble context from selected providers + memories
     let mut assembler = ContextAssembler::new(client);
     for name in &selected {
         match toolbox.load_provider(name) {
@@ -125,7 +139,12 @@ async fn run_task(
         }
     }
 
-    let context = assembler.assemble(description, &selected).await?;
+    let mut context = assembler.assemble(description, &selected).await?;
+
+    // Merge memory context into assembled context
+    if let Some(obj) = context.data.as_object_mut() {
+        obj.insert("memories".to_string(), memory_context);
+    }
 
     log.emit(Event::ContextAssembled {
         task_id: task_id.clone(),
@@ -133,19 +152,36 @@ async fn run_task(
     })
     .await;
 
-    // Step 5: Execute task with assembled context
+    // Step 6: Execute task with assembled context
     let id = registry.create(task).await;
     let result = registry.run(id, router, &context).await;
 
+    let status = if result.is_ok() {
+        "succeeded"
+    } else {
+        "failed"
+    };
+
     log.emit(Event::TaskExecuted {
         task_id: task_id.clone(),
-        status: if result.is_ok() {
-            "succeeded".to_string()
-        } else {
-            "failed".to_string()
-        },
+        status: status.to_string(),
     })
     .await;
+
+    // Step 7: Post-task memory writer
+    if let Ok(ref output) = result {
+        let response_text = output.as_str().unwrap_or("");
+        if let Err(e) = memory_writer::process_interaction(
+            description,
+            response_text,
+            memory_store,
+            fast_backend,
+        )
+        .await
+        {
+            eprintln!("[marrow] memory writer error: {e}");
+        }
+    }
 
     result.map_err(|e| e.into())
 }
@@ -159,6 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let registry = TaskRegistry::new();
     let client = Arc::new(Client::new());
     let toolbox = Toolbox::new(&cli.toolbox);
+    let memory_store = MemoryStore::new(&cli.memory);
     let log = EventLog::new(Some(PathBuf::from(&cli.log)), cli.verbose).await?;
 
     // Spawn janitor in background
@@ -173,7 +210,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if let Some(prompt) = cli.prompt {
         match run_task(
-            &prompt, &cli.role, &registry, &router, &toolbox, client, &log,
+            &prompt,
+            &cli.role,
+            &registry,
+            &router,
+            &toolbox,
+            &memory_store,
+            client,
+            &log,
         )
         .await
         {
@@ -218,6 +262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 &registry,
                 &router,
                 &toolbox,
+                &memory_store,
                 client.clone(),
                 &log,
             )
