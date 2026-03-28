@@ -9,7 +9,7 @@ use crate::codegen;
 use crate::events::{Event, EventLog};
 use crate::memory::Memory;
 use crate::model::ModelBackend;
-use crate::toolbox::{ToolMeta, Toolbox};
+use crate::toolbox::Toolbox;
 
 const MAX_AGENT_STEPS: u32 = 10;
 
@@ -116,7 +116,7 @@ pub fn build_agent_prompt(
     };
 
     AGENT_PROMPT_TEMPLATE
-        .replace("{tools}", &tools_section)
+        .replace("{tools}", tools_section)
         .replace("{memories}", &memories_section)
         .replace("{task}", task)
         .replace("{history}", &history_section)
