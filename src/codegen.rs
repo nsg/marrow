@@ -22,7 +22,7 @@ Global tables available:
 - TASK.description (string): the user's task description
 - PARAMS (table): per-tool parameters set by the orchestrator (e.g. PARAMS["LOCATION"])
 
-{available_tools}Design philosophy — each tool does ONE thing well:
+{available_tools}{knowledge}Design philosophy — each tool does ONE thing well:
 - A data tool fetches one data source (weather, calendar, RSS feed, etc.)
 - A glue tool composes data tools using run_tool() to build a combined result
 - Example glue tool:
@@ -65,6 +65,7 @@ pub fn build_codegen_prompt(
     task_description: &str,
     request: Option<&ToolRequest>,
     available_tools: &[ToolMeta],
+    knowledge: &str,
 ) -> String {
     let available_section = if available_tools.is_empty() {
         String::new()
@@ -112,6 +113,11 @@ pub fn build_codegen_prompt(
 
     CODEGEN_PROMPT_TEMPLATE
         .replace("{available_tools}", &available_section)
+        .replace("{knowledge}", &if knowledge.is_empty() {
+            String::new()
+        } else {
+            format!("Lessons learned from previous code generation (follow these):\n{knowledge}\n\n")
+        })
         .replace("{tool_hint}", &tool_hint)
         .replace("{task}", task_description)
         .replace("{name_instruction}", &name_instruction)
@@ -135,7 +141,8 @@ pub async fn generate_provider_with_hint(
     request: Option<&ToolRequest>,
     available_tools: &[ToolMeta],
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
-    let prompt = build_codegen_prompt(task_description, request, available_tools);
+    let knowledge = toolbox.read_knowledge();
+    let prompt = build_codegen_prompt(task_description, request, available_tools, &knowledge);
     let response = backend.complete(prompt).await?;
 
     let (mut name, description, lua_code) = parse_codegen_response(&response)?;
@@ -182,7 +189,8 @@ pub async fn generate_provider_for_agent(
         name: tool_name.to_string(),
         expected_params: HashMap::new(),
     };
-    let mut prompt = build_codegen_prompt(task_description, Some(&request), available_tools);
+    let knowledge = toolbox.read_knowledge();
+    let mut prompt = build_codegen_prompt(task_description, Some(&request), available_tools, &knowledge);
     prompt = prompt.replace(
         &format!("Generate a tool named \"{tool_name}\" that the orchestrator needs.\n"),
         &format!("Generate a tool named \"{tool_name}\": {tool_description}\n"),
@@ -309,14 +317,14 @@ return { ok = true }
             provides: vec![],
             validated: true,
         }];
-        let prompt = build_codegen_prompt("test task", None, &tools);
+        let prompt = build_codegen_prompt("test task", None, &tools, "");
         assert!(prompt.contains("weather: Get weather data"));
         assert!(prompt.contains("run_tool"));
     }
 
     #[test]
     fn codegen_prompt_empty_tools() {
-        let prompt = build_codegen_prompt("test task", None, &[]);
+        let prompt = build_codegen_prompt("test task", None, &[], "");
         assert!(!prompt.contains("Existing tools available"));
     }
 }

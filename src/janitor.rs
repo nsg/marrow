@@ -222,6 +222,14 @@ pub async fn review_and_fix(
             return Ok(true);
         }
 
+        // Extract lessons from review issues and save to knowledge file
+        for line in review.issues.lines() {
+            let line = line.trim().trim_start_matches('-').trim();
+            if !line.is_empty() && line.len() > 10 && line != "none" && line != "unknown" {
+                let _ = toolbox.append_knowledge(line);
+            }
+        }
+
         if attempt == MAX_FIX_ATTEMPTS {
             let reason = format!("unfixable after {MAX_FIX_ATTEMPTS} attempts");
             log.emit(Event::JanitorEscalated {
