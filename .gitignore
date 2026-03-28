@@ -3,3 +3,5 @@ config.toml
 .claude-sandbox/
 .mcp.json
 events.jsonl
+memory/
+toolbox/
