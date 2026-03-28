@@ -39,7 +39,7 @@ and Kimi K2.5 (fast) selected based on speed, intelligence index, and tool calli
 - **Long-term memory** — vector-backed store for deeper patterns. Ollama Cloud doesn't
   support embeddings yet, so deferred. Working memory covers short-term facts
 - **Multiple providers** — only Ollama. OpenAI-compatible backend is a quick add when needed
-- **Tests** — unit tests for core logic (parsers, state transitions, session). No integration tests
+- **Tests** — unit tests for core logic and integration tests with MockBackend
 
 ---
 
