@@ -21,7 +21,9 @@ No hardcoded integrations. No black boxes. Everything observable.
 ## Current State
 
 Working prototype. Core architecture implemented and validated end-to-end
-against Ollama Cloud (GLM-5). Zero clippy warnings, zero dead code.
+against Ollama Cloud. Zero clippy warnings, zero dead code.
+Model research in `docs/model-benchmarks-2026-03.md` — GLM-5 (default/code)
+and Kimi K2.5 (fast) selected based on speed, intelligence index, and tool calling benchmarks.
 
 ### What's built
 - Full task pipeline: triage → tool selection → code generation → context assembly → execution
@@ -37,7 +39,7 @@ against Ollama Cloud (GLM-5). Zero clippy warnings, zero dead code.
 - **Long-term memory** — vector-backed store for deeper patterns. Ollama Cloud doesn't
   support embeddings yet, so deferred. Working memory covers short-term facts
 - **Multiple providers** — only Ollama. OpenAI-compatible backend is a quick add when needed
-- **Tests** — zero test coverage
+- **Tests** — unit tests for core logic (parsers, state transitions, session). No integration tests
 
 ---
 
@@ -57,6 +59,9 @@ Context that isn't obvious from the code:
   It's reviewing code, so the code model is the right fit
 - **Test before save** — generated Lua is test-run in the sandbox before persisting to toolbox.
   Prevents broken tools from polluting the toolbox
+- **Janitor deletes unfixable tools** — after 3 failed fix attempts, the janitor escalates
+  (logged as event) and deletes the tool from the toolbox. Auto-generated tools are disposable;
+  they'll be regenerated fresh if needed again
 
 ---
 
