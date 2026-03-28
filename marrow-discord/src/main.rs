@@ -216,10 +216,20 @@ async fn run_task(
     })
     .await;
 
-    if let Err(e) =
-        memory_writer::process_interaction(description, &answer, memory_store, fast_backend).await
+    match memory_writer::process_interaction(description, &answer, memory_store, fast_backend).await
     {
-        eprintln!("[marrow-discord] memory writer error: {e}");
+        Ok(result) => {
+            for fact in &result.saved {
+                let _ = progress.send(format!("🧠 Remembered: {fact}"));
+            }
+            for fact in &result.updated {
+                let _ = progress.send(format!("🧠 Updated: {fact}"));
+            }
+            if result.deleted > 0 {
+                let _ = progress.send(format!("🧠 Forgot {} fact(s)", result.deleted));
+            }
+        }
+        Err(e) => eprintln!("[marrow-discord] memory writer error: {e}"),
     }
 
     Ok(serde_json::Value::String(answer))

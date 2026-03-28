@@ -54,12 +54,20 @@ struct WriterResponse {
     delete: Vec<String>,
 }
 
+/// Summary of what the memory writer did.
+#[derive(Debug, Default)]
+pub struct MemoryWriterResult {
+    pub saved: Vec<String>,
+    pub updated: Vec<String>,
+    pub deleted: usize,
+}
+
 pub async fn process_interaction(
     task_description: &str,
     response_text: &str,
     store: &MemoryStore,
     backend: &dyn ModelBackend,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<MemoryWriterResult, Box<dyn Error + Send + Sync>> {
     let existing = store.list()?;
 
     let existing_list = if existing.is_empty() {
@@ -80,24 +88,31 @@ pub async fn process_interaction(
     let model_response = backend.complete(prompt).await?;
     let actions = parse_writer_response(&model_response)?;
 
+    let mut result = MemoryWriterResult::default();
+
     for fact in &actions.save {
         let memory = Memory::new(fact, MemorySource::Auto);
         store.save(&memory)?;
+        result.saved.push(fact.clone());
     }
 
     for (id_str, new_fact) in &actions.update {
         if let Ok(id) = id_str.parse::<Uuid>() {
-            let _ = store.update(id, new_fact.clone());
+            if store.update(id, new_fact.clone()).is_ok() {
+                result.updated.push(new_fact.clone());
+            }
         }
     }
 
     for id_str in &actions.delete {
         if let Ok(id) = id_str.parse::<Uuid>() {
-            let _ = store.delete(id);
+            if store.delete(id).is_ok() {
+                result.deleted += 1;
+            }
         }
     }
 
-    Ok(())
+    Ok(result)
 }
 
 fn parse_writer_response(response: &str) -> Result<WriterResponse, Box<dyn Error + Send + Sync>> {

@@ -106,10 +106,14 @@ async fn run_task(
     .await;
 
     // Step 4: Post-task memory writer
-    if let Err(e) =
-        memory_writer::process_interaction(description, &answer, memory_store, fast_backend).await
+    match memory_writer::process_interaction(description, &answer, memory_store, fast_backend).await
     {
-        eprintln!("[marrow] memory writer error: {e}");
+        Ok(result) => {
+            for fact in &result.saved {
+                eprintln!("[marrow] remembered: {fact}");
+            }
+        }
+        Err(e) => eprintln!("[marrow] memory writer error: {e}"),
     }
 
     Ok(serde_json::Value::String(answer))
