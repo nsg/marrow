@@ -2,6 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{CompletionResult, ModelBackend};
+use crate::session::Message;
 
 #[derive(Debug, Serialize)]
 struct ChatRequest {
@@ -10,15 +11,14 @@ struct ChatRequest {
     stream: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Message {
-    role: String,
-    content: String,
+#[derive(Debug, Deserialize)]
+struct ChatResponse {
+    message: ChatMessage,
 }
 
 #[derive(Debug, Deserialize)]
-struct ChatResponse {
-    message: Message,
+struct ChatMessage {
+    content: String,
 }
 
 pub struct OllamaBackend {
@@ -50,38 +50,47 @@ impl OllamaBackend {
         }
         backend
     }
+
+    async fn send_chat(
+        &self,
+        messages: Vec<Message>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
+
+        let body = ChatRequest {
+            model: self.model.clone(),
+            messages,
+            stream: false,
+        };
+
+        let mut req = self.client.post(&url).json(&body);
+
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+
+        let resp = req.send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("ollama returned {status}: {text}").into());
+        }
+
+        let chat_resp: ChatResponse = resp.json().await?;
+        Ok(chat_resp.message.content)
+    }
 }
 
 impl ModelBackend for OllamaBackend {
     fn complete(&self, prompt: String) -> CompletionResult<'_> {
         Box::pin(async move {
-            let url = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
-
-            let body = ChatRequest {
-                model: self.model.clone(),
-                messages: vec![Message {
-                    role: "user".to_string(),
-                    content: prompt,
-                }],
-                stream: false,
-            };
-
-            let mut req = self.client.post(&url).json(&body);
-
-            if let Some(key) = &self.api_key {
-                req = req.bearer_auth(key);
-            }
-
-            let resp = req.send().await?;
-
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                return Err(format!("ollama returned {status}: {text}").into());
-            }
-
-            let chat_resp: ChatResponse = resp.json().await?;
-            Ok(chat_resp.message.content)
+            let messages = vec![Message::user(prompt)];
+            self.send_chat(messages).await
         })
+    }
+
+    fn complete_chat(&self, messages: Vec<Message>) -> CompletionResult<'_> {
+        Box::pin(async move { self.send_chat(messages).await })
     }
 }

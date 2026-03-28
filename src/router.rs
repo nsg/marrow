@@ -7,6 +7,7 @@ use serde::Deserialize;
 use crate::backends::ollama::OllamaBackend;
 use crate::executor::{Context, Executor};
 use crate::model::ModelBackend;
+use crate::session::Message;
 use crate::task::Task;
 
 #[derive(Debug, Deserialize)]
@@ -105,12 +106,23 @@ impl Executor for ModelRouter {
         &self,
         task: &Task,
         context: &Context,
+        history: Option<&[Message]>,
     ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
         let backend = self.backend(&task.model_role)?;
 
-        let prompt = format!("Task: {}\nContext: {}", task.description, context.data);
+        let system_context = format!("Context: {}", context.data);
 
-        let response = backend.complete(prompt).await?;
+        let response = if let Some(msgs) = history {
+            // Build full message list: system context + history + current user message
+            let mut messages = vec![Message::system(system_context)];
+            messages.extend(msgs.iter().cloned());
+            messages.push(Message::user(&task.description));
+            backend.complete_chat(messages).await?
+        } else {
+            let prompt = format!("{system_context}\n\nTask: {}", task.description);
+            backend.complete(prompt).await?
+        };
+
         Ok(serde_json::Value::String(response))
     }
 }

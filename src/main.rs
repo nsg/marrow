@@ -13,6 +13,7 @@ mod registry;
 mod router;
 mod sandbox;
 mod sandbox_host;
+mod session;
 mod task;
 mod tool_selection;
 mod toolbox;
@@ -29,6 +30,7 @@ use events::{Event, EventLog};
 use memory::MemoryStore;
 use registry::TaskRegistry;
 use router::{ModelRouter, RouterConfig};
+use session::{ChatSession, Message};
 use task::Task;
 use toolbox::Toolbox;
 
@@ -65,6 +67,7 @@ struct Cli {
     log: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_task(
     description: &str,
     role: &str,
@@ -74,6 +77,7 @@ async fn run_task(
     memory_store: &MemoryStore,
     client: Arc<Client>,
     log: &EventLog,
+    session: Option<&ChatSession>,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let mut task = Task::new(description);
     task.model_role = role.to_string();
@@ -141,7 +145,6 @@ async fn run_task(
 
     let mut context = assembler.assemble(description, &selected).await?;
 
-    // Merge memory context into assembled context
     if let Some(obj) = context.data.as_object_mut() {
         obj.insert("memories".to_string(), memory_context);
     }
@@ -152,9 +155,12 @@ async fn run_task(
     })
     .await;
 
-    // Step 6: Execute task with assembled context
+    // Step 6: Execute task with assembled context + session history
+    let history = session.map(|s| s.build_messages(None));
+    let history_slice = history.as_deref();
+
     let id = registry.create(task).await;
-    let result = registry.run(id, router, &context).await;
+    let result = registry.run(id, router, &context, history_slice).await;
 
     let status = if result.is_ok() {
         "succeeded"
@@ -218,6 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             &memory_store,
             client,
             &log,
+            None,
         )
         .await
         {
@@ -236,6 +243,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     } else {
         println!("marrow ready (role: {})", cli.role);
         println!("type 'quit' to exit\n");
+
+        let mut session = ChatSession::new();
+        let fast_backend = router
+            .backend("fast")
+            .or_else(|_| router.backend("default"))?;
 
         let stdin = io::stdin();
         loop {
@@ -265,14 +277,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 &memory_store,
                 client.clone(),
                 &log,
+                Some(&session),
             )
             .await
             {
                 Ok(output) => {
-                    if let Some(text) = output.as_str() {
-                        println!("\n{text}\n");
-                    } else {
-                        println!("\n{output}\n");
+                    let text = output.as_str().unwrap_or("").to_string();
+                    println!("\n{text}\n");
+
+                    // Append to session history
+                    session.append(Message::user(input));
+                    session.append(Message::assistant(&text));
+
+                    // Summarize if needed
+                    if session.needs_summarization()
+                        && let Err(e) = session.summarize(fast_backend).await
+                    {
+                        eprintln!("[marrow] summarization error: {e}");
                     }
                 }
                 Err(e) => eprintln!("\nerror: {e}\n"),

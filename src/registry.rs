@@ -4,6 +4,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::executor::{Context, Executor};
+use crate::session::Message;
 use crate::task::{InvalidTransition, Task, TaskStatus};
 
 #[derive(Debug, Clone)]
@@ -39,6 +40,7 @@ impl TaskRegistry {
         id: Uuid,
         executor: &impl Executor,
         context: &Context,
+        history: Option<&[Message]>,
     ) -> Result<serde_json::Value, RunError> {
         self.transition(id, TaskStatus::Running)
             .await
@@ -49,7 +51,7 @@ impl TaskRegistry {
             .await
             .ok_or(RunError::Transition(TransitionError::NotFound(id)))?;
 
-        match executor.execute(&task, context).await {
+        match executor.execute(&task, context, history).await {
             Ok(output) => {
                 let mut tasks = self.tasks.write().await;
                 let t = tasks.get_mut(&id).unwrap();

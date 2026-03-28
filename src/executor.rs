@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::future::Future;
 
+use crate::session::Message;
 use crate::task::Task;
 
 #[derive(Debug, Clone)]
@@ -25,5 +26,6 @@ pub trait Executor: Send + Sync {
         &self,
         task: &Task,
         context: &Context,
+        history: Option<&[Message]>,
     ) -> impl Future<Output = Result<serde_json::Value, Box<dyn Error + Send + Sync>>> + Send;
 }
