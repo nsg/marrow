@@ -1,5 +1,9 @@
 use std::error::Error;
+use std::sync::Arc;
 
+use reqwest::Client;
+
+use crate::context::LuaProvider;
 use crate::model::ModelBackend;
 use crate::toolbox::{ToolMeta, Toolbox};
 
@@ -46,11 +50,18 @@ pub async fn generate_provider(
     task_description: &str,
     backend: &dyn ModelBackend,
     toolbox: &Toolbox,
+    client: Arc<Client>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let prompt = build_codegen_prompt(task_description);
     let response = backend.complete(prompt).await?;
 
     let (name, description, lua_code) = parse_codegen_response(&response)?;
+
+    // Test-run the generated Lua before saving
+    let provider = LuaProvider::new(&name, &lua_code);
+    if let Err(e) = provider.execute(task_description, client).await {
+        return Err(format!("generated tool '{name}' failed test run: {e}").into());
+    }
 
     let meta = ToolMeta {
         name: name.clone(),

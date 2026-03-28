@@ -111,7 +111,7 @@ async fn run_task(
         let code_backend = router
             .backend("code")
             .or_else(|_| router.backend("default"))?;
-        match codegen::generate_provider(description, code_backend, toolbox).await {
+        match codegen::generate_provider(description, code_backend, toolbox, client.clone()).await {
             Ok(name) => {
                 log.emit(Event::ToolGenerated {
                     name: name.clone(),
