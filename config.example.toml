@@ -29,6 +29,7 @@ api_base = "https://ollama.com"
 # Used by marrow-discord. All discord settings live here.
 # [discord]
 # token = "your-bot-token"
+# channels = []        # channel IDs where the bot responds without @mention
 # toolbox = "toolbox"
 # memory = "memory"
 # log = "events.jsonl"

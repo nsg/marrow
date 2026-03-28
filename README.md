@@ -121,11 +121,19 @@ Add the `[discord]` section to your `config.toml`:
 token = "paste-your-bot-token-here"
 ```
 
-Optional fields (shown with defaults):
+By default the bot only responds when @mentioned or in DMs. To have it respond to every message in specific channels, add their channel IDs:
 
 ```toml
 [discord]
 token = "paste-your-bot-token-here"
+channels = [1234567890123456789]
+```
+
+To get a channel ID, enable **Developer Mode** in Discord settings (App Settings > Advanced), then right-click a channel and click **Copy Channel ID**.
+
+Other optional fields (shown with defaults):
+
+```toml
 toolbox = "toolbox"
 memory = "memory"
 log = "events.jsonl"

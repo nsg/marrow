@@ -18,6 +18,8 @@ pub struct DiscordConfig {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
+    pub channels: Vec<u64>,
+    #[serde(default)]
     pub toolbox: Option<String>,
     #[serde(default)]
     pub memory: Option<String>,

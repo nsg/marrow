@@ -50,6 +50,11 @@ impl TypeMapKey for EventLogKey {
     type Value = Arc<EventLog>;
 }
 
+struct ChannelsKey;
+impl TypeMapKey for ChannelsKey {
+    type Value = Arc<Vec<u64>>;
+}
+
 // ---------------------------------------------------------------------------
 // Event handler
 // ---------------------------------------------------------------------------
@@ -68,11 +73,16 @@ impl EventHandler for Handler {
             return;
         }
 
-        // Only respond when mentioned or in DMs
+        // Respond in DMs, when @mentioned, or in configured channels
         let is_dm = msg.guild_id.is_none();
         let is_mentioned = msg.mentions_me(&ctx.http).await.unwrap_or(false);
+        let is_watched_channel = {
+            let data = ctx.data.read().await;
+            let channels = data.get::<ChannelsKey>().unwrap();
+            channels.contains(&msg.channel_id.get())
+        };
 
-        if !is_dm && !is_mentioned {
+        if !is_dm && !is_mentioned && !is_watched_channel {
             return;
         }
 
@@ -268,6 +278,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .event_handler(Handler)
         .await?;
 
+    let channels = Arc::new(discord.channels.clone());
+
     // Store shared state
     {
         let mut data = discord_client.data.write().await;
@@ -277,6 +289,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         data.insert::<MemoryKey>(memory_store);
         data.insert::<HttpClientKey>(client);
         data.insert::<EventLogKey>(log);
+        data.insert::<ChannelsKey>(channels);
     }
 
     eprintln!("[marrow-discord] starting...");
