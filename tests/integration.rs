@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use marrow::context::{ContextAssembler, LuaProvider};
+use marrow::context::{ContextAssembler, LuaProvider, Stage};
 use marrow::events::{Event, EventLog};
 use marrow::executor::Context;
 use marrow::memory::{Memory, MemorySource, MemoryStore};
@@ -68,6 +68,18 @@ async fn noop_log() -> EventLog {
     EventLog::new(None, false).await.unwrap()
 }
 
+fn single_stage(tools: Vec<(&str, Vec<(&str, &str)>)>) -> Vec<Stage> {
+    let mut map = HashMap::new();
+    for (name, params) in tools {
+        let p: HashMap<String, String> = params
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        map.insert(name.to_string(), p);
+    }
+    vec![Stage { tools: map }]
+}
+
 // ---------------------------------------------------------------------------
 // Triage tests
 // ---------------------------------------------------------------------------
@@ -126,11 +138,11 @@ async fn tool_selection_empty_toolbox_returns_empty() {
     let result = tool_selection::select_tools("anything", &[], &backend, None)
         .await
         .unwrap();
-    assert!(result.tools.is_empty());
+    assert!(result.is_empty());
 }
 
 #[tokio::test]
-async fn tool_selection_picks_matching_tool() {
+async fn tool_selection_picks_matching_tool_staged() {
     let tools = vec![ToolMeta {
         name: "weather".to_string(),
         description: "Get weather for a location".to_string(),
@@ -139,14 +151,64 @@ async fn tool_selection_picks_matching_tool() {
     }];
 
     let backend = MockBackend::new(vec![
-        r#"{"tools": ["weather"], "params": {"LOCATION": "Tokyo"}}"#,
+        r#"{"stages": [{"tools": {"weather": {"LOCATION": "Tokyo"}}}]}"#,
     ]);
 
     let result = tool_selection::select_tools("weather in Tokyo", &tools, &backend, None)
         .await
         .unwrap();
-    assert_eq!(result.tools, vec!["weather"]);
-    assert_eq!(result.params.get("LOCATION").unwrap(), "Tokyo");
+    assert_eq!(result.stages.len(), 1);
+    assert!(result.stages[0].tools.contains_key("weather"));
+    assert_eq!(result.stages[0].tools["weather"]["LOCATION"], "Tokyo");
+}
+
+#[tokio::test]
+async fn tool_selection_multi_stage() {
+    let tools = vec![
+        ToolMeta {
+            name: "weather".to_string(),
+            description: "Get weather".to_string(),
+            provides: vec!["weather".to_string()],
+            validated: true,
+        },
+        ToolMeta {
+            name: "planner".to_string(),
+            description: "Plan activities".to_string(),
+            provides: vec!["planner".to_string()],
+            validated: true,
+        },
+    ];
+
+    let backend = MockBackend::new(vec![
+        r#"{"stages": [{"tools": {"weather": {"LOCATION": "Portland"}}}, {"tools": {"planner": {}}}]}"#,
+    ]);
+
+    let result = tool_selection::select_tools("plan my weekend", &tools, &backend, None)
+        .await
+        .unwrap();
+    assert_eq!(result.stages.len(), 2);
+    assert!(result.stages[0].tools.contains_key("weather"));
+    assert!(result.stages[1].tools.contains_key("planner"));
+}
+
+#[tokio::test]
+async fn tool_selection_legacy_format_compat() {
+    let tools = vec![ToolMeta {
+        name: "weather".to_string(),
+        description: "Get weather".to_string(),
+        provides: vec!["weather".to_string()],
+        validated: true,
+    }];
+
+    let backend = MockBackend::new(vec![
+        r#"{"tools": ["weather"], "params": {"LOCATION": "Tokyo"}}"#,
+    ]);
+
+    let result = tool_selection::select_tools("weather", &tools, &backend, None)
+        .await
+        .unwrap();
+    assert_eq!(result.stages.len(), 1);
+    assert_eq!(result.stages[0].tools["weather"]["LOCATION"], "Tokyo");
 }
 
 #[tokio::test]
@@ -158,12 +220,41 @@ async fn tool_selection_returns_empty_when_no_match() {
         validated: true,
     }];
 
-    let backend = MockBackend::new(vec![r#"{"tools": [], "params": {}}"#]);
+    let backend = MockBackend::new(vec![r#"{"stages": []}"#]);
 
     let result = tool_selection::select_tools("tell me a joke", &tools, &backend, None)
         .await
         .unwrap();
-    assert!(result.tools.is_empty());
+    assert!(result.is_empty());
+}
+
+#[tokio::test]
+async fn tool_selection_all_tool_names() {
+    let tools = vec![
+        ToolMeta {
+            name: "a".to_string(),
+            description: "A".to_string(),
+            provides: vec![],
+            validated: true,
+        },
+        ToolMeta {
+            name: "b".to_string(),
+            description: "B".to_string(),
+            provides: vec![],
+            validated: true,
+        },
+    ];
+
+    let backend = MockBackend::new(vec![
+        r#"{"stages": [{"tools": {"a": {}}}, {"tools": {"b": {}}}]}"#,
+    ]);
+
+    let result = tool_selection::select_tools("test", &tools, &backend, None)
+        .await
+        .unwrap();
+    let mut names = result.all_tool_names();
+    names.sort();
+    assert_eq!(names, vec!["a", "b"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -179,24 +270,50 @@ async fn lua_provider_returns_table() {
 }
 
 #[tokio::test]
-async fn lua_provider_receives_params() {
-    let provider = LuaProvider::new("test", "return { city = LOCATION }");
+async fn lua_provider_receives_params_table() {
+    let provider = LuaProvider::new("test", r#"return { city = PARAMS["LOCATION"] }"#);
     let client = Arc::new(Client::new());
     let mut params = HashMap::new();
     params.insert("LOCATION".to_string(), "Paris".to_string());
     let result = provider
-        .execute_with_params("test", client, &params)
+        .execute_with_params("test", client, &params, &HashMap::new())
         .await
         .unwrap();
     assert_eq!(result["city"], "Paris");
 }
 
 #[tokio::test]
-async fn lua_provider_receives_task_description() {
-    let provider = LuaProvider::new("test", "return { desc = TASK_DESCRIPTION }");
+async fn lua_provider_receives_task_table() {
+    let provider = LuaProvider::new("test", "return { desc = TASK.description }");
     let client = Arc::new(Client::new());
     let result = provider.execute("my task", client).await.unwrap();
     assert_eq!(result["desc"], "my task");
+}
+
+#[tokio::test]
+async fn lua_provider_receives_results_table() {
+    let provider = LuaProvider::new(
+        "test",
+        r#"local w = json_parse(RESULTS["weather"]); return { temp = w.temp }"#,
+    );
+    let client = Arc::new(Client::new());
+    let mut results = HashMap::new();
+    results.insert("weather".to_string(), r#"{"temp": 22}"#.to_string());
+    let result = provider
+        .execute_with_params("test", client, &HashMap::new(), &results)
+        .await
+        .unwrap();
+    assert_eq!(result["temp"], 22);
+}
+
+#[tokio::test]
+async fn lua_provider_empty_results_table() {
+    // RESULTS should be an empty table when no prior stages
+    let provider = LuaProvider::new("test", "return { count = #RESULTS }");
+    let client = Arc::new(Client::new());
+    let result = provider.execute("test", client).await.unwrap();
+    // # on a table with string keys is 0
+    assert_eq!(result["count"], 0);
 }
 
 #[tokio::test]
@@ -230,8 +347,8 @@ async fn context_assembler_collects_providers() {
     assembler.add_provider(LuaProvider::new("a", "return { x = 1 }"));
     assembler.add_provider(LuaProvider::new("b", "return { y = 2 }"));
 
-    let names = vec!["a".to_string(), "b".to_string()];
-    let ctx = assembler.assemble("test", &names).await.unwrap();
+    let stages = single_stage(vec![("a", vec![]), ("b", vec![])]);
+    let ctx = assembler.assemble("test", &stages).await.unwrap();
 
     assert_eq!(ctx.data["a"]["x"], 1);
     assert_eq!(ctx.data["b"]["y"], 2);
@@ -244,26 +361,72 @@ async fn context_assembler_handles_failing_provider() {
     assembler.add_provider(LuaProvider::new("good", "return { ok = true }"));
     assembler.add_provider(LuaProvider::new("bad", "error('boom')"));
 
-    let names = vec!["good".to_string(), "bad".to_string()];
-    let ctx = assembler.assemble("test", &names).await.unwrap();
+    let stages = single_stage(vec![("good", vec![]), ("bad", vec![])]);
+    let ctx = assembler.assemble("test", &stages).await.unwrap();
 
     assert_eq!(ctx.data["good"]["ok"], true);
     assert!(ctx.data["bad"]["error"].as_str().unwrap().contains("boom"));
 }
 
 #[tokio::test]
-async fn context_assembler_passes_params_to_providers() {
+async fn context_assembler_per_tool_params() {
     let client = Arc::new(Client::new());
     let mut assembler = ContextAssembler::new(client);
-    assembler.add_provider(LuaProvider::new("loc", "return { city = LOCATION }"));
+    assembler.add_provider(LuaProvider::new("a", r#"return { loc = PARAMS["LOCATION"] }"#));
+    assembler.add_provider(LuaProvider::new("b", r#"return { tz = PARAMS["TIMEZONE"] }"#));
 
-    let mut params = HashMap::new();
-    params.insert("LOCATION".to_string(), "Berlin".to_string());
-    assembler.set_params(params);
+    let mut tools = HashMap::new();
+    let mut a_params = HashMap::new();
+    a_params.insert("LOCATION".to_string(), "Berlin".to_string());
+    tools.insert("a".to_string(), a_params);
 
-    let names = vec!["loc".to_string()];
-    let ctx = assembler.assemble("test", &names).await.unwrap();
-    assert_eq!(ctx.data["loc"]["city"], "Berlin");
+    let mut b_params = HashMap::new();
+    b_params.insert("TIMEZONE".to_string(), "CET".to_string());
+    tools.insert("b".to_string(), b_params);
+
+    let stages = vec![Stage { tools }];
+    let ctx = assembler.assemble("test", &stages).await.unwrap();
+
+    assert_eq!(ctx.data["a"]["loc"], "Berlin");
+    assert_eq!(ctx.data["b"]["tz"], "CET");
+}
+
+#[tokio::test]
+async fn context_assembler_staged_results_passed() {
+    let client = Arc::new(Client::new());
+    let mut assembler = ContextAssembler::new(client);
+
+    // Stage 1: weather returns data
+    assembler.add_provider(LuaProvider::new(
+        "weather",
+        r#"return { temp = 22, condition = "sunny" }"#,
+    ));
+
+    // Stage 2: planner reads weather result
+    assembler.add_provider(LuaProvider::new(
+        "planner",
+        r#"local w = json_parse(RESULTS["weather"]); return { plan = "outdoor, " .. w.condition }"#,
+    ));
+
+    let stage1 = Stage {
+        tools: {
+            let mut m = HashMap::new();
+            m.insert("weather".to_string(), HashMap::new());
+            m
+        },
+    };
+    let stage2 = Stage {
+        tools: {
+            let mut m = HashMap::new();
+            m.insert("planner".to_string(), HashMap::new());
+            m
+        },
+    };
+
+    let ctx = assembler.assemble("plan my weekend", &[stage1, stage2]).await.unwrap();
+
+    assert_eq!(ctx.data["weather"]["temp"], 22);
+    assert_eq!(ctx.data["planner"]["plan"], "outdoor, sunny");
 }
 
 // ---------------------------------------------------------------------------
@@ -590,7 +753,6 @@ async fn session_summarization() {
     let backend = MockBackend::new(vec!["User discussed various topics about Rust."]);
 
     let mut session = ChatSession::new();
-    // Add enough messages to trigger summarization (threshold is 20)
     for i in 0..22 {
         session.append(Message::user(format!("message {i}")));
     }
@@ -598,16 +760,14 @@ async fn session_summarization() {
     assert!(session.needs_summarization());
     session.summarize(&backend).await.unwrap();
 
-    // After summarization, recent messages are kept, old ones summarized
     let msgs = session.build_messages(None);
-    // Should have a system message with summary + recent messages
     assert!(msgs.len() < 22);
     assert_eq!(msgs[0].role, "system");
     assert!(msgs[0].content.contains("Previous conversation summary"));
 }
 
 // ---------------------------------------------------------------------------
-// Janitor tests (process_tool via toolbox + mock)
+// Janitor tests
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -624,7 +784,6 @@ async fn janitor_validates_passing_tool() {
     };
     toolbox.save_tool(&meta, "return { ok = true }").unwrap();
 
-    // Mock returns PASS review
     let backend = MockBackend::new(vec![
         "```verdict\nPASS\n```\n```issues\nnone\n```\n```suggestions\nnone\n```",
     ]);
@@ -651,7 +810,6 @@ async fn janitor_regenerates_failing_tool() {
     };
     toolbox.save_tool(&meta, "return {}").unwrap();
 
-    // First call: FAIL review, second: regeneration, third: PASS review
     let backend = MockBackend::new(vec![
         "```verdict\nFAIL\n```\n```issues\n- missing error handling\n```\n```suggestions\n- add checks\n```",
         "```name\nbad_tool\n```\n```description\nFixed tool\n```\n```lua\nreturn { ok = true }\n```",
@@ -680,20 +838,11 @@ async fn janitor_deletes_after_max_failures() {
     };
     toolbox.save_tool(&meta, "return {}").unwrap();
 
-    // 3 rounds of FAIL + regenerate, final FAIL triggers delete
-    // Attempt 1: fail review → regenerate
-    // Attempt 2: fail review → regenerate
-    // Attempt 3: fail review → escalate + delete
     let backend = MockBackend::new(vec![
-        // Attempt 1: review fails
         "```verdict\nFAIL\n```\n```issues\n- broken\n```\n```suggestions\n- fix it\n```",
-        // Attempt 1: regenerate
         "```name\nhopeless\n```\n```description\nStill broken\n```\n```lua\nreturn {}\n```",
-        // Attempt 2: review fails
         "```verdict\nFAIL\n```\n```issues\n- still broken\n```\n```suggestions\n- try again\n```",
-        // Attempt 2: regenerate
         "```name\nhopeless\n```\n```description\nStill broken\n```\n```lua\nreturn {}\n```",
-        // Attempt 3: review fails → escalate + delete
         "```verdict\nFAIL\n```\n```issues\n- hopelessly broken\n```\n```suggestions\n- give up\n```",
     ]);
 
@@ -701,7 +850,6 @@ async fn janitor_deletes_after_max_failures() {
         .await
         .unwrap();
 
-    // Tool should be deleted
     assert!(toolbox.list_tools().unwrap().is_empty());
 }
 
@@ -722,14 +870,12 @@ async fn event_log_writes_to_file() {
     })
     .await;
 
-    // emit() awaits the write, but tokio file I/O may buffer. Sync via a second emit.
     log.emit(Event::TaskExecuted {
         task_id: "test-123".to_string(),
         status: "succeeded".to_string(),
     })
     .await;
 
-    // Read the file — both events should be flushed since we awaited them
     let content = tokio::fs::read_to_string(&log_path).await.unwrap();
     assert!(content.contains("test-123"));
     assert!(content.contains("task_created"));
@@ -743,11 +889,10 @@ async fn event_log_no_file_doesnt_panic() {
         status: "succeeded".to_string(),
     })
     .await;
-    // Just verify no panic
 }
 
 // ---------------------------------------------------------------------------
-// Codegen parsing tests (via the public interface)
+// Codegen tests
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -756,7 +901,6 @@ async fn codegen_generates_and_saves_tool() {
     let toolbox = Toolbox::new(dir.path());
     let client = Arc::new(Client::new());
 
-    // Mock returns well-formed codegen response with a Lua script that doesn't need HTTP
     let backend = MockBackend::new(vec![
         "```name\ngreeter\n```\n```description\nReturns a greeting\n```\n```lua\nreturn { greeting = \"hello world\" }\n```",
     ]);
@@ -769,7 +913,7 @@ async fn codegen_generates_and_saves_tool() {
 
     let meta = toolbox.load_meta("greeter").unwrap();
     assert_eq!(meta.description, "Returns a greeting");
-    assert!(!meta.validated); // Janitor hasn't reviewed yet
+    assert!(!meta.validated);
 
     let source = toolbox.load_source("greeter").unwrap();
     assert!(source.contains("hello world"));
@@ -781,7 +925,6 @@ async fn codegen_rejects_broken_lua() {
     let toolbox = Toolbox::new(dir.path());
     let client = Arc::new(Client::new());
 
-    // Mock returns Lua that will error at runtime
     let backend = MockBackend::new(vec![
         "```name\nbroken\n```\n```description\nBroken tool\n```\n```lua\nerror('intentional failure')\n```",
     ]);
@@ -790,7 +933,6 @@ async fn codegen_rejects_broken_lua() {
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("failed test run"));
 
-    // Tool should NOT be saved
     assert!(toolbox.list_tools().unwrap().is_empty());
 }
 
@@ -800,27 +942,17 @@ async fn codegen_rejects_broken_lua() {
 
 #[tokio::test]
 async fn pipeline_conversational_no_tools() {
-    let tb_dir = temp_dir("marrow_tb");
     let mem_dir = temp_dir("marrow_mem");
-    let _toolbox = Toolbox::new(tb_dir.path());
     let memory_store = MemoryStore::new(mem_dir.path());
-    let _log = noop_log().await;
     let registry = TaskRegistry::new();
     let client = Arc::new(Client::new());
 
-    // Pipeline calls:
-    // 1. memory_provider::select_memories → no memories, skips backend call
-    // 2. triage::needs_external_data → "NO"
-    // 3. (skip tool selection/codegen)
-    // 4. registry.run → executor.execute (complete_chat) → "Hello! How are you?"
-    // 5. memory_writer::process_interaction → complete → empty actions
     let backend = MockBackend::new(vec![
         "NO",                                                // triage
         "Hello! How are you?",                               // task execution
         r#"{"save": [], "update": {}, "delete": []}"#,      // memory writer
     ]);
 
-    // Simulate the pipeline manually (since run_task is in main.rs binary)
     let fast = &backend as &dyn ModelBackend;
     let memories = memory_provider::select_memories("hi there", &memory_store, fast)
         .await
@@ -832,7 +964,7 @@ async fn pipeline_conversational_no_tools() {
         .unwrap();
     assert!(!needs_tools);
 
-    // No tools → empty context
+    // No tools → empty stages
     let assembler = ContextAssembler::new(client);
     let mut context = assembler.assemble("hi there", &[]).await.unwrap();
 
@@ -845,8 +977,6 @@ async fn pipeline_conversational_no_tools() {
     task.model_role = "default".to_string();
     let id = registry.create(task).await;
 
-    // Use a separate mock for execution since the backend trait doesn't know roles
-    // In real code, ModelRouter dispatches. Here we directly test with the mock
     use marrow::executor::Executor;
     struct DirectExecutor<'a>(&'a dyn ModelBackend);
     impl Executor for DirectExecutor<'_> {
@@ -873,7 +1003,6 @@ async fn pipeline_conversational_no_tools() {
     let result = registry.run(id, &executor, &context, None).await.unwrap();
     assert_eq!(result.as_str().unwrap(), "Hello! How are you?");
 
-    // Memory writer
     memory_writer::process_interaction("hi there", "Hello! How are you?", &memory_store, fast)
         .await
         .unwrap();
@@ -893,7 +1022,6 @@ async fn pipeline_with_existing_tool() {
     let memory_store = MemoryStore::new(mem_dir.path());
     let client = Arc::new(Client::new());
 
-    // Pre-populate toolbox with a tool that returns static data
     let meta = ToolMeta {
         name: "time_lookup".to_string(),
         description: "Get current time for a timezone".to_string(),
@@ -904,18 +1032,11 @@ async fn pipeline_with_existing_tool() {
         .save_tool(&meta, r#"return { time = "15:30 UTC" }"#)
         .unwrap();
 
-    // Pipeline calls:
-    // 1. memory selection → empty store, no backend call
-    // 2. triage → YES
-    // 3. tool selection → picks time_lookup with TIMEZONE param
-    // 4. context assembly → executes Lua
-    // 5. execution → model answer
-    // 6. memory writer → save timezone preference
     let backend = MockBackend::new(vec![
-        "YES",                                                            // triage
-        r#"{"tools": ["time_lookup"], "params": {"TIMEZONE": "UTC"}}"#,   // tool selection
-        "The time is 15:30 UTC.",                                         // execution
-        r#"{"save": ["User uses UTC timezone"], "update": {}, "delete": []}"#, // memory writer
+        "YES",                                                                            // triage
+        r#"{"stages": [{"tools": {"time_lookup": {"TIMEZONE": "UTC"}}}]}"#,               // tool selection
+        "The time is 15:30 UTC.",                                                         // execution
+        r#"{"save": ["User uses UTC timezone"], "update": {}, "delete": []}"#,            // memory writer
     ]);
 
     let fast = &backend as &dyn ModelBackend;
@@ -933,16 +1054,18 @@ async fn pipeline_with_existing_tool() {
     let selection = tool_selection::select_tools("what time is it?", &available, fast, None)
         .await
         .unwrap();
-    assert_eq!(selection.tools, vec!["time_lookup"]);
+    assert_eq!(selection.stages.len(), 1);
+    assert!(selection.stages[0].tools.contains_key("time_lookup"));
 
-    // Context assembly
+    // Context assembly with stages
     let mut assembler = ContextAssembler::new(client);
-    assembler.set_params(selection.params);
-    let provider = toolbox.load_provider("time_lookup").unwrap();
-    assembler.add_provider(provider);
+    for name in selection.all_tool_names() {
+        let provider = toolbox.load_provider(&name).unwrap();
+        assembler.add_provider(provider);
+    }
 
     let mut context = assembler
-        .assemble("what time is it?", &selection.tools)
+        .assemble("what time is it?", &selection.stages)
         .await
         .unwrap();
     assert_eq!(context.data["time_lookup"]["time"], "15:30 UTC");
@@ -952,14 +1075,12 @@ async fn pipeline_with_existing_tool() {
         obj.insert("memories".to_string(), memory_context);
     }
 
-    // Execute (using mock as direct backend)
     let response = fast
         .complete(format!("Context: {}\n\nTask: what time is it?", context.data))
         .await
         .unwrap();
     assert_eq!(response, "The time is 15:30 UTC.");
 
-    // Memory writer saves preference
     memory_writer::process_interaction("what time is it?", &response, &memory_store, fast)
         .await
         .unwrap();
@@ -967,4 +1088,78 @@ async fn pipeline_with_existing_tool() {
     let saved = memory_store.list().unwrap();
     assert_eq!(saved.len(), 1);
     assert_eq!(saved[0].fact, "User uses UTC timezone");
+}
+
+// ---------------------------------------------------------------------------
+// Full pipeline: multi-stage tool composition
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pipeline_multi_stage_composition() {
+    let tb_dir = temp_dir("marrow_tb");
+    let toolbox = Toolbox::new(tb_dir.path());
+    let client = Arc::new(Client::new());
+
+    // Stage 1 tool: returns weather data
+    let weather_meta = ToolMeta {
+        name: "weather".to_string(),
+        description: "Get weather for a location".to_string(),
+        provides: vec!["weather".to_string()],
+        validated: true,
+    };
+    toolbox
+        .save_tool(
+            &weather_meta,
+            r#"return { temp = 25, condition = "sunny", location = PARAMS["LOCATION"] }"#,
+        )
+        .unwrap();
+
+    // Stage 2 tool: reads weather result to plan activities
+    let planner_meta = ToolMeta {
+        name: "planner".to_string(),
+        description: "Plan activities based on context".to_string(),
+        provides: vec!["planner".to_string()],
+        validated: true,
+    };
+    toolbox
+        .save_tool(
+            &planner_meta,
+            r#"
+            local w = json_parse(RESULTS["weather"])
+            if w.condition == "sunny" then
+                return { activity = "go to the park in " .. w.location }
+            else
+                return { activity = "stay indoors" }
+            end
+            "#,
+        )
+        .unwrap();
+
+    // Build stages
+    let mut stage1_tools = HashMap::new();
+    let mut weather_params = HashMap::new();
+    weather_params.insert("LOCATION".to_string(), "Portland".to_string());
+    stage1_tools.insert("weather".to_string(), weather_params);
+
+    let mut stage2_tools = HashMap::new();
+    stage2_tools.insert("planner".to_string(), HashMap::new());
+
+    let stages = vec![
+        Stage { tools: stage1_tools },
+        Stage { tools: stage2_tools },
+    ];
+
+    let mut assembler = ContextAssembler::new(client);
+    for name in ["weather", "planner"] {
+        assembler.add_provider(toolbox.load_provider(name).unwrap());
+    }
+
+    let ctx = assembler.assemble("plan my weekend", &stages).await.unwrap();
+
+    // Stage 1 output
+    assert_eq!(ctx.data["weather"]["temp"], 25);
+    assert_eq!(ctx.data["weather"]["location"], "Portland");
+
+    // Stage 2 used stage 1's output
+    assert_eq!(ctx.data["planner"]["activity"], "go to the park in Portland");
 }

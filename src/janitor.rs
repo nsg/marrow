@@ -27,6 +27,11 @@ Available host functions in the sandbox:
 - json_encode(table) -> string
 - log(message) -> nil
 
+Global tables available:
+- TASK.description (string): the user's task description
+- PARAMS (table): per-tool parameters (e.g. PARAMS["LOCATION"])
+- RESULTS (table): JSON string outputs from tools in prior stages
+
 Review criteria:
 1. Does the code actually do what the description claims?
 2. Is the tool reusable/generic, or does it have hardcoded values that contradict a generic description? (e.g., description says "any location" but code hardcodes "London")
@@ -69,14 +74,17 @@ Available host functions in the sandbox:
 - json_encode(table) -> string
 - log(message) -> nil
 
-Global variable available:
-- TASK_DESCRIPTION (string): the user's task description
+Global tables available:
+- TASK.description (string): the user's task description
+- PARAMS (table): per-tool parameters (e.g. PARAMS["LOCATION"])
+- RESULTS (table): JSON string outputs from tools in prior stages
 
 Rules:
 - Return a Lua table with the context data
 - Fix ALL issues mentioned above
+- Use PARAMS for input values, not hardcoded values
 - If the description is too generic for the code, update the description to match
-- If the code is too specific, make it generic (e.g., use TASK_DESCRIPTION to extract parameters)
+- If the code is too specific, make it generic (e.g., use PARAMS for variable data)
 - Keep it simple and focused
 
 Respond in this exact format:

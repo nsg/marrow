@@ -16,11 +16,14 @@ The sandbox has these host functions available:
 - json_encode(table) -> string
 - log(message) -> nil
 
-Global variable available:
-- TASK_DESCRIPTION (string): the user's task description
+Global tables available:
+- TASK.description (string): the user's task description
+- PARAMS (table): per-tool parameters set by the orchestrator (e.g. PARAMS["LOCATION"])
+- RESULTS (table): JSON string outputs from tools in prior stages (e.g. json_parse(RESULTS["weather"]))
 
 Rules:
 - Return a Lua table with the context data
+- Use PARAMS for input values (location, timezone, date, etc.)
 - Use http_get/http_post for external API calls
 - Use json_parse to parse JSON responses
 - Do NOT use io, os, require, dofile, loadfile, or debug

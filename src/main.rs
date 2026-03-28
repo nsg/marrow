@@ -91,22 +91,21 @@ async fn run_task(
         triage::needs_external_data(description, fast_backend, history_ref, &memories).await?;
 
     // Step 3: Tool selection + generation (only if triage says yes)
-    let mut params = std::collections::HashMap::new();
-    let selected = if needs_tools {
+    let selection = if needs_tools {
         let available_tools = toolbox.list_tools().unwrap_or_default();
-        let selection =
+        let mut selection =
             tool_selection::select_tools(description, &available_tools, fast_backend, history_ref)
                 .await?;
 
-        params = selection.params;
+        let tool_names = selection.all_tool_names();
 
         log.emit(Event::ToolSelected {
             task_id: task_id.clone(),
-            tools: selection.tools.clone(),
+            tools: tool_names.clone(),
         })
         .await;
 
-        if selection.tools.is_empty() && !description.trim().is_empty() {
+        if selection.is_empty() && !description.trim().is_empty() {
             let code_backend = router
                 .backend("code")
                 .or_else(|_| router.backend("default"))?;
@@ -119,31 +118,35 @@ async fn run_task(
                         description: description.to_string(),
                     })
                     .await;
-                    vec![name]
+                    // Wrap generated tool in a single stage with no params
+                    use marrow::context::Stage;
+                    let mut tools = std::collections::HashMap::new();
+                    tools.insert(name, std::collections::HashMap::new());
+                    selection.stages = vec![Stage { tools }];
                 }
                 Err(e) => {
                     eprintln!("[marrow] code generation failed: {e}");
-                    Vec::new()
                 }
             }
-        } else {
-            selection.tools
         }
+
+        selection
     } else {
-        Vec::new()
+        tool_selection::SelectionResult { stages: Vec::new() }
     };
 
-    // Step 4: Assemble context from selected providers + memories
+    let all_tools = selection.all_tool_names();
+
+    // Step 4: Assemble context from selected providers (staged execution)
     let mut assembler = ContextAssembler::new(client);
-    assembler.set_params(params);
-    for name in &selected {
+    for name in &all_tools {
         match toolbox.load_provider(name) {
             Ok(provider) => assembler.add_provider(provider),
             Err(e) => eprintln!("[marrow] failed to load provider '{name}': {e}"),
         }
     }
 
-    let mut context = assembler.assemble(description, &selected).await?;
+    let mut context = assembler.assemble(description, &selection.stages).await?;
 
     if let Some(obj) = context.data.as_object_mut() {
         obj.insert("memories".to_string(), memory_context);
@@ -151,7 +154,7 @@ async fn run_task(
 
     log.emit(Event::ContextAssembled {
         task_id: task_id.clone(),
-        providers: selected,
+        providers: all_tools,
     })
     .await;
 
