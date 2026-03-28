@@ -83,14 +83,19 @@ Marrow connects to Discord as a bot that responds to @mentions and DMs. Setup ta
 
 1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**
 2. Name it (e.g. "Marrow") and click **Create**
-3. Go to **Bot** in the left sidebar
 
-You need to enable one privileged intent and grab your token:
+**Make the bot private** (optional but recommended for personal use):
 
-- Scroll to **Privileged Gateway Intents** and turn on **Message Content Intent** — this is required, without it the bot receives empty messages
-- Leave Presence Intent and Server Members Intent off (not needed)
-- Turn off **Public Bot** so only you can invite it to servers
-- Click **Reset Token** and copy the token. Despite the name, this generates your first token — you only see it once, so save it now
+3. Go to **Installation** in the left sidebar
+4. Set the Install Link to **None** and save
+5. Go to **Bot** in the left sidebar and uncheck **Public Bot**
+
+   You have to disable the install link first — otherwise Discord blocks it with a confusing "Cannot have install fields on a private application" error. With Public Bot off, only you can add the bot to servers.
+
+**Enable intents and grab your token:**
+
+6. Still on the **Bot** page, scroll to **Privileged Gateway Intents** and turn on **Message Content Intent** — this is required, without it the bot receives empty messages. Leave the other two intents off (not needed)
+7. Click **Reset Token** and copy the token. Despite the name, this generates your first token — you only see it once, so save it now
 
 > Your bot token is a secret. Do not commit it to version control or share it in chat.
 
