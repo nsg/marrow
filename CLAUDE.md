@@ -2,96 +2,84 @@
 
 ## Project Overview
 
-A lean, open source agent framework for personal and small business workflow automation.
-Model-agnostic, provider-agnostic, and integration-agnostic by design. No hardcoded
-integrations. No black boxes. Everything observable.
-
-The system monitors inputs (calendar, communications, tasks, etc.), understands user intent
-through conversation, dynamically generates the tools it needs to act, and self-heals when
-things break.
+Marrow — a lean, open source agent framework for personal and small business
+workflow automation. Model-agnostic, provider-agnostic, integration-agnostic.
+No hardcoded integrations. No black boxes. Everything observable.
 
 ---
 
 ## Core Philosophy
 
-- **No hardcoded integrations — ever.** All connectors and tools are generated dynamically
-  by the model at runtime. The system ships with zero provider-specific code.
-- **Lean, task-specific context.** Context is assembled per task from only what that task
-  requires. No passive context accumulation. No "context rot."
-- **No black boxes.** Every action, correction, and decision is visible to the user.
-  Detail is progressive — summary by default, full detail on request.
-- **Self-healing.** A background janitor process monitors running tools, catches failures,
-  attempts automatic repair, and escalates clearly when it cannot fix something.
-- **Model-agnostic.** The system routes tasks to the most appropriate model. Different
-  models handle different responsibilities. No lock-in to any single provider.
+- **No hardcoded integrations — ever.** All connectors are generated at runtime.
+- **Lean, task-specific context.** No passive accumulation. No "context rot."
+- **No black boxes.** Progressive detail — summary by default, full on request.
+- **Self-healing.** Fix it silently, or stop and tell the user clearly.
+- **Model-agnostic.** No lock-in to any single provider.
 
 ---
 
-## Architecture
+## Current State
 
-### 1. Orchestration Layer
-- Manages task lifecycle: creation, context assembly, execution, monitoring
-- Routes tasks to the appropriate model and tool
-- Keeps tasks isolated — each task only sees what it needs
-- Maintains a task registry with status, context definition, and tool references
+Working prototype. Core architecture implemented and validated end-to-end
+against Ollama Cloud (GLM-5). Zero clippy warnings, zero dead code.
 
-### 2. Context Assembly
-- Context is constructed dynamically per task, not accumulated passively
-- Two types of context:
-  - **Ephemeral:** assembled fresh for each task execution
-  - **Persistent:** structured, queryable memory (user preferences, learned patterns)
-- The model determines what context a task needs based on the task description
-- Users can review and adjust context scope via plain language
+### What's built
+- Full task pipeline: triage → tool selection → code generation → context assembly → execution
+- Lua sandbox with Rust host functions for all external access
+- Janitor (async background review, regeneration, escalation after 3 attempts)
+- Working memory (JSON files, model-selected per task, auto-saved post-interaction)
+- Conversation history with automatic summarization
+- Structured JSONL event logging with `--verbose` progressive detail
+- Ollama backend (local + cloud)
 
-### 3. Tool Generation Layer *(already prototyped)*
-- When a workflow requires an integration or capability, the model writes the tool
-- Tools are sandboxed with strict limits on IO, system calls, and execution time
-- Generated tools are stored, versioned, and reusable across tasks
-- No tool is trusted until the janitor has validated it
-
-### 4. Janitor (Self-Healing Monitor)
-- Background process that runs continuously
-- Responsibilities:
-  - Validate newly generated tools before they run in production
-  - Monitor running tools for errors, unexpected outputs, and failures
-  - Attempt automatic repair when a tool breaks
-  - Escalate to the user in plain language when repair is not possible
-- **Two modes only:** fix it silently, or stop and tell the user clearly
-- All janitor activity is logged and visible — never silent beyond a status indicator
-
-### 5. Transparency & Observability Layer
-- Every action the system takes is recorded
-- UI surfaces a simple status per workflow: healthy / fixed / needs attention
-- Users can tap/click for progressive detail at any level:
-  - What ran
-  - What the tool did
-  - What the janitor found and did
-  - Full logs if desired
-- Developers get full log access
-
-### 6. Model Routing
-- Different models handle different responsibilities:
-  - **Chat / intent layer:** fast, cheap model for understanding user requests
-  - **Tool calling layer:** reliable instruction-following model
-  - **Code generation layer:** strong coding model for tool generation
-  - **Janitor layer:** analytical model for error diagnosis and repair
-- Target open/flexible models (e.g. Mistral, LLaMA, Qwen, DeepSeek families)
-  for control, cost, and stability
-- Model configuration is explicit and user-adjustable — no hidden routing
+### What's not built yet
+- **Background/scheduled tasks** — no scheduler, triggers, or cron. Currently prompt-driven only
+- **Long-term memory** — vector-backed store for deeper patterns. Ollama Cloud doesn't
+  support embeddings yet, so deferred. Working memory covers short-term facts
+- **Multiple providers** — only Ollama. OpenAI-compatible backend is a quick add when needed
+- **Tests** — zero test coverage
 
 ---
 
-## First Use Case (Dogfood)
+## Design Decisions
 
-Build this system around the author's own daily workflow needs:
+Context that isn't obvious from the code:
+
+- **Lua for generated tools** — chosen for easy sandboxing, low token cost for generation,
+  and the "code toolbox" pattern where the janitor maintains quality
+- **Triage before tool selection** — a separate "needs external data?" model call prevents
+  the tool selection model from generating unnecessary tools for conversational prompts.
+  Rule-based heuristics were rejected as brittle and against the no-hardcoding philosophy
+- **Working memory vs long-term** — two planned tiers. Working memory (now) is JSON files
+  with model-based selection. Long-term memory (future) is vector DB with embeddings,
+  deferred until Ollama Cloud supports embedding models or a local model is added
+- **Janitor uses code role** — reviews and regenerates using the code model, not analytical.
+  It's reviewing code, so the code model is the right fit
+- **Test before save** — generated Lua is test-run in the sandbox before persisting to toolbox.
+  Prevents broken tools from polluting the toolbox
+
+---
+
+## Dogfood Use Case
+
+Build around the author's daily workflow:
 
 - Morning schedule summary from calendar
 - Auto-generate todos and reminders from meetings and messages
 - Cross-match across services (calendar, Slack, task managers, etc.)
 - Surface what matters, create actions, stay out of the way
 
-This is the validation harness. If the system can handle this reliably and
-transparently for a technical user, it is ready to be tested by others.
+Not started yet — infrastructure supports it, needs real-world API testing.
+
+---
+
+## Key Constraints
+
+- Every integration must be generated, never hardcoded
+- Every failure must be visible to the user at some level
+- Every model routing decision must be inspectable
+- Context scope must be auditable per task
+- Daily usage must not require technical knowledge
 
 ---
 
@@ -100,16 +88,4 @@ transparently for a technical user, it is ready to be tested by others.
 - Publish early, solve the author's own problem first
 - Invite early users to test alongside development
 - Use real usage to validate before any commercialization
-- Potential future monetization: managed installs, consulting, hosted SaaS
 - Never compromise the core open source model for commercial reasons
-
----
-
-## Key Design Constraints
-
-- Every integration must be generated, never hardcoded
-- Every failure must be visible to the user at some level
-- Every model routing decision must be inspectable
-- Context scope must be auditable per task
-- The system must be runnable by a non-technical user
-  (setup complexity is acceptable; daily usage must not require technical knowledge)
