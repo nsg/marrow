@@ -59,6 +59,7 @@ async fn run_task(
     client: Arc<Client>,
     log: &EventLog,
     secrets: &Secrets,
+    conversation: &[Message],
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let task_id = uuid::Uuid::new_v4().to_string();
 
@@ -96,6 +97,7 @@ async fn run_task(
         log,
         Some(secrets),
         None,
+        conversation,
     )
     .await?;
 
@@ -153,6 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             client,
             &log,
             &secrets,
+            &[],
         )
         .await
         {
@@ -196,6 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 break;
             }
 
+            let conversation = session.build_messages(None);
             match run_task(
                 input,
                 &router,
@@ -205,6 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 client.clone(),
                 &log,
                 &secrets,
+                &conversation,
             )
             .await
             {

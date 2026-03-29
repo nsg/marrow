@@ -11,6 +11,7 @@ use crate::events::{Event, EventLog};
 use crate::memory::Memory;
 use crate::model::ModelBackend;
 use crate::secrets::Secrets;
+use crate::session::Message;
 use crate::toolbox::Toolbox;
 
 /// Sender for progress updates from the agent loop.
@@ -24,7 +25,7 @@ const AGENT_PROMPT_TEMPLATE: &str = r#"You are an agent that completes tasks ste
 Available tools:
 {tools}
 
-{memories}Task: {task}
+{memories}{conversation}Task: {task}
 
 You MUST respond with exactly one JSON object (no other text). Choose one:
 
@@ -80,6 +81,7 @@ pub fn build_agent_prompt(
     memories: &[Memory],
     history: &[StepResult],
     secret_keys: &[&str],
+    conversation: &[Message],
 ) -> String {
     let tools_section = if tools_section.is_empty() {
         "(none available — create one if needed)"
@@ -143,9 +145,21 @@ pub fn build_agent_prompt(
         format!("Available secrets (use secret(\"name\") in Lua tools):\n{list}\n\n")
     };
 
+    let conversation_section = if conversation.is_empty() {
+        String::new()
+    } else {
+        let lines = conversation
+            .iter()
+            .map(|m| format!("{}: {}", m.role, m.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("Conversation so far:\n{lines}\n\n")
+    };
+
     AGENT_PROMPT_TEMPLATE
         .replace("{tools}", tools_section)
         .replace("{memories}", &format!("{memories_section}{secrets_section}"))
+        .replace("{conversation}", &conversation_section)
         .replace("{task}", task)
         .replace("{history}", &history_section)
 }
@@ -237,6 +251,7 @@ pub async fn run_loop(
     log: &EventLog,
     secrets: Option<&Secrets>,
     progress: Option<&ProgressTx>,
+    conversation: &[Message],
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let emit = |msg: String| {
         if let Some(tx) = progress {
@@ -261,7 +276,14 @@ pub async fn run_loop(
 
         let secret_keys = secrets.map(|s| s.keys()).unwrap_or_default();
         let secret_key_refs: Vec<&str> = secret_keys.to_vec();
-        let prompt = build_agent_prompt(task, &tools_section, memories, &history, &secret_key_refs);
+        let prompt = build_agent_prompt(
+            task,
+            &tools_section,
+            memories,
+            &history,
+            &secret_key_refs,
+            conversation,
+        );
         let response = backend.complete(prompt).await?;
 
         if log.is_verbose() {
@@ -473,13 +495,14 @@ pub async fn run_loop(
                 if !history.is_empty() {
                     emit("💭 Thinking...".to_string());
                 }
-                return format_answer(task, memories, &history, answer_backend).await;
+                return format_answer(task, memories, &history, answer_backend, conversation)
+                    .await;
             }
         }
     }
 
     // Max steps reached — force an answer with what we have
-    format_answer(task, memories, &history, answer_backend).await
+    format_answer(task, memories, &history, answer_backend, conversation).await
 }
 
 async fn format_answer(
@@ -487,10 +510,22 @@ async fn format_answer(
     memories: &[Memory],
     history: &[StepResult],
     answer_backend: &dyn ModelBackend,
+    conversation: &[Message],
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
+    let conversation_section = if conversation.is_empty() {
+        String::new()
+    } else {
+        let lines = conversation
+            .iter()
+            .map(|m| format!("{}: {}", m.role, m.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("Conversation so far:\n{lines}\n\n")
+    };
+
     if history.is_empty() {
         // No tools were called — just answer directly
-        let mut context = format!("Task: {task}\n");
+        let mut context = format!("{conversation_section}Task: {task}\n");
         if !memories.is_empty() {
             let facts = memories
                 .iter()
@@ -499,7 +534,7 @@ async fn format_answer(
                 .join("\n");
             context.push_str(&format!("\nKnown facts:\n{facts}\n"));
         }
-        context.push_str("\nAnswer the user's question directly.");
+        context.push_str("\nAnswer the user's question directly. If the conversation has prior context, use it.");
         return answer_backend.complete(context).await;
     }
 
@@ -512,7 +547,7 @@ async fn format_answer(
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let mut context = format!("Task: {task}\n\nCollected data:\n{data}\n");
+    let mut context = format!("{conversation_section}Task: {task}\n\nCollected data:\n{data}\n");
     if !memories.is_empty() {
         let facts = memories
             .iter()
@@ -521,7 +556,7 @@ async fn format_answer(
             .join("\n");
         context.push_str(&format!("\nKnown facts:\n{facts}\n"));
     }
-    context.push_str("\nUsing the collected data above, answer the user's question. Be specific and include relevant details.");
+    context.push_str("\nUsing the collected data above, answer the user's question. Be specific and include relevant details. If the conversation has prior context, use it.");
 
     answer_backend.complete(context).await
 }

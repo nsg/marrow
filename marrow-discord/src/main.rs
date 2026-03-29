@@ -121,6 +121,15 @@ impl EventHandler for Handler {
         let sessions = data.get::<SessionsKey>().unwrap().clone();
         drop(data);
 
+        // Get conversation history for this channel
+        let conversation = {
+            let sessions_map = sessions.read().await;
+            sessions_map
+                .get(&msg.channel_id)
+                .map(|s| s.build_messages(None))
+                .unwrap_or_default()
+        };
+
         // Show typing indicator while processing
         let typing = msg.channel_id.start_typing(&ctx.http);
 
@@ -145,6 +154,7 @@ impl EventHandler for Handler {
             &log,
             &secrets,
             &progress_tx,
+            &conversation,
         )
         .await
         {
@@ -200,6 +210,7 @@ async fn run_task(
     log: &EventLog,
     secrets: &Secrets,
     progress: &ProgressTx,
+    conversation: &[Message],
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let task_id = uuid::Uuid::new_v4().to_string();
 
@@ -235,6 +246,7 @@ async fn run_task(
         log,
         Some(secrets),
         Some(progress),
+        conversation,
     )
     .await?;
 
