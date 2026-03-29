@@ -79,6 +79,7 @@ Rules:
 - If a tool or code fails, read the error carefully. Do NOT repeat the same approach — fix the specific issue.
 - NEVER retry something that already failed with the same error. If "require" failed, it will always fail. If a secret name was not found, try a different name.
 - If something worked in a previous step, reuse that exact approach. Do not regress to a pattern that already failed.
+- Do NOT answer prematurely. If data collection failed, try a different approach before giving up. Only answer when you have actual data or have exhausted all reasonable approaches.
 - Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
 - When creating tools, prefer generic names (e.g. "rss_reader" not "nsg_blog_reader").
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
