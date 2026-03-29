@@ -30,31 +30,46 @@ Available tools:
 
 {memories}{conversation}Task: {task}
 
-CRITICAL: You have NO shell access. No curl, no bash, no command line. You can ONLY interact through the JSON actions below. Any other output format will be rejected.
+CRITICAL: You have NO shell access. No curl, no bash, no command line. You can ONLY interact through the actions below.
 
-You MUST respond with exactly one JSON object (no other text). Choose one:
+You can respond with EITHER a JSON action OR a Lua code block.
+
+## Inline Lua code (preferred for one-off data fetching)
+
+Write a ```lua code block and it will be executed in a sandbox with these host functions:
+- http_request({{ method, url, body?, headers? }}) / http_get(url) / http_post(url, body)
+- json_parse(string) / json_encode(table)
+- xml_parse(string) / xml_encode(table)
+- secret(name) — retrieve API keys/passwords
+- run_tool(name, params) — call an existing tool
+- log(message)
+
+Return a table with the results. Example:
+```lua
+local resp = http_get("https://api.example.com/data")
+local data = json_parse(resp.body)
+return {{ result = data }}
+```
+
+## JSON actions
 
 To call an existing tool:
 {{"action": "call_tool", "tool": "TOOL_NAME", "params": {{"KEY": "value"}}}}
 
-To create a new tool (ONLY if no existing tool can do the job):
-{{"action": "create_tool", "name": "new_tool_name", "description": "one line description of what it does"}}
+To create a new reusable tool (saved permanently to the toolbox):
+{{"action": "create_tool", "name": "generic_tool_name", "description": "one line description"}}
 
-To keep a tool you created (only if it worked well and is reusable):
-{{"action": "keep_tool", "name": "tool_name"}}
-
-To remove a broken persistent tool (ONLY if you are certain it is fundamentally broken, not just called wrong):
+To remove a broken tool from the toolbox:
 {{"action": "remove_tool", "name": "tool_name"}}
 
-To give your final answer (ONLY when you have gathered enough data):
+To give your final answer:
 {{"action": "answer", "text": "your complete answer to the user"}}
 
 Rules:
-- Prefer existing persistent tools when they fit. But don't hesitate to create a new tool if none match — created tools are ephemeral (deleted after this task) so there's no cost to experimenting.
+- Use inline Lua for one-off tasks. Use create_tool only for tools worth keeping permanently.
 - After creating a tool, you MUST call it in your next turn — creation alone does nothing.
-- If a tool fails, you may retry ONCE with different params. After two failures, create a new tool or try a different approach.
-- If a created tool works well and is generic enough to be reusable, use keep_tool to save it permanently.
-- Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before creating a new tool.
+- If a tool fails, you may retry ONCE with different params. After two failures, try inline Lua or a different approach.
+- Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
 - When creating tools, prefer generic names (e.g. "rss_reader" not "nsg_blog_reader").
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
 - The answer action text should be a natural language response, NOT a JSON action.
@@ -72,8 +87,8 @@ pub enum Action {
         name: String,
         description: String,
     },
-    KeepTool {
-        name: String,
+    RunCode {
+        code: String,
     },
     RemoveTool {
         name: String,
@@ -136,7 +151,7 @@ pub fn build_agent_prompt(
                     Action::CreateTool { name, .. } => {
                         format!("Created tool \"{name}\"")
                     }
-                    Action::KeepTool { name } => format!("Kept tool \"{name}\""),
+                    Action::RunCode { .. } => "Ran inline Lua code".to_string(),
                     Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
                     Action::Answer { .. } => "Answered".to_string(),
                     Action::UserMessage { text } => {
@@ -193,6 +208,11 @@ pub fn build_agent_prompt(
 pub fn parse_action(response: &str) -> Action {
     let trimmed = response.trim();
 
+    // Check for inline Lua code block first
+    if let Some(code) = extract_lua_block(trimmed) {
+        return Action::RunCode { code };
+    }
+
     let start = trimmed.find('{');
     let end = trimmed.rfind('}');
 
@@ -247,11 +267,6 @@ pub fn parse_action(response: &str) -> Action {
                         return Action::CreateTool { name, description };
                     }
                 }
-                "keep_tool" => {
-                    if let Some(name) = raw.name.or(raw.tool) {
-                        return Action::KeepTool { name };
-                    }
-                }
                 "remove_tool" => {
                     if let Some(name) = raw.name.or(raw.tool) {
                         return Action::RemoveTool { name };
@@ -270,6 +285,20 @@ pub fn parse_action(response: &str) -> Action {
     // If we can't parse an action, treat the whole response as an answer
     Action::Answer {
         text: trimmed.to_string(),
+    }
+}
+
+fn extract_lua_block(text: &str) -> Option<String> {
+    let start = text.find("```lua")?;
+    let rest = &text[start + 6..];
+    let newline = rest.find('\n')?;
+    let rest = &rest[newline + 1..];
+    let end = rest.find("```")?;
+    let code = rest[..end].trim();
+    if code.is_empty() {
+        None
+    } else {
+        Some(code.to_string())
     }
 }
 
@@ -356,8 +385,13 @@ pub async fn run_loop(
                 Action::CreateTool { name, description } => {
                     eprintln!("[agent] step {step}: parsed create_tool \"{name}\" — {description}");
                 }
-                Action::KeepTool { name } => {
-                    eprintln!("[agent] step {step}: parsed keep_tool \"{name}\"");
+                Action::RunCode { code } => {
+                    let preview = if code.len() > 200 {
+                        format!("{}...", &code[..200])
+                    } else {
+                        code.clone()
+                    };
+                    eprintln!("[agent] step {step}: parsed run_code:\n{preview}");
                 }
                 Action::RemoveTool { name } => {
                     eprintln!("[agent] step {step}: parsed remove_tool \"{name}\"");
@@ -540,21 +574,53 @@ pub async fn run_loop(
                 });
             }
 
-            Action::KeepTool { name } => {
+            Action::RunCode { code } => {
                 log.emit(Event::AgentAction {
                     task_id: task_id.to_string(),
                     step,
-                    action_type: "keep_tool".to_string(),
-                    detail: name.clone(),
+                    action_type: "run_code".to_string(),
+                    detail: String::new(),
                 })
                 .await;
 
-                let output = match toolbox.keep_tool(name) {
-                    Ok(()) => {
-                        emit(format!("📌 Keeping tool \"{name}\""));
-                        format!("Tool \"{name}\" marked as persistent.")
+                emit("⚡ Running inline Lua...".to_string());
+
+                let provider = crate::context::LuaProvider::new("inline", code);
+                let toolbox_dir = Some(PathBuf::from(toolbox_path));
+                let output = match provider
+                    .execute_with_params(
+                        task,
+                        client.clone(),
+                        &HashMap::new(),
+                        toolbox_dir,
+                        secrets,
+                    )
+                    .await
+                {
+                    Ok(value) => {
+                        let output_str = value.to_string();
+                        log.emit(Event::AgentToolResult {
+                            task_id: task_id.to_string(),
+                            step,
+                            tool: "inline".to_string(),
+                            success: true,
+                            output: output_str.clone(),
+                        })
+                        .await;
+                        output_str
                     }
-                    Err(e) => format!("Failed to keep tool: {e}"),
+                    Err(e) => {
+                        let output_str = format!("{{\"error\": \"inline code failed: {e}\"}}");
+                        log.emit(Event::AgentToolResult {
+                            task_id: task_id.to_string(),
+                            step,
+                            tool: "inline".to_string(),
+                            success: false,
+                            output: output_str.clone(),
+                        })
+                        .await;
+                        output_str
+                    }
                 };
 
                 history.push(StepResult {
@@ -610,14 +676,12 @@ pub async fn run_loop(
                     toolbox,
                 )
                 .await;
-                cleanup_ephemeral(toolbox, &emit);
                 return answer;
             }
         }
     }
 
     // Max steps reached — force an answer with what we have
-    cleanup_ephemeral(toolbox, &emit);
     format_answer(
         task,
         memories,
@@ -627,17 +691,6 @@ pub async fn run_loop(
         toolbox,
     )
     .await
-}
-
-fn cleanup_ephemeral(toolbox: &Toolbox, emit: &impl Fn(String)) {
-    match toolbox.cleanup_ephemeral() {
-        Ok(removed) => {
-            for name in &removed {
-                emit(format!("🗑️ Removed ephemeral tool \"{name}\""));
-            }
-        }
-        Err(e) => eprintln!("[agent] ephemeral cleanup error: {e}"),
-    }
 }
 
 async fn format_answer(
@@ -694,6 +747,7 @@ async fn format_answer(
         .iter()
         .filter_map(|s| match &s.action {
             Action::CallTool { tool, .. } => Some(format!("[{tool}]: {}", s.output)),
+            Action::RunCode { .. } => Some(format!("[inline]: {}", s.output)),
             Action::UserMessage { text } => Some(format!("[User follow-up]: {text}")),
             _ => None,
         })
@@ -782,5 +836,30 @@ mod tests {
             }
             other => panic!("expected CallTool, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_inline_lua_block() {
+        let input = "Let me fetch that:\n```lua\nlocal r = http_get(\"https://example.com\")\nreturn r\n```";
+        match parse_action(input) {
+            Action::RunCode { code } => {
+                assert!(code.contains("http_get"));
+                assert!(code.contains("return r"));
+            }
+            other => panic!("expected RunCode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_lua_block_preferred_over_json() {
+        // If response has both a lua block and JSON, lua wins (checked first)
+        let input = "```lua\nreturn {}\n```\n{\"action\": \"answer\", \"text\": \"done\"}";
+        assert!(matches!(parse_action(input), Action::RunCode { .. }));
+    }
+
+    #[test]
+    fn parse_empty_lua_block_falls_through() {
+        let input = "```lua\n\n```\n{\"action\": \"answer\", \"text\": \"done\"}";
+        assert!(matches!(parse_action(input), Action::Answer { .. }));
     }
 }

@@ -27,7 +27,8 @@ and Kimi K2.5 (fast) selected based on speed, intelligence index, and tool calli
 
 ### What's built
 - Cargo workspace: `marrow` (library), `marrow-cli` (CLI), `marrow-discord` (Discord bot)
-- Agentic loop: triage → model decides actions (call tool, create tool, answer) iteratively
+- Agentic loop: triage → model decides actions (inline Lua, call tool, create tool, answer) iteratively
+- Inline Lua execution — model writes code blocks that run directly in the sandbox
 - Lua sandbox with Rust host functions for all external access
 - `run_tool(name, params)` host function — tools can call other tools directly in Lua
 - `secret(name)` host function — tools access API keys from `secrets.toml`
