@@ -234,14 +234,6 @@ pub async fn review_and_fix(
             return Ok(true);
         }
 
-        // Extract lessons from review issues and save to knowledge file
-        for line in review.issues.lines() {
-            let line = line.trim().trim_start_matches('-').trim();
-            if !line.is_empty() && line.len() > 10 && line != "none" && line != "unknown" {
-                let _ = toolbox.append_knowledge(line);
-            }
-        }
-
         if attempt == MAX_FIX_ATTEMPTS {
             let reason = format!("unfixable after {MAX_FIX_ATTEMPTS} attempts");
             log.emit(Event::JanitorEscalated {
@@ -276,50 +268,6 @@ pub async fn review_and_fix(
     }
 
     Ok(false)
-}
-
-const CONSOLIDATE_PROMPT: &str = r#"You are maintaining a knowledge file of lessons learned from code generation. The file has grown and needs cleanup.
-
-Current notes:
-{notes}
-
-Consolidate these into a clean, deduplicated list of general lessons. Rules:
-- Remove duplicates and near-duplicates
-- Merge related points into single concise lessons
-- Remove tool-specific details (tool names, specific URLs) — keep only the general pattern
-- Each lesson should be one line starting with "- "
-- Keep only lessons that would help a code generator avoid common mistakes
-- Maximum 20 lessons
-
-Respond with ONLY the cleaned list, nothing else."#;
-
-const CONSOLIDATE_THRESHOLD: usize = 16384;
-
-/// Returns true if consolidation ran, false if skipped.
-pub async fn consolidate_knowledge(
-    toolbox: &Toolbox,
-    backend: &dyn ModelBackend,
-) -> Result<bool, Box<dyn Error + Send + Sync>> {
-    let notes = toolbox.read_knowledge();
-    if notes.len() < CONSOLIDATE_THRESHOLD {
-        return Ok(false);
-    }
-
-    let prompt = CONSOLIDATE_PROMPT.replace("{notes}", &notes);
-    let response = backend.complete(prompt).await?;
-    let cleaned = response.trim().to_string();
-
-    if !cleaned.is_empty() && cleaned.len() < notes.len() {
-        std::fs::write(toolbox.knowledge_path(), &cleaned)?;
-        eprintln!(
-            "[janitor] consolidated codegen knowledge file ({} -> {} bytes)",
-            notes.len(),
-            cleaned.len()
-        );
-        Ok(true)
-    } else {
-        Ok(false)
-    }
 }
 
 const REDUNDANCY_PROMPT: &str = r#"You are reviewing a toolbox for redundant tools. Here are all the tools:
@@ -486,7 +434,6 @@ fn extract_json_block(response: &str) -> String {
 
 pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) {
     let mut idle_cycles: u32 = 0;
-    let mut knowledge_backed_off = false;
     let mut cleanup_backed_off = false;
 
     loop {
@@ -502,17 +449,8 @@ pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) 
         if unvalidated.is_empty() {
             idle_cycles += 1;
 
-            // Consolidate knowledge file (~50s after idle)
-            if !knowledge_backed_off && idle_cycles == 10 {
-                match consolidate_knowledge(toolbox, backend).await {
-                    Ok(true) => {}
-                    Ok(false) => knowledge_backed_off = true,
-                    Err(e) => eprintln!("[janitor] knowledge consolidation error: {e}"),
-                }
-            }
-
-            // Clean up redundant/site-specific tools (~100s after idle)
-            if !cleanup_backed_off && idle_cycles == 20 {
+            // Clean up redundant/site-specific tools (~50s after idle)
+            if !cleanup_backed_off && idle_cycles == 10 {
                 match cleanup_toolbox(toolbox, backend, log).await {
                     Ok(true) => {}
                     Ok(false) => cleanup_backed_off = true,
@@ -525,7 +463,6 @@ pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) 
         }
 
         idle_cycles = 0;
-        knowledge_backed_off = false;
         cleanup_backed_off = false;
         for tool in &unvalidated {
             if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log).await {

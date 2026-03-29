@@ -627,59 +627,6 @@ async fn toolbox_delete_tool() {
 // Knowledge file tests
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn knowledge_file_read_empty() {
-    let dir = temp_dir("marrow_tb");
-    let toolbox = Toolbox::new(dir.path());
-    assert!(toolbox.read_knowledge().is_empty());
-}
-
-#[tokio::test]
-async fn knowledge_file_append_and_read() {
-    let dir = temp_dir("marrow_tb");
-    let toolbox = Toolbox::new(dir.path());
-    toolbox
-        .append_knowledge("Use pattern matching for XML attributes")
-        .unwrap();
-    toolbox
-        .append_knowledge("Always check HTTP status before parsing")
-        .unwrap();
-    let content = toolbox.read_knowledge();
-    assert!(content.contains("Use pattern matching for XML attributes"));
-    assert!(content.contains("Always check HTTP status before parsing"));
-    assert_eq!(content.lines().count(), 2);
-}
-
-#[tokio::test]
-async fn janitor_writes_knowledge_on_failure() {
-    let dir = temp_dir("marrow_tb");
-    let toolbox = Toolbox::new(dir.path());
-    let log = noop_log().await;
-
-    let meta = ToolMeta {
-        name: "flawed".to_string(),
-        description: "Flawed tool".to_string(),
-        provides: vec![],
-        validated: false,
-    };
-    toolbox.save_tool(&meta, "return {}").unwrap();
-
-    // Review fails with specific issues, then passes on regeneration
-    let backend = MockBackend::new(vec![
-        "```verdict\nFAIL\n```\n```issues\n- XML pattern <item>(.-)</item> does not handle attributes on the tag\n```\n```suggestions\n- Use <item[^>]->(.-)</item> instead\n```",
-        "```name\nflawed\n```\n```description\nFixed\n```\n```lua\nreturn { ok = true }\n```",
-        "```verdict\nPASS\n```\n```issues\nnone\n```\n```suggestions\nnone\n```",
-    ]);
-
-    marrow::janitor::review_and_fix(&toolbox, "flawed", &backend, &log)
-        .await
-        .unwrap();
-
-    let knowledge = toolbox.read_knowledge();
-    assert!(knowledge.contains("XML pattern"));
-    assert!(knowledge.contains("does not handle attributes"));
-}
-
 // ---------------------------------------------------------------------------
 // Registry tests
 // ---------------------------------------------------------------------------

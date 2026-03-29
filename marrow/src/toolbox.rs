@@ -180,25 +180,4 @@ impl Toolbox {
             .collect())
     }
 
-    pub fn knowledge_path(&self) -> PathBuf {
-        self.dir.join("CODEGEN_NOTES.md")
-    }
-
-    pub fn read_knowledge(&self) -> String {
-        std::fs::read_to_string(self.knowledge_path()).unwrap_or_default()
-    }
-
-    pub fn append_knowledge(&self, note: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.ensure_dir()?;
-        let path = self.knowledge_path();
-        let mut content = std::fs::read_to_string(&path).unwrap_or_default();
-        if !content.is_empty() && !content.ends_with('\n') {
-            content.push('\n');
-        }
-        content.push_str("- ");
-        content.push_str(note.trim());
-        content.push('\n');
-        std::fs::write(path, content)?;
-        Ok(())
-    }
 }
