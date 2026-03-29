@@ -60,7 +60,10 @@ return {{ result = data }}
 To call an existing tool:
 {{"action": "call_tool", "tool": "TOOL_NAME", "params": {{"KEY": "value"}}}}
 
-To create a new reusable tool (saved permanently to the toolbox):
+To save the last successful inline code as a reusable tool:
+{{"action": "save_tool", "name": "generic_tool_name", "description": "one line description"}}
+
+To create a new tool via code generation (when you need something more complex):
 {{"action": "create_tool", "name": "generic_tool_name", "description": "one line description"}}
 
 To remove a broken tool from the toolbox:
@@ -70,9 +73,10 @@ To give your final answer:
 {{"action": "answer", "text": "your complete answer to the user"}}
 
 Rules:
-- Use inline Lua for one-off tasks. Use create_tool only for tools worth keeping permanently.
+- Use inline Lua for one-off tasks. If inline code works well and you'll need it again, use save_tool to keep it.
 - After creating a tool, you MUST call it in your next turn — creation alone does nothing.
 - If a tool or code fails, read the error carefully. Do NOT repeat the same approach — fix the specific issue.
+- NEVER retry something that already failed with the same error. If "require" failed, it will always fail. If a secret name was not found, try a different name.
 - If something worked in a previous step, reuse that exact approach. Do not regress to a pattern that already failed.
 - Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
 - When creating tools, prefer generic names (e.g. "rss_reader" not "nsg_blog_reader").
@@ -94,6 +98,10 @@ pub enum Action {
     },
     RunCode {
         code: String,
+    },
+    SaveTool {
+        name: String,
+        description: String,
     },
     RemoveTool {
         name: String,
@@ -157,6 +165,9 @@ pub fn build_agent_prompt(
                         format!("Created tool \"{name}\"")
                     }
                     Action::RunCode { .. } => "Ran inline Lua code".to_string(),
+                    Action::SaveTool { name, .. } => {
+                        format!("Saved last inline code as tool \"{name}\"")
+                    }
                     Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
                     Action::Answer { .. } => "Answered".to_string(),
                     Action::UserMessage { text } => {
@@ -272,6 +283,13 @@ pub fn parse_action(response: &str) -> Action {
                         return Action::CreateTool { name, description };
                     }
                 }
+                "save_tool" => {
+                    if let (Some(name), Some(description)) =
+                        (raw.name.clone(), raw.description.clone())
+                    {
+                        return Action::SaveTool { name, description };
+                    }
+                }
                 "remove_tool" => {
                     if let Some(name) = raw.name.or(raw.tool) {
                         return Action::RemoveTool { name };
@@ -333,6 +351,7 @@ pub async fn run_loop(
 
     let mut history: Vec<StepResult> = Vec::new();
     let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
+    let mut last_successful_code: Option<String> = None;
 
     for step in 1..=MAX_AGENT_STEPS {
         // Drain any user messages that arrived since the last step
@@ -398,6 +417,9 @@ pub async fn run_loop(
                         code.clone()
                     };
                     eprintln!("[agent] step {step}: parsed run_code:\n{preview}");
+                }
+                Action::SaveTool { name, description } => {
+                    eprintln!("[agent] step {step}: parsed save_tool \"{name}\" — {description}");
                 }
                 Action::RemoveTool { name } => {
                     eprintln!("[agent] step {step}: parsed remove_tool \"{name}\"");
@@ -604,6 +626,7 @@ pub async fn run_loop(
                     .await
                 {
                     Ok(value) => {
+                        last_successful_code = Some(code.clone());
                         let output_str = value.to_string();
                         log.emit(Event::AgentToolResult {
                             task_id: task_id.to_string(),
@@ -627,6 +650,40 @@ pub async fn run_loop(
                         .await;
                         output_str
                     }
+                };
+
+                history.push(StepResult {
+                    step,
+                    action,
+                    output,
+                });
+            }
+
+            Action::SaveTool { name, description } => {
+                log.emit(Event::AgentAction {
+                    task_id: task_id.to_string(),
+                    step,
+                    action_type: "save_tool".to_string(),
+                    detail: name.clone(),
+                })
+                .await;
+
+                let output = if let Some(ref code) = last_successful_code {
+                    let meta = crate::toolbox::ToolMeta {
+                        name: name.clone(),
+                        description: description.clone(),
+                        provides: vec![name.clone()],
+                        validated: false,
+                    };
+                    match toolbox.save_tool(&meta, code) {
+                        Ok(()) => {
+                            emit(format!("💾 Saved tool \"{name}\""));
+                            format!("Tool \"{name}\" saved. You can now call it with call_tool.")
+                        }
+                        Err(e) => format!("Failed to save tool: {e}"),
+                    }
+                } else {
+                    "No successful inline code to save. Run inline code first.".to_string()
                 };
 
                 history.push(StepResult {
