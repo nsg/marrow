@@ -80,6 +80,7 @@ Rules:
 - NEVER retry something that already failed with the same error. If "require" failed, it will always fail. If a secret name was not found, try a different name.
 - If something worked in a previous step, reuse that exact approach. Do not regress to a pattern that already failed.
 - Do NOT answer prematurely. If data collection failed, try a different approach before giving up. Only answer when you have actual data or have exhausted all reasonable approaches.
+- If a saved tool fails repeatedly, use remove_tool to delete it — you can always recreate it or use inline Lua instead.
 - Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
 - When creating tools, prefer generic names (e.g. "rss_reader" not "nsg_blog_reader").
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
@@ -151,43 +152,43 @@ pub fn build_agent_prompt(
     let history_section = if history.is_empty() {
         String::new()
     } else {
-        let entries: Vec<String> = history
-            .iter()
-            .map(|s| {
-                let action_desc = match &s.action {
-                    Action::CallTool { tool, params } => {
-                        let params_str = params
-                            .iter()
-                            .map(|(k, v)| format!("{k}: {v}"))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!("Called tool \"{tool}\" with params {{{params_str}}}")
-                    }
-                    Action::CreateTool { name, .. } => {
-                        format!("Created tool \"{name}\"")
-                    }
-                    Action::RunCode { .. } => "Ran inline Lua code".to_string(),
-                    Action::SaveTool { name, .. } => {
-                        format!("Saved last inline code as tool \"{name}\"")
-                    }
-                    Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
-                    Action::Answer { .. } => "Answered".to_string(),
-                    Action::UserMessage { text } => {
-                        format!("User follow-up: \"{text}\"")
-                    }
-                };
-                let output_display = if s.output.len() > 1000 {
-                    format!("{}... (truncated)", &s.output[..1000])
+        const RECENT_STEPS: usize = 5;
+        let total = history.len();
+        let split = total.saturating_sub(RECENT_STEPS);
+
+        let mut parts = Vec::new();
+
+        // Older steps: one-line summaries
+        if split > 0 {
+            parts.push("Earlier actions (summary):".to_string());
+            for s in &history[..split] {
+                let desc = format_action_short(&s.action);
+                let status = if s.output.contains("\"error\"") || s.output.contains("error") {
+                    "FAILED"
                 } else {
-                    s.output.clone()
+                    "OK"
                 };
-                format!(
-                    "[Step {}] {}\nResult: {}\n",
-                    s.step, action_desc, output_display
-                )
-            })
-            .collect();
-        format!("Previous actions:\n{}\n", entries.join("\n"))
+                parts.push(format!("  Step {}: {} → {status}", s.step, desc));
+            }
+            parts.push(String::new());
+        }
+
+        // Recent steps: full detail
+        parts.push("Recent actions:".to_string());
+        for s in &history[split..] {
+            let desc = format_action_short(&s.action);
+            let output_display = if s.output.len() > 1000 {
+                format!("{}... (truncated)", &s.output[..1000])
+            } else {
+                s.output.clone()
+            };
+            parts.push(format!(
+                "[Step {}] {}\nResult: {}\n",
+                s.step, desc, output_display
+            ));
+        }
+
+        format!("{}\n", parts.join("\n"))
     };
 
     let secrets_section = if secret_keys.is_empty() {
@@ -313,6 +314,25 @@ pub fn parse_action(response: &str) -> Action {
     // If we can't parse an action, treat the whole response as an answer
     Action::Answer {
         text: trimmed.to_string(),
+    }
+}
+
+fn format_action_short(action: &Action) -> String {
+    match action {
+        Action::CallTool { tool, params } => {
+            let params_str = params
+                .iter()
+                .map(|(k, v)| format!("{k}: {v}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Called tool \"{tool}\" ({params_str})")
+        }
+        Action::CreateTool { name, .. } => format!("Created tool \"{name}\""),
+        Action::RunCode { .. } => "Ran inline Lua".to_string(),
+        Action::SaveTool { name, .. } => format!("Saved tool \"{name}\""),
+        Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
+        Action::Answer { .. } => "Answered".to_string(),
+        Action::UserMessage { text } => format!("User: \"{text}\""),
     }
 }
 
