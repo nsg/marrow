@@ -171,7 +171,10 @@ pub fn build_agent_prompt(
 
     AGENT_PROMPT_TEMPLATE
         .replace("{tools}", tools_section)
-        .replace("{memories}", &format!("{memories_section}{secrets_section}"))
+        .replace(
+            "{memories}",
+            &format!("{memories_section}{secrets_section}"),
+        )
         .replace("{conversation}", &conversation_section)
         .replace("{task}", task)
         .replace("{history}", &history_section)
@@ -572,8 +575,15 @@ pub async fn run_loop(
                 if !history.is_empty() {
                     emit("💭 Thinking...".to_string());
                 }
-                let answer =
-                    format_answer(task, memories, &history, answer_backend, conversation, toolbox).await;
+                let answer = format_answer(
+                    task,
+                    memories,
+                    &history,
+                    answer_backend,
+                    conversation,
+                    toolbox,
+                )
+                .await;
                 cleanup_ephemeral(toolbox, &emit);
                 return answer;
             }
@@ -582,7 +592,15 @@ pub async fn run_loop(
 
     // Max steps reached — force an answer with what we have
     cleanup_ephemeral(toolbox, &emit);
-    format_answer(task, memories, &history, answer_backend, conversation, toolbox).await
+    format_answer(
+        task,
+        memories,
+        &history,
+        answer_backend,
+        conversation,
+        toolbox,
+    )
+    .await
 }
 
 fn cleanup_ephemeral(toolbox: &Toolbox, emit: &impl Fn(String)) {
@@ -655,9 +673,8 @@ async fn format_answer(
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let mut context = format!(
-        "{system_context}{conversation_section}Task: {task}\n\nCollected data:\n{data}\n"
-    );
+    let mut context =
+        format!("{system_context}{conversation_section}Task: {task}\n\nCollected data:\n{data}\n");
     if !memories.is_empty() {
         let facts = memories
             .iter()
