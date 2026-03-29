@@ -169,9 +169,9 @@ async fn regenerate_tool(
     let (name, description, lua_code) = parse_codegen_response(&response)?;
 
     let new_meta = ToolMeta {
-        name,
+        name: name.clone(),
         description,
-        provides: meta.provides.clone(),
+        provides: vec![name],
         validated: false,
     };
 
