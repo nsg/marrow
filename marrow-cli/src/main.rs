@@ -70,6 +70,10 @@ async fn run_task(
     })
     .await;
 
+    let agent_backend = router
+        .backend("agent")
+        .or_else(|_| router.backend("default"))
+        .or_else(|_| router.backend("fast"))?;
     let fast_backend = router
         .backend("fast")
         .or_else(|_| router.backend("default"))?;
@@ -87,7 +91,7 @@ async fn run_task(
     let answer = agent::run_loop(
         description,
         &task_id,
-        fast_backend,
+        agent_backend,
         answer_backend,
         code_backend,
         toolbox,
