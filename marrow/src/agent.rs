@@ -27,6 +27,8 @@ Available tools:
 
 {memories}{conversation}Task: {task}
 
+CRITICAL: You have NO shell access. No curl, no bash, no command line. You can ONLY interact through the JSON actions below. Any other output format will be rejected.
+
 You MUST respond with exactly one JSON object (no other text). Choose one:
 
 To call an existing tool:
