@@ -443,14 +443,12 @@ pub async fn run_loop(
                         {
                             Ok(value) => {
                                 let has_error = value.get("error").is_some();
+                                let output_str = value.to_string();
                                 if log.is_verbose() {
-                                    let preview = {
-                                        let s = value.to_string();
-                                        if s.len() > 500 {
-                                            format!("{}...", &s[..500])
-                                        } else {
-                                            s
-                                        }
+                                    let preview = if output_str.len() > 500 {
+                                        format!("{}...", &output_str[..500])
+                                    } else {
+                                        output_str.clone()
                                     };
                                     eprintln!(
                                         "[agent] step {step}: tool \"{tool}\" output: {preview}"
@@ -464,20 +462,24 @@ pub async fn run_loop(
                                     step,
                                     tool: tool.clone(),
                                     success: !has_error,
+                                    output: output_str.clone(),
                                 })
                                 .await;
-                                value.to_string()
+                                output_str
                             }
                             Err(e) => {
+                                let output_str =
+                                    format!("{{\"error\": \"tool execution failed: {e}\"}}");
                                 *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
                                 log.emit(Event::AgentToolResult {
                                     task_id: task_id.to_string(),
                                     step,
                                     tool: tool.clone(),
                                     success: false,
+                                    output: output_str.clone(),
                                 })
                                 .await;
-                                format!("{{\"error\": \"tool execution failed: {e}\"}}")
+                                output_str
                             }
                         }
                     }

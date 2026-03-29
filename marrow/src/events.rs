@@ -59,6 +59,7 @@ pub enum Event {
         step: u32,
         tool: String,
         success: bool,
+        output: String,
     },
 }
 
