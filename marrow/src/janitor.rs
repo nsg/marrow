@@ -21,10 +21,13 @@ Lua source:
 ```
 
 Available host functions in the sandbox:
-- http_get(url) -> {{ status = number, body = string }}
-- http_post(url, json_body_string) -> {{ status = number, body = string }}
+- http_request({{ method = string, url = string, body = string?, headers = {{ [string] = string }}? }}) -> {{ status = number, body = string }}
+- http_get(url) -> {{ status = number, body = string }}  (shorthand for GET)
+- http_post(url, json_body_string) -> {{ status = number, body = string }}  (shorthand for POST)
 - json_parse(string) -> table
 - json_encode(table) -> string
+- xml_parse(string) -> table (parses XML into {{ tag, attrs?, text?, children? }} tree; namespace URIs are prefixed to tag names)
+- xml_encode(table) -> string (encodes a {{ tag, attrs?, text?, children? }} tree back to XML)
 - log(message) -> nil
 
 Global tables available:
@@ -68,10 +71,13 @@ Fix instructions:
 {suggestions}
 
 Available host functions in the sandbox:
-- http_get(url) -> {{ status = number, body = string }}
-- http_post(url, json_body_string) -> {{ status = number, body = string }}
+- http_request({{ method = string, url = string, body = string?, headers = {{ [string] = string }}? }}) -> {{ status = number, body = string }}
+- http_get(url) -> {{ status = number, body = string }}  (shorthand for GET)
+- http_post(url, json_body_string) -> {{ status = number, body = string }}  (shorthand for POST)
 - json_parse(string) -> table
 - json_encode(table) -> string
+- xml_parse(string) -> table (parses XML into {{ tag, attrs?, text?, children? }} tree; namespace URIs are prefixed to tag names)
+- xml_encode(table) -> string (encodes a {{ tag, attrs?, text?, children? }} tree back to XML)
 - log(message) -> nil
 
 Global tables available:

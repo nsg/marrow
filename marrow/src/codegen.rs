@@ -11,10 +11,13 @@ use crate::toolbox::{ToolMeta, Toolbox};
 const CODEGEN_PROMPT_TEMPLATE: &str = r#"You are a Lua code generator for a sandboxed runtime. Generate a Lua script that provides context data for the given task.
 
 The sandbox has these host functions available:
-- http_get(url) -> {{ status = number, body = string }}
-- http_post(url, json_body_string) -> {{ status = number, body = string }}
+- http_request({{ method = string, url = string, body = string?, headers = {{ [string] = string }}? }}) -> {{ status = number, body = string }}
+- http_get(url) -> {{ status = number, body = string }}  (shorthand for GET)
+- http_post(url, json_body_string) -> {{ status = number, body = string }}  (shorthand for POST)
 - json_parse(string) -> table
 - json_encode(table) -> string
+- xml_parse(string) -> table (parses XML into {{ tag, attrs?, text?, children? }} tree; namespace URIs are prefixed to tag names)
+- xml_encode(table) -> string (encodes a {{ tag, attrs?, text?, children? }} tree back to XML)
 - log(message) -> nil
 - run_tool(name, params_table) -> table (call another tool by name, passing it a params table)
 - secret(name) -> string (retrieve a secret by name, e.g. API keys)
@@ -38,7 +41,8 @@ Rules:
 - Use http_get/http_post for external API calls
 - Use run_tool() to call existing tools instead of reimplementing their logic
 - Use json_parse to parse JSON responses
-- Use Lua string patterns for HTML/XML parsing (the sandbox has no DOM library)
+- Use xml_parse to parse XML responses (CalDAV, SOAP, RSS/Atom, etc.)
+- Use Lua string patterns for HTML parsing (the sandbox has no DOM library)
 - Do NOT use io, os, require, dofile, loadfile, or debug
 - Handle errors gracefully (check response status, log useful messages with log())
 
@@ -121,7 +125,9 @@ pub fn build_codegen_prompt(
             .map(|k| format!("- \"{k}\""))
             .collect::<Vec<_>>()
             .join("\n");
-        format!("Available secrets via secret(name):\n{list}\nUse these for authenticated API calls instead of hardcoding keys.\n\n")
+        format!(
+            "Available secrets via secret(name):\n{list}\nUse these for authenticated API calls instead of hardcoding keys.\n\n"
+        )
     };
 
     CODEGEN_PROMPT_TEMPLATE

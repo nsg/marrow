@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::sandbox::create_sandbox;
+use crate::xml::XmlNode;
 
 const MAX_RECURSION_DEPTH: u32 = 5;
 
@@ -30,10 +31,13 @@ impl HostConfig {
 }
 
 pub fn register_host_functions(lua: &Lua, config: &HostConfig) -> Result<()> {
+    register_http_request(lua, config.client.clone())?;
     register_http_get(lua, config.client.clone())?;
     register_http_post(lua, config.client.clone())?;
     register_json_parse(lua)?;
     register_json_encode(lua)?;
+    register_xml_parse(lua)?;
+    register_xml_encode(lua)?;
     register_log(lua)?;
     register_secret(lua, config.secrets.clone())?;
 
@@ -146,6 +150,47 @@ async fn run_tool_inner(
     Ok(json)
 }
 
+fn register_http_request(lua: &Lua, client: Arc<Client>) -> Result<()> {
+    let func = lua.create_async_function(move |lua, opts: mlua::Table| {
+        let client = client.clone();
+        async move {
+            let method: String = opts.get("method")?;
+            let url: String = opts.get("url")?;
+            let body: Option<String> = opts.get("body").ok();
+            let headers: Option<mlua::Table> = opts.get("headers").ok();
+
+            let method = method
+                .parse::<reqwest::Method>()
+                .map_err(|e| mlua::Error::external(format!("invalid HTTP method: {e}")))?;
+
+            let mut req = client.request(method, &url);
+
+            if let Some(h) = headers {
+                for pair in h.pairs::<String, String>() {
+                    let (k, v) = pair?;
+                    req = req.header(k, v);
+                }
+            }
+
+            if let Some(b) = body {
+                req = req.body(b);
+            }
+
+            let resp = req.send().await.map_err(mlua::Error::external)?;
+
+            let status = resp.status().as_u16();
+            let resp_body = resp.text().await.map_err(mlua::Error::external)?;
+
+            let result = lua.create_table()?;
+            result.set("status", status)?;
+            result.set("body", resp_body)?;
+            Ok(Value::Table(result))
+        }
+    })?;
+    lua.globals().set("http_request", func)?;
+    Ok(())
+}
+
 fn register_http_get(lua: &Lua, client: Arc<Client>) -> Result<()> {
     let func = lua.create_async_function(move |lua, url: String| {
         let client = client.clone();
@@ -212,6 +257,80 @@ fn register_json_encode(lua: &Lua) -> Result<()> {
     })?;
     lua.globals().set("json_encode", func)?;
     Ok(())
+}
+
+fn register_xml_parse(lua: &Lua) -> Result<()> {
+    let func = lua.create_function(|lua, input: String| {
+        let node = crate::xml::parse(&input).map_err(mlua::Error::external)?;
+        xml_node_to_lua(lua, &node)
+    })?;
+    lua.globals().set("xml_parse", func)?;
+    Ok(())
+}
+
+fn register_xml_encode(lua: &Lua) -> Result<()> {
+    let func = lua.create_function(|_, table: mlua::Table| {
+        let node = lua_to_xml_node(&table)?;
+        crate::xml::encode(&node).map_err(mlua::Error::external)
+    })?;
+    lua.globals().set("xml_encode", func)?;
+    Ok(())
+}
+
+fn xml_node_to_lua(lua: &Lua, node: &XmlNode) -> Result<Value> {
+    let table = lua.create_table()?;
+    table.set("tag", node.tag.as_str())?;
+
+    if !node.attrs.is_empty() {
+        let attrs = lua.create_table()?;
+        for (k, v) in &node.attrs {
+            attrs.set(k.as_str(), v.as_str())?;
+        }
+        table.set("attrs", attrs)?;
+    }
+
+    if let Some(ref text) = node.text {
+        table.set("text", text.as_str())?;
+    }
+
+    if !node.children.is_empty() {
+        let children = lua.create_table()?;
+        for (i, child) in node.children.iter().enumerate() {
+            children.set(i + 1, xml_node_to_lua(lua, child)?)?;
+        }
+        table.set("children", children)?;
+    }
+
+    Ok(Value::Table(table))
+}
+
+fn lua_to_xml_node(table: &mlua::Table) -> Result<XmlNode> {
+    let tag: String = table.get("tag")?;
+
+    let mut attrs = HashMap::new();
+    if let Ok(attrs_table) = table.get::<mlua::Table>("attrs") {
+        for pair in attrs_table.pairs::<String, String>() {
+            let (k, v) = pair?;
+            attrs.insert(k, v);
+        }
+    }
+
+    let text: Option<String> = table.get("text").ok();
+
+    let mut children = Vec::new();
+    if let Ok(children_table) = table.get::<mlua::Table>("children") {
+        for pair in children_table.pairs::<i64, mlua::Table>() {
+            let (_, child_table) = pair?;
+            children.push(lua_to_xml_node(&child_table)?);
+        }
+    }
+
+    Ok(XmlNode {
+        tag,
+        attrs,
+        text,
+        children,
+    })
 }
 
 fn register_log(lua: &Lua) -> Result<()> {
