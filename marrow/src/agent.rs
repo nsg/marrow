@@ -80,6 +80,7 @@ Rules:
 - NEVER retry something that already failed with the same error. If "require" failed, it will always fail. If a secret name was not found, try a different name.
 - If something worked in a previous step, reuse that exact approach. Do not regress to a pattern that already failed.
 - Do NOT answer prematurely. If data collection failed, try a different approach before giving up. Only answer when you have actual data or have exhausted all reasonable approaches.
+- If a follow-up question asks about different data (different dates, different items, etc.), you MUST fetch new data — previous conversation results do not cover it.
 - If a saved tool fails repeatedly, use remove_tool to delete it — you can always recreate it or use inline Lua instead.
 - Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
 - When creating tools, prefer generic names (e.g. "rss_reader" not "nsg_blog_reader").
