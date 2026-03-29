@@ -103,6 +103,7 @@ async fn run_task(
         None,
         conversation,
         None,
+        None,
     )
     .await?;
 

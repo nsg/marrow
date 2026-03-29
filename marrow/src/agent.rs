@@ -323,6 +323,7 @@ pub async fn run_loop(
     progress: Option<&ProgressTx>,
     conversation: &[Message],
     mut incoming: Option<&mut IncomingRx>,
+    formatting_hint: Option<&str>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let emit = |msg: String| {
         if let Some(tx) = progress {
@@ -679,6 +680,7 @@ pub async fn run_loop(
                     answer_backend,
                     conversation,
                     toolbox,
+                    formatting_hint,
                 )
                 .await;
                 return answer;
@@ -701,6 +703,7 @@ pub async fn run_loop(
         answer_backend,
         conversation,
         toolbox,
+        formatting_hint,
     )
     .await
 }
@@ -712,6 +715,7 @@ async fn format_answer(
     answer_backend: &dyn ModelBackend,
     conversation: &[Message],
     toolbox: &Toolbox,
+    formatting_hint: Option<&str>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let conversation_section = if conversation.is_empty() {
         String::new()
@@ -752,6 +756,9 @@ async fn format_answer(
             context.push_str(&format!("\nKnown facts:\n{facts}\n"));
         }
         context.push_str("\nAnswer the user's question directly. If the conversation has prior context, use it. Only reference tools and capabilities you actually have.");
+        if let Some(hint) = formatting_hint {
+            context.push_str(&format!("\n\n{hint}"));
+        }
         return answer_backend.complete(context).await;
     }
 
@@ -777,6 +784,9 @@ async fn format_answer(
         context.push_str(&format!("\nKnown facts:\n{facts}\n"));
     }
     context.push_str("\nUsing the collected data above, answer the user's question. Be specific and include relevant details. If the conversation has prior context, use it.");
+    if let Some(hint) = formatting_hint {
+        context.push_str(&format!("\n\n{hint}"));
+    }
 
     answer_backend.complete(context).await
 }

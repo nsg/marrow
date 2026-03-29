@@ -235,6 +235,8 @@ impl EventHandler for Handler {
 // Agent task runner (mirrors marrow-cli's run_task)
 // ---------------------------------------------------------------------------
 
+const DISCORD_FORMATTING_HINT: &str = "Formatting: The response will be displayed in Discord. Discord supports **bold**, *italic*, __underline__, ~~strikethrough~~, `inline code`, ```code blocks```, > quotes, and bullet lists (- item). Discord does NOT support markdown tables, headings (#), or horizontal rules. Keep responses concise — messages over 2000 characters are split.";
+
 #[allow(clippy::too_many_arguments)]
 async fn run_task(
     description: &str,
@@ -289,6 +291,7 @@ async fn run_task(
         Some(progress),
         conversation,
         Some(incoming),
+        Some(DISCORD_FORMATTING_HINT),
     )
     .await?;
 
