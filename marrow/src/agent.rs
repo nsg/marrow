@@ -21,7 +21,7 @@ pub type ProgressTx = mpsc::UnboundedSender<String>;
 /// Receiver for user messages injected mid-loop (e.g. Discord follow-ups).
 pub type IncomingRx = mpsc::UnboundedReceiver<String>;
 
-const MAX_AGENT_STEPS: u32 = 10;
+const MAX_AGENT_STEPS: u32 = 25;
 
 const AGENT_PROMPT_TEMPLATE: &str = r#"You are an agent that completes tasks step by step. Each turn you perform ONE action.
 
@@ -682,6 +682,13 @@ pub async fn run_loop(
     }
 
     // Max steps reached — force an answer with what we have
+    history.push(StepResult {
+        step: MAX_AGENT_STEPS + 1,
+        action: Action::UserMessage {
+            text: String::new(),
+        },
+        output: "SYSTEM: You have run out of steps. Summarize what you accomplished and what remains unfinished so the user knows where things stand.".to_string(),
+    });
     format_answer(
         task,
         memories,
