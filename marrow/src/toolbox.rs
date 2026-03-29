@@ -199,7 +199,7 @@ impl Toolbox {
         Ok(self
             .list_tools()?
             .into_iter()
-            .filter(|t| !t.validated)
+            .filter(|t| !t.validated && !t.ephemeral)
             .collect())
     }
 
