@@ -156,8 +156,21 @@ impl EventHandler for Handler {
         let channel_id = msg.channel_id;
         let http = ctx.http.clone();
         let progress_handle = tokio::spawn(async move {
+            let mut status_msg: Option<serenity::model::channel::Message> = None;
             while let Some(status) = progress_rx.recv().await {
-                let _ = channel_id.say(&http, &status).await;
+                if let Some(ref mut msg) = status_msg {
+                    let _ = msg
+                        .edit(&http, serenity::builder::EditMessage::new().content(&status))
+                        .await;
+                } else {
+                    if let Ok(m) = channel_id.say(&http, &status).await {
+                        status_msg = Some(m);
+                    }
+                }
+            }
+            // Delete the status message when the task is done
+            if let Some(msg) = status_msg {
+                let _ = msg.delete(&http).await;
             }
         });
 
