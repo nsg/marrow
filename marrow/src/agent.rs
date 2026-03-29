@@ -38,6 +38,9 @@ To create a new tool (ONLY if no existing tool can do the job):
 To keep a tool you created (only if it worked well and is reusable):
 {{"action": "keep_tool", "name": "tool_name"}}
 
+To remove a broken persistent tool (ONLY if you are certain it is fundamentally broken, not just called wrong):
+{{"action": "remove_tool", "name": "tool_name"}}
+
 To give your final answer (ONLY when you have gathered enough data):
 {{"action": "answer", "text": "your complete answer to the user"}}
 
@@ -64,6 +67,9 @@ pub enum Action {
         description: String,
     },
     KeepTool {
+        name: String,
+    },
+    RemoveTool {
         name: String,
     },
     Answer {
@@ -122,6 +128,7 @@ pub fn build_agent_prompt(
                         format!("Created tool \"{name}\"")
                     }
                     Action::KeepTool { name } => format!("Kept tool \"{name}\""),
+                    Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
                     Action::Answer { .. } => "Answered".to_string(),
                 };
                 let output_display = if s.output.len() > 1000 {
@@ -230,6 +237,11 @@ pub fn parse_action(response: &str) -> Action {
                         return Action::KeepTool { name };
                     }
                 }
+                "remove_tool" => {
+                    if let Some(name) = raw.name.or(raw.tool) {
+                        return Action::RemoveTool { name };
+                    }
+                }
                 "answer" => {
                     if let Some(text) = raw.text {
                         return Action::Answer { text };
@@ -320,6 +332,9 @@ pub async fn run_loop(
                 }
                 Action::KeepTool { name } => {
                     eprintln!("[agent] step {step}: parsed keep_tool \"{name}\"");
+                }
+                Action::RemoveTool { name } => {
+                    eprintln!("[agent] step {step}: parsed remove_tool \"{name}\"");
                 }
                 Action::Answer { text } => {
                     let preview = if text.len() > 200 {
@@ -511,6 +526,30 @@ pub async fn run_loop(
                         format!("Tool \"{name}\" marked as persistent.")
                     }
                     Err(e) => format!("Failed to keep tool: {e}"),
+                };
+
+                history.push(StepResult {
+                    step,
+                    action,
+                    output,
+                });
+            }
+
+            Action::RemoveTool { name } => {
+                log.emit(Event::AgentAction {
+                    task_id: task_id.to_string(),
+                    step,
+                    action_type: "remove_tool".to_string(),
+                    detail: name.clone(),
+                })
+                .await;
+
+                let output = match toolbox.delete_tool(name) {
+                    Ok(()) => {
+                        emit(format!("🗑️ Removed tool \"{name}\""));
+                        format!("Tool \"{name}\" has been removed.")
+                    }
+                    Err(e) => format!("Failed to remove tool: {e}"),
                 };
 
                 history.push(StepResult {
