@@ -35,20 +35,20 @@ To call an existing tool:
 To create a new tool (ONLY if no existing tool can do the job):
 {{"action": "create_tool", "name": "new_tool_name", "description": "one line description of what it does"}}
 
+To keep a tool you created (only if it worked well and is reusable):
+{{"action": "keep_tool", "name": "tool_name"}}
+
 To give your final answer (ONLY when you have gathered enough data):
 {{"action": "answer", "text": "your complete answer to the user"}}
 
 Rules:
-- ALWAYS prefer existing tools over creating new ones. The same tool can serve many requests with different param values.
-- Match tool to purpose: read each tool's description and output fields carefully. Only use a tool for what it was designed to do. Do NOT repurpose a tool for an unrelated task (e.g. don't use a blog scraper to look up time data).
-- Consider ALL data a tool returns. Check the "returns" fields — a weather tool may also return local time, a web scraper may return dates, etc. If an existing tool's output already contains the data you need, use it instead of creating a new tool.
-- Only create a tool if no existing tool can provide the data you need, even as a secondary field.
+- Prefer existing persistent tools when they fit. But don't hesitate to create a new tool if none match — created tools are ephemeral (deleted after this task) so there's no cost to experimenting.
 - After creating a tool, you MUST call it in your next turn — creation alone does nothing.
-- When creating tools, make them GENERIC and reusable (e.g. "rss_reader" not "nsg_blog_reader").
+- If a tool fails, you may retry ONCE with different params. After two failures, create a new tool or try a different approach.
+- If a created tool works well and is generic enough to be reusable, use keep_tool to save it permanently.
+- Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before creating a new tool.
+- When creating tools, prefer generic names (e.g. "rss_reader" not "nsg_blog_reader").
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
-- STRICT RETRY LIMIT: if a tool fails, you may try it ONCE more with different params. After two failures with the same tool, you MUST move on — either use a different tool or create a new one. NEVER call the same tool more than twice total.
-- When a tool expects a URL but fails, consider trying common URL variations (e.g. /feed.xml, /rss, /atom.xml for feeds; /api/ for APIs) before giving up.
-- For fetching blog posts: RSS/Atom feeds are far more reliable than HTML scraping. If no feed parser tool exists, create one early rather than repeatedly failing with HTML scrapers. Most blogs have feeds at /feed.xml, /rss, /feed, or /atom.xml.
 - The answer action text should be a natural language response, NOT a JSON action.
 
 {history}Your action:"#;
@@ -62,6 +62,9 @@ pub enum Action {
     CreateTool {
         name: String,
         description: String,
+    },
+    KeepTool {
+        name: String,
     },
     Answer {
         text: String,
@@ -118,6 +121,7 @@ pub fn build_agent_prompt(
                     Action::CreateTool { name, .. } => {
                         format!("Created tool \"{name}\"")
                     }
+                    Action::KeepTool { name } => format!("Kept tool \"{name}\""),
                     Action::Answer { .. } => "Answered".to_string(),
                 };
                 let output_display = if s.output.len() > 1000 {
@@ -221,6 +225,11 @@ pub fn parse_action(response: &str) -> Action {
                         return Action::CreateTool { name, description };
                     }
                 }
+                "keep_tool" => {
+                    if let Some(name) = raw.name.or(raw.tool) {
+                        return Action::KeepTool { name };
+                    }
+                }
                 "answer" => {
                     if let Some(text) = raw.text {
                         return Action::Answer { text };
@@ -308,6 +317,9 @@ pub async fn run_loop(
                 }
                 Action::CreateTool { name, description } => {
                     eprintln!("[agent] step {step}: parsed create_tool \"{name}\" — {description}");
+                }
+                Action::KeepTool { name } => {
+                    eprintln!("[agent] step {step}: parsed keep_tool \"{name}\"");
                 }
                 Action::Answer { text } => {
                     let preview = if text.len() > 200 {
@@ -484,6 +496,30 @@ pub async fn run_loop(
                 });
             }
 
+            Action::KeepTool { name } => {
+                log.emit(Event::AgentAction {
+                    task_id: task_id.to_string(),
+                    step,
+                    action_type: "keep_tool".to_string(),
+                    detail: name.clone(),
+                })
+                .await;
+
+                let output = match toolbox.keep_tool(name) {
+                    Ok(()) => {
+                        emit(format!("📌 Keeping tool \"{name}\""));
+                        format!("Tool \"{name}\" marked as persistent.")
+                    }
+                    Err(e) => format!("Failed to keep tool: {e}"),
+                };
+
+                history.push(StepResult {
+                    step,
+                    action,
+                    output,
+                });
+            }
+
             Action::Answer { .. } => {
                 log.emit(Event::AgentAction {
                     task_id: task_id.to_string(),
@@ -495,14 +531,28 @@ pub async fn run_loop(
                 if !history.is_empty() {
                     emit("💭 Thinking...".to_string());
                 }
-                return format_answer(task, memories, &history, answer_backend, conversation)
-                    .await;
+                let answer =
+                    format_answer(task, memories, &history, answer_backend, conversation).await;
+                cleanup_ephemeral(toolbox, &emit);
+                return answer;
             }
         }
     }
 
     // Max steps reached — force an answer with what we have
+    cleanup_ephemeral(toolbox, &emit);
     format_answer(task, memories, &history, answer_backend, conversation).await
+}
+
+fn cleanup_ephemeral(toolbox: &Toolbox, emit: &impl Fn(String)) {
+    match toolbox.cleanup_ephemeral() {
+        Ok(removed) => {
+            for name in &removed {
+                emit(format!("🗑️ Removed ephemeral tool \"{name}\""));
+            }
+        }
+        Err(e) => eprintln!("[agent] ephemeral cleanup error: {e}"),
+    }
 }
 
 async fn format_answer(

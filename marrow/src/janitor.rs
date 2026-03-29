@@ -160,6 +160,7 @@ async fn regenerate_tool(
         name,
         description,
         provides: meta.provides.clone(),
+        ephemeral: meta.ephemeral,
         validated: false,
     };
 
@@ -441,6 +442,7 @@ pub async fn cleanup_toolbox(
                     description: new_desc.trim().to_string(),
                     provides: vec![new_name.clone()],
                     validated: false,
+                    ephemeral: meta.ephemeral,
                 };
                 toolbox.save_tool(&new_meta, &new_source)?;
                 if new_name != meta.name {

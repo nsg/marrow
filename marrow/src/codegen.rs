@@ -187,6 +187,7 @@ pub async fn generate_provider_with_hint(
         description,
         provides: vec![name.clone()],
         validated: false,
+        ephemeral: false,
     };
 
     toolbox.ensure_dir()?;
@@ -249,6 +250,7 @@ pub async fn generate_provider_for_agent(
         description,
         provides: vec![tool_name.to_string()],
         validated: false,
+        ephemeral: true,
     };
 
     toolbox.ensure_dir()?;
@@ -342,6 +344,7 @@ return { ok = true }
             name: "weather".to_string(),
             description: "Get weather data".to_string(),
             provides: vec![],
+            ephemeral: false,
             validated: true,
         }];
         let prompt = build_codegen_prompt("test task", None, &tools, "", &[]);

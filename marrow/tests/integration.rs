@@ -164,6 +164,7 @@ async fn agent_loop_call_tool_then_answer() {
                 description: "Returns greeting".to_string(),
                 provides: vec![],
                 validated: true,
+                ephemeral: false,
             },
             r#"return { msg = "hello world" }"#,
         )
@@ -367,6 +368,7 @@ async fn run_tool_calls_another_tool() {
                 description: "Returns greeting".to_string(),
                 provides: vec![],
                 validated: true,
+                ephemeral: false,
             },
             r#"return { msg = "hello from greeter" }"#,
         )
@@ -402,6 +404,7 @@ async fn run_tool_passes_params() {
                 description: "Echoes".to_string(),
                 provides: vec![],
                 validated: true,
+                ephemeral: false,
             },
             r#"return { city = PARAMS["CITY"] }"#,
         )
@@ -434,6 +437,7 @@ async fn run_tool_recursion_guard() {
                 description: "Loop".to_string(),
                 provides: vec![],
                 validated: true,
+                ephemeral: false,
             },
             r#"return run_tool("infinite", {})"#,
         )
@@ -479,6 +483,7 @@ async fn run_tool_glue_composition() {
                 description: "Get weather".to_string(),
                 provides: vec![],
                 validated: true,
+                ephemeral: false,
             },
             r#"return { temp = 22, condition = "sunny", location = PARAMS["LOCATION"] }"#,
         )
@@ -491,6 +496,7 @@ async fn run_tool_glue_composition() {
                 description: "Get events".to_string(),
                 provides: vec![],
                 validated: true,
+                ephemeral: false,
             },
             r#"return { events = {"hiking", "lunch"} }"#,
         )
@@ -593,6 +599,7 @@ async fn toolbox_save_load_list() {
         description: "A test".to_string(),
         provides: vec![],
         validated: false,
+        ephemeral: false,
     };
     toolbox.save_tool(&meta, "return { ok = true }").unwrap();
     assert_eq!(toolbox.load_meta("test_tool").unwrap().name, "test_tool");
@@ -609,6 +616,7 @@ async fn toolbox_delete_tool() {
         description: "x".to_string(),
         provides: vec![],
         validated: false,
+        ephemeral: false,
     };
     toolbox.save_tool(&meta, "return {}").unwrap();
     toolbox.delete_tool("x").unwrap();
@@ -653,6 +661,7 @@ async fn janitor_writes_knowledge_on_failure() {
         description: "Flawed tool".to_string(),
         provides: vec![],
         validated: false,
+        ephemeral: false,
     };
     toolbox.save_tool(&meta, "return {}").unwrap();
 
@@ -730,6 +739,7 @@ async fn janitor_validates_passing_tool() {
         description: "Good".to_string(),
         provides: vec![],
         validated: false,
+        ephemeral: false,
     };
     toolbox.save_tool(&meta, "return { ok = true }").unwrap();
     let backend = MockBackend::new(vec![
@@ -751,6 +761,7 @@ async fn janitor_deletes_after_max_failures() {
         description: "Bad".to_string(),
         provides: vec![],
         validated: false,
+        ephemeral: false,
     };
     toolbox.save_tool(&meta, "return {}").unwrap();
     let backend = MockBackend::new(vec![

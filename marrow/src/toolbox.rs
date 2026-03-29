@@ -12,6 +12,8 @@ pub struct ToolMeta {
     pub provides: Vec<String>,
     #[serde(default)]
     pub validated: bool,
+    #[serde(default)]
+    pub ephemeral: bool,
 }
 
 pub struct Toolbox {
@@ -170,6 +172,27 @@ impl Toolbox {
             }
         }
         fields
+    }
+
+    pub fn keep_tool(&self, name: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let mut meta = self.load_meta(name)?;
+        if meta.ephemeral {
+            meta.ephemeral = false;
+            let meta_path = self.dir.join(format!("{name}.toml"));
+            std::fs::write(meta_path, toml::to_string_pretty(&meta)?)?;
+        }
+        Ok(())
+    }
+
+    pub fn cleanup_ephemeral(&self) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+        let mut removed = Vec::new();
+        for meta in self.list_tools()? {
+            if meta.ephemeral {
+                self.delete_tool(&meta.name)?;
+                removed.push(meta.name);
+            }
+        }
+        Ok(removed)
     }
 
     pub fn list_unvalidated(&self) -> Result<Vec<ToolMeta>, Box<dyn Error + Send + Sync>> {
