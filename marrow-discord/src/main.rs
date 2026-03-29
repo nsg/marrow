@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -6,9 +7,10 @@ use serenity::async_trait;
 use serenity::model::channel::Message as DiscordMessage;
 use serenity::model::gateway::GatewayIntents;
 use serenity::model::gateway::Ready;
+use serenity::model::id::ChannelId;
 use serenity::prelude::*;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 
 use marrow::agent;
 use marrow::agent::ProgressTx;
@@ -18,6 +20,7 @@ use marrow::memory::MemoryStore;
 use marrow::memory_writer;
 use marrow::router::{ModelRouter, RouterConfig};
 use marrow::secrets::Secrets;
+use marrow::session::{ChatSession, Message};
 use marrow::toolbox::Toolbox;
 
 // ---------------------------------------------------------------------------
@@ -62,6 +65,11 @@ impl TypeMapKey for ChannelsKey {
 struct SecretsKey;
 impl TypeMapKey for SecretsKey {
     type Value = Arc<Secrets>;
+}
+
+struct SessionsKey;
+impl TypeMapKey for SessionsKey {
+    type Value = Arc<RwLock<HashMap<ChannelId, ChatSession>>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +118,7 @@ impl EventHandler for Handler {
         let client = data.get::<HttpClientKey>().unwrap().clone();
         let log = data.get::<EventLogKey>().unwrap().clone();
         let secrets = data.get::<SecretsKey>().unwrap().clone();
+        let sessions = data.get::<SessionsKey>().unwrap().clone();
         drop(data);
 
         // Show typing indicator while processing
@@ -152,6 +161,25 @@ impl EventHandler for Handler {
         for chunk in split_message(&response, 2000) {
             if let Err(e) = msg.channel_id.say(&ctx.http, chunk).await {
                 eprintln!("[marrow-discord] failed to send message: {e}");
+            }
+        }
+
+        // Track conversation history per channel
+        {
+            let mut sessions_map = sessions.write().await;
+            let session = sessions_map
+                .entry(msg.channel_id)
+                .or_insert_with(ChatSession::new);
+            session.append(Message::user(content));
+            session.append(Message::assistant(&response));
+
+            if session.needs_summarization()
+                && let Ok(backend) = router
+                    .backend("fast")
+                    .or_else(|_| router.backend("default"))
+                && let Err(e) = session.summarize(backend).await
+            {
+                eprintln!("[marrow-discord] session summarize error: {e}");
             }
         }
     }
@@ -332,6 +360,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         data.insert::<EventLogKey>(log);
         data.insert::<ChannelsKey>(channels);
         data.insert::<SecretsKey>(secrets);
+        data.insert::<SessionsKey>(Arc::new(RwLock::new(HashMap::new())));
     }
 
     eprintln!("[marrow-discord] starting...");

@@ -97,18 +97,18 @@ pub async fn process_interaction(
     }
 
     for (id_str, new_fact) in &actions.update {
-        if let Ok(id) = id_str.parse::<Uuid>() {
-            if store.update(id, new_fact.clone()).is_ok() {
-                result.updated.push(new_fact.clone());
-            }
+        if let Ok(id) = id_str.parse::<Uuid>()
+            && store.update(id, new_fact.clone()).is_ok()
+        {
+            result.updated.push(new_fact.clone());
         }
     }
 
     for id_str in &actions.delete {
-        if let Ok(id) = id_str.parse::<Uuid>() {
-            if store.delete(id).is_ok() {
-                result.deleted += 1;
-            }
+        if let Ok(id) = id_str.parse::<Uuid>()
+            && store.delete(id).is_ok()
+        {
+            result.deleted += 1;
         }
     }
 
