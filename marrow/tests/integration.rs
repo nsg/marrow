@@ -14,8 +14,6 @@ use marrow::registry::TaskRegistry;
 use marrow::session::{ChatSession, Message};
 use marrow::task::Task;
 use marrow::toolbox::{ToolMeta, Toolbox};
-use marrow::triage;
-
 use reqwest::Client;
 use tokio::sync::Mutex;
 
@@ -72,34 +70,6 @@ async fn noop_log() -> EventLog {
 // ---------------------------------------------------------------------------
 // Triage tests
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn triage_says_no_for_greeting() {
-    let backend = MockBackend::new(vec!["NO"]);
-    let result = triage::needs_external_data("hello", &backend, None, &[])
-        .await
-        .unwrap();
-    assert!(!result);
-}
-
-#[tokio::test]
-async fn triage_says_yes_for_weather() {
-    let backend = MockBackend::new(vec!["YES"]);
-    let result = triage::needs_external_data("what's the weather?", &backend, None, &[])
-        .await
-        .unwrap();
-    assert!(result);
-}
-
-#[tokio::test]
-async fn triage_considers_memories() {
-    let mem = Memory::new("User lives in Tokyo", MemorySource::User);
-    let backend = MockBackend::new(vec!["NO"]);
-    let result = triage::needs_external_data("where do I live?", &backend, None, &[mem])
-        .await
-        .unwrap();
-    assert!(!result);
-}
 
 // ---------------------------------------------------------------------------
 // Agent action parsing tests

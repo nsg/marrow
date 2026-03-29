@@ -20,5 +20,4 @@ pub mod session;
 pub mod task;
 pub mod tool_selection;
 pub mod toolbox;
-pub mod triage;
 pub mod xml;
