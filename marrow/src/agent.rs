@@ -322,6 +322,7 @@ fn auto_save_inline(
     code: Option<String>,
     toolbox: &Toolbox,
     history: &[StepResult],
+    task: &str,
     emit: &impl Fn(String),
 ) {
     let Some(code) = code else { return };
@@ -345,7 +346,7 @@ fn auto_save_inline(
 
     let meta = crate::toolbox::ToolMeta {
         name: name.clone(),
-        description: "Auto-saved inline code".to_string(),
+        description: format!("Auto-saved from task: {}", task.chars().take(80).collect::<String>()),
         provides: vec![name.clone()],
         validated: false,
     };
@@ -793,7 +794,7 @@ pub async fn run_loop(
                 if !history.is_empty() {
                     emit("💭 Thinking...".to_string());
                 }
-                auto_save_inline(last_successful_code.take(), toolbox, &history, &emit);
+                auto_save_inline(last_successful_code.take(), toolbox, &history, task, &emit);
                 let answer = format_answer(
                     task,
                     memories,
@@ -810,7 +811,7 @@ pub async fn run_loop(
     }
 
     // Max steps reached — force an answer with what we have
-    auto_save_inline(last_successful_code.take(), toolbox, &history, &emit);
+    auto_save_inline(last_successful_code.take(), toolbox, &history, task, &emit);
     history.push(StepResult {
         step: MAX_AGENT_STEPS + 1,
         action: Action::UserMessage {
