@@ -28,7 +28,8 @@ const AGENT_PROMPT_TEMPLATE: &str = r#"You are an agent that completes tasks ste
 Available tools:
 {tools}
 
-{memories}{conversation}Task: {task}
+{memories}{conversation}Current date/time: {datetime}
+Task: {task}
 
 CRITICAL: You have NO shell access. No curl, no bash, no command line. You can ONLY interact through the actions below.
 
@@ -210,6 +211,8 @@ pub fn build_agent_prompt(
         format!("Conversation so far:\n{lines}\n\n")
     };
 
+    let datetime = chrono::Local::now().format("%Y-%m-%d %H:%M (%A)").to_string();
+
     AGENT_PROMPT_TEMPLATE
         .replace("{tools}", tools_section)
         .replace(
@@ -217,6 +220,7 @@ pub fn build_agent_prompt(
             &format!("{memories_section}{secrets_section}"),
         )
         .replace("{conversation}", &conversation_section)
+        .replace("{datetime}", &datetime)
         .replace("{task}", task)
         .replace("{history}", &history_section)
 }
@@ -797,8 +801,9 @@ async fn format_answer(
         format!("Your installed tools:\n{list}")
     };
 
+    let datetime = chrono::Local::now().format("%Y-%m-%d %H:%M (%A)").to_string();
     let system_context = format!(
-        "You are Marrow, a workflow automation agent. You interact through Lua tools in a sandbox — you do NOT have shell access, curl, Python, or any command line tools. {tools_section}\n\n"
+        "You are Marrow, a workflow automation agent. You interact through Lua tools in a sandbox — you do NOT have shell access, curl, Python, or any command line tools. {tools_section}\n\nCurrent date/time: {datetime}\n\n"
     );
 
     if history.is_empty() {
