@@ -29,6 +29,8 @@ Available host functions in the sandbox:
 - xml_parse(string) -> table (parses XML into {{ tag, attrs?, text?, children? }} tree; namespace URIs are prefixed to tag names)
 - xml_encode(table) -> string (encodes a {{ tag, attrs?, text?, children? }} tree back to XML)
 - log(message) -> nil
+- run_tool(name, params_table) -> table (call another tool by name, passing it a params table)
+- secret(name) -> string (retrieve a secret by name, e.g. API keys — NEVER hardcode credentials)
 
 Global tables available:
 - TASK.description (string): the user's task description
@@ -41,6 +43,7 @@ Review criteria:
 4. Does the name accurately reflect what the tool does?
 5. Does the code use host functions correctly?
 6. Does the code handle errors (check HTTP status, handle parse failures)?
+7. Credentials: Does the tool use secret() for API keys and passwords? Hardcoded credentials or invented syntax (e.g. @name, ${{name}}) must be replaced with secret("name").
 
 Respond in this exact format:
 ```verdict
@@ -79,6 +82,8 @@ Available host functions in the sandbox:
 - xml_parse(string) -> table (parses XML into {{ tag, attrs?, text?, children? }} tree; namespace URIs are prefixed to tag names)
 - xml_encode(table) -> string (encodes a {{ tag, attrs?, text?, children? }} tree back to XML)
 - log(message) -> nil
+- run_tool(name, params_table) -> table (call another tool by name, passing it a params table)
+- secret(name) -> string (retrieve a secret by name, e.g. API keys — NEVER hardcode credentials)
 
 Global tables available:
 - TASK.description (string): the user's task description
@@ -88,6 +93,7 @@ Rules:
 - Return a Lua table with the context data
 - Fix ALL issues mentioned above
 - Use PARAMS for input values, not hardcoded values
+- Use secret("name") for ALL credentials (API keys, passwords, tokens) — never hardcode them, never invent alternative syntax
 - If the description is too generic for the code, update the description to match
 - If the code is too specific, make it generic (e.g., use PARAMS for variable data)
 - Keep it simple and focused
