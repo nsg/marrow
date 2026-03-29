@@ -18,6 +18,9 @@ use crate::toolbox::Toolbox;
 /// Each message is a human-readable status string.
 pub type ProgressTx = mpsc::UnboundedSender<String>;
 
+/// Receiver for user messages injected mid-loop (e.g. Discord follow-ups).
+pub type IncomingRx = mpsc::UnboundedReceiver<String>;
+
 const MAX_AGENT_STEPS: u32 = 10;
 
 const AGENT_PROMPT_TEMPLATE: &str = r#"You are an agent that completes tasks step by step. Each turn you perform ONE action.
@@ -55,6 +58,7 @@ Rules:
 - When creating tools, prefer generic names (e.g. "rss_reader" not "nsg_blog_reader").
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
 - The answer action text should be a natural language response, NOT a JSON action.
+- If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling.
 
 {history}Your action:"#;
 
@@ -75,6 +79,9 @@ pub enum Action {
         name: String,
     },
     Answer {
+        text: String,
+    },
+    UserMessage {
         text: String,
     },
 }
@@ -132,6 +139,9 @@ pub fn build_agent_prompt(
                     Action::KeepTool { name } => format!("Kept tool \"{name}\""),
                     Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
                     Action::Answer { .. } => "Answered".to_string(),
+                    Action::UserMessage { text } => {
+                        format!("User follow-up: \"{text}\"")
+                    }
                 };
                 let output_display = if s.output.len() > 1000 {
                     format!("{}... (truncated)", &s.output[..1000])
@@ -278,6 +288,7 @@ pub async fn run_loop(
     secrets: Option<&Secrets>,
     progress: Option<&ProgressTx>,
     conversation: &[Message],
+    mut incoming: Option<&mut IncomingRx>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let emit = |msg: String| {
         if let Some(tx) = progress {
@@ -289,6 +300,16 @@ pub async fn run_loop(
     let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
 
     for step in 1..=MAX_AGENT_STEPS {
+        // Drain any user messages that arrived since the last step
+        if let Some(rx) = incoming.as_mut() {
+            while let Ok(msg) = rx.try_recv() {
+                history.push(StepResult {
+                    step,
+                    action: Action::UserMessage { text: msg.clone() },
+                    output: msg,
+                });
+            }
+        }
         let available_tools = toolbox.list_tools().unwrap_or_default();
         let tools_section = available_tools
             .iter()
@@ -349,6 +370,7 @@ pub async fn run_loop(
                     };
                     eprintln!("[agent] step {step}: parsed answer — {preview}");
                 }
+                Action::UserMessage { .. } => {}
             }
         }
 
@@ -564,6 +586,8 @@ pub async fn run_loop(
                 });
             }
 
+            Action::UserMessage { .. } => unreachable!(),
+
             Action::Answer { .. } => {
                 log.emit(Event::AgentAction {
                     task_id: task_id.to_string(),
@@ -668,6 +692,7 @@ async fn format_answer(
         .iter()
         .filter_map(|s| match &s.action {
             Action::CallTool { tool, .. } => Some(format!("[{tool}]: {}", s.output)),
+            Action::UserMessage { text } => Some(format!("[User follow-up]: {text}")),
             _ => None,
         })
         .collect::<Vec<_>>()

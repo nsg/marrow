@@ -98,6 +98,7 @@ async fn run_task(
         Some(secrets),
         None,
         conversation,
+        None,
     )
     .await?;
 

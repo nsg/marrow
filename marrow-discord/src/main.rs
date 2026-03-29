@@ -13,7 +13,7 @@ use serenity::prelude::*;
 use tokio::sync::{RwLock, mpsc};
 
 use marrow::agent;
-use marrow::agent::ProgressTx;
+use marrow::agent::{IncomingRx, ProgressTx};
 use marrow::events::{Event, EventLog};
 use marrow::janitor;
 use marrow::memory::MemoryStore;
@@ -72,6 +72,11 @@ impl TypeMapKey for SessionsKey {
     type Value = Arc<RwLock<HashMap<ChannelId, ChatSession>>>;
 }
 
+struct ActiveTasksKey;
+impl TypeMapKey for ActiveTasksKey {
+    type Value = Arc<RwLock<HashMap<ChannelId, mpsc::UnboundedSender<String>>>>;
+}
+
 // ---------------------------------------------------------------------------
 // Event handler
 // ---------------------------------------------------------------------------
@@ -109,6 +114,19 @@ impl EventHandler for Handler {
             return;
         }
 
+        // If a task is already running in this channel, forward as interjection
+        {
+            let data = ctx.data.read().await;
+            let active = data.get::<ActiveTasksKey>().unwrap().clone();
+            drop(data);
+            let active_map = active.read().await;
+            if let Some(tx) = active_map.get(&msg.channel_id) {
+                let _ = tx.send(content.to_string());
+                let _ = msg.react(&ctx.http, '👂').await;
+                return;
+            }
+        }
+
         // Extract shared state
         let data = ctx.data.read().await;
         let router = data.get::<RouterKey>().unwrap().clone();
@@ -143,6 +161,16 @@ impl EventHandler for Handler {
             }
         });
 
+        // Incoming channel — user follow-ups forwarded to the agent loop
+        let (incoming_tx, mut incoming_rx) = mpsc::unbounded_channel::<String>();
+        {
+            let data = ctx.data.read().await;
+            let active = data.get::<ActiveTasksKey>().unwrap().clone();
+            drop(data);
+            let mut active_map = active.write().await;
+            active_map.insert(msg.channel_id, incoming_tx);
+        }
+
         // Run the agent
         let response = match run_task(
             content,
@@ -155,6 +183,7 @@ impl EventHandler for Handler {
             &secrets,
             &progress_tx,
             &conversation,
+            &mut incoming_rx,
         )
         .await
         {
@@ -162,7 +191,14 @@ impl EventHandler for Handler {
             Err(e) => format!("Error: {e}"),
         };
 
-        // Close channel and wait for remaining progress messages
+        // Unregister incoming channel and close progress
+        {
+            let data = ctx.data.read().await;
+            let active = data.get::<ActiveTasksKey>().unwrap().clone();
+            drop(data);
+            let mut active_map = active.write().await;
+            active_map.remove(&msg.channel_id);
+        }
         drop(progress_tx);
         let _ = progress_handle.await;
         drop(typing);
@@ -211,6 +247,7 @@ async fn run_task(
     secrets: &Secrets,
     progress: &ProgressTx,
     conversation: &[Message],
+    incoming: &mut IncomingRx,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let task_id = uuid::Uuid::new_v4().to_string();
 
@@ -247,6 +284,7 @@ async fn run_task(
         Some(secrets),
         Some(progress),
         conversation,
+        Some(incoming),
     )
     .await?;
 
@@ -373,6 +411,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         data.insert::<ChannelsKey>(channels);
         data.insert::<SecretsKey>(secrets);
         data.insert::<SessionsKey>(Arc::new(RwLock::new(HashMap::new())));
+        data.insert::<ActiveTasksKey>(Arc::new(RwLock::new(HashMap::new())));
     }
 
     eprintln!("[marrow-discord] starting...");
