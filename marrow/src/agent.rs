@@ -573,7 +573,7 @@ pub async fn run_loop(
                     emit("💭 Thinking...".to_string());
                 }
                 let answer =
-                    format_answer(task, memories, &history, answer_backend, conversation).await;
+                    format_answer(task, memories, &history, answer_backend, conversation, toolbox).await;
                 cleanup_ephemeral(toolbox, &emit);
                 return answer;
             }
@@ -582,7 +582,7 @@ pub async fn run_loop(
 
     // Max steps reached — force an answer with what we have
     cleanup_ephemeral(toolbox, &emit);
-    format_answer(task, memories, &history, answer_backend, conversation).await
+    format_answer(task, memories, &history, answer_backend, conversation, toolbox).await
 }
 
 fn cleanup_ephemeral(toolbox: &Toolbox, emit: &impl Fn(String)) {
@@ -602,6 +602,7 @@ async fn format_answer(
     history: &[StepResult],
     answer_backend: &dyn ModelBackend,
     conversation: &[Message],
+    toolbox: &Toolbox,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let conversation_section = if conversation.is_empty() {
         String::new()
@@ -614,9 +615,25 @@ async fn format_answer(
         format!("Conversation so far:\n{lines}\n\n")
     };
 
+    let tools_list = toolbox.list_tools().unwrap_or_default();
+    let tools_section = if tools_list.is_empty() {
+        "You have no tools installed yet. You can create tools on demand when tasks require external data.".to_string()
+    } else {
+        let list = tools_list
+            .iter()
+            .map(|t| format!("- {}: {}", t.name, t.description))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("Your installed tools:\n{list}")
+    };
+
+    let system_context = format!(
+        "You are Marrow, a workflow automation agent. You interact through Lua tools in a sandbox — you do NOT have shell access, curl, Python, or any command line tools. {tools_section}\n\n"
+    );
+
     if history.is_empty() {
         // No tools were called — just answer directly
-        let mut context = format!("{conversation_section}Task: {task}\n");
+        let mut context = format!("{system_context}{conversation_section}Task: {task}\n");
         if !memories.is_empty() {
             let facts = memories
                 .iter()
@@ -625,7 +642,7 @@ async fn format_answer(
                 .join("\n");
             context.push_str(&format!("\nKnown facts:\n{facts}\n"));
         }
-        context.push_str("\nAnswer the user's question directly. If the conversation has prior context, use it.");
+        context.push_str("\nAnswer the user's question directly. If the conversation has prior context, use it. Only reference tools and capabilities you actually have.");
         return answer_backend.complete(context).await;
     }
 
@@ -638,7 +655,9 @@ async fn format_answer(
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let mut context = format!("{conversation_section}Task: {task}\n\nCollected data:\n{data}\n");
+    let mut context = format!(
+        "{system_context}{conversation_section}Task: {task}\n\nCollected data:\n{data}\n"
+    );
     if !memories.is_empty() {
         let facts = memories
             .iter()
