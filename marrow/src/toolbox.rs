@@ -1,9 +1,16 @@
+use std::collections::HashMap;
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::context::LuaProvider;
+
+type BoxError = Box<dyn Error + Send + Sync>;
+
+static TOOLBOX_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ToolMeta {
@@ -23,31 +30,80 @@ impl Toolbox {
         Self { dir: dir.into() }
     }
 
-    pub fn ensure_dir(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn lock_handle(&self) -> Arc<Mutex<()>> {
+        let key = if self.dir.is_absolute() {
+            self.dir.clone()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(&self.dir)
+        };
+
+        let locks = TOOLBOX_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut guard = locks.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    fn with_lock<T>(&self, f: impl FnOnce() -> Result<T, BoxError>) -> Result<T, BoxError> {
+        let lock = self.lock_handle();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        f()
+    }
+
+    fn ensure_dir_inner(&self) -> Result<(), BoxError> {
         std::fs::create_dir_all(&self.dir)?;
         Ok(())
     }
 
-    pub fn save_tool(
-        &self,
-        meta: &ToolMeta,
-        lua_source: &str,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.ensure_dir()?;
+    pub fn ensure_dir(&self) -> Result<(), BoxError> {
+        self.with_lock(|| self.ensure_dir_inner())
+    }
 
-        let meta_path = self.dir.join(format!("{}.toml", meta.name));
-        let lua_path = self.dir.join(format!("{}.lua", meta.name));
+    fn meta_path(&self, name: &str) -> PathBuf {
+        self.dir.join(format!("{name}.toml"))
+    }
+
+    fn lua_path(&self, name: &str) -> PathBuf {
+        self.dir.join(format!("{name}.lua"))
+    }
+
+    fn write_atomic(path: &Path, contents: &str) -> Result<(), BoxError> {
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("tool path missing file name")?;
+        let temp_path = path.with_file_name(format!(".{file_name}.tmp-{}", Uuid::new_v4()));
+
+        std::fs::write(&temp_path, contents)?;
+        std::fs::rename(&temp_path, path).inspect_err(|_| {
+            let _ = std::fs::remove_file(&temp_path);
+        })?;
+        Ok(())
+    }
+
+    fn save_tool_inner(&self, meta: &ToolMeta, lua_source: &str) -> Result<(), BoxError> {
+        self.ensure_dir_inner()?;
+
+        let meta_path = self.meta_path(&meta.name);
+        let lua_path = self.lua_path(&meta.name);
 
         let meta_content = toml::to_string_pretty(meta)?;
-        std::fs::write(meta_path, meta_content)?;
-        std::fs::write(lua_path, lua_source)?;
+        Self::write_atomic(&lua_path, lua_source)?;
+        Self::write_atomic(&meta_path, &meta_content)?;
 
         Ok(())
     }
 
-    pub fn delete_tool(&self, name: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let meta_path = self.dir.join(format!("{name}.toml"));
-        let lua_path = self.dir.join(format!("{name}.lua"));
+    pub fn save_tool(&self, meta: &ToolMeta, lua_source: &str) -> Result<(), BoxError> {
+        self.with_lock(|| self.save_tool_inner(meta, lua_source))
+    }
+
+    fn delete_tool_inner(&self, name: &str) -> Result<(), BoxError> {
+        let meta_path = self.meta_path(name);
+        let lua_path = self.lua_path(name);
         if meta_path.exists() {
             std::fs::remove_file(meta_path)?;
         }
@@ -57,41 +113,63 @@ impl Toolbox {
         Ok(())
     }
 
-    pub fn load_provider(&self, name: &str) -> Result<LuaProvider, Box<dyn Error + Send + Sync>> {
-        let lua_path = self.dir.join(format!("{name}.lua"));
-        LuaProvider::from_file(name, lua_path)
+    pub fn delete_tool(&self, name: &str) -> Result<(), BoxError> {
+        self.with_lock(|| self.delete_tool_inner(name))
     }
 
-    pub fn load_meta(&self, name: &str) -> Result<ToolMeta, Box<dyn Error + Send + Sync>> {
-        let meta_path = self.dir.join(format!("{name}.toml"));
-        let content = std::fs::read_to_string(meta_path)?;
-        let meta: ToolMeta = toml::from_str(&content)?;
-        Ok(meta)
+    pub fn replace_tool(
+        &self,
+        old_name: Option<&str>,
+        new_meta: &ToolMeta,
+        lua_source: &str,
+    ) -> Result<(), BoxError> {
+        self.with_lock(|| {
+            self.save_tool_inner(new_meta, lua_source)?;
+            if let Some(old_name) = old_name.filter(|name| *name != new_meta.name) {
+                self.delete_tool_inner(old_name)?;
+            }
+            Ok(())
+        })
     }
 
-    pub fn list_tools(&self) -> Result<Vec<ToolMeta>, Box<dyn Error + Send + Sync>> {
-        let mut tools = Vec::new();
-        if !self.dir.exists() {
-            return Ok(tools);
-        }
+    pub fn load_provider(&self, name: &str) -> Result<LuaProvider, BoxError> {
+        self.with_lock(|| {
+            let source = std::fs::read_to_string(self.lua_path(name))?;
+            Ok(LuaProvider::new(name, source))
+        })
+    }
 
-        for entry in std::fs::read_dir(&self.dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "toml") {
-                let content = std::fs::read_to_string(&path)?;
-                if let Ok(meta) = toml::from_str::<ToolMeta>(&content) {
-                    tools.push(meta);
+    pub fn load_meta(&self, name: &str) -> Result<ToolMeta, BoxError> {
+        self.with_lock(|| {
+            let content = std::fs::read_to_string(self.meta_path(name))?;
+            Ok(toml::from_str(&content)?)
+        })
+    }
+
+    pub fn list_tools(&self) -> Result<Vec<ToolMeta>, BoxError> {
+        self.with_lock(|| {
+            let mut tools = Vec::new();
+            if !self.dir.exists() {
+                return Ok(tools);
+            }
+
+            for entry in std::fs::read_dir(&self.dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "toml") {
+                    let content = std::fs::read_to_string(&path)?;
+                    if let Ok(meta) = toml::from_str::<ToolMeta>(&content) {
+                        tools.push(meta);
+                    }
                 }
             }
-        }
 
-        Ok(tools)
+            Ok(tools)
+        })
     }
 
-    pub fn load_source(&self, name: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
-        let lua_path = self.dir.join(format!("{name}.lua"));
-        Ok(std::fs::read_to_string(lua_path)?)
+    pub fn load_source(&self, name: &str) -> Result<String, BoxError> {
+        self.with_lock(|| Ok(std::fs::read_to_string(self.lua_path(name))?))
     }
 
     pub fn extract_params(&self, name: &str) -> Vec<String> {
@@ -178,5 +256,72 @@ impl Toolbox {
             .into_iter()
             .filter(|t| !t.validated)
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> tempfile::TempDir {
+        tempfile::Builder::new().prefix(name).tempdir().unwrap()
+    }
+
+    #[test]
+    fn separate_instances_see_saved_tool_consistently() {
+        let dir = temp_dir("marrow_toolbox");
+        let writer = Toolbox::new(dir.path());
+        let reader = Toolbox::new(dir.path());
+
+        let meta = ToolMeta {
+            name: "weather".to_string(),
+            description: "Weather lookup".to_string(),
+            provides: vec!["weather".to_string()],
+            validated: false,
+        };
+
+        writer
+            .save_tool(&meta, r#"return { city = PARAMS["CITY"] }"#)
+            .unwrap();
+
+        assert_eq!(
+            reader.load_meta("weather").unwrap().description,
+            "Weather lookup"
+        );
+        assert!(reader.load_source("weather").unwrap().contains("PARAMS"));
+        assert_eq!(reader.list_tools().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn replace_tool_removes_old_name() {
+        let dir = temp_dir("marrow_toolbox");
+        let toolbox = Toolbox::new(dir.path());
+
+        let old_meta = ToolMeta {
+            name: "old_tool".to_string(),
+            description: "Old tool".to_string(),
+            provides: vec!["old_tool".to_string()],
+            validated: false,
+        };
+        toolbox
+            .save_tool(&old_meta, "return { ok = true }")
+            .unwrap();
+
+        let new_meta = ToolMeta {
+            name: "new_tool".to_string(),
+            description: "New tool".to_string(),
+            provides: vec!["new_tool".to_string()],
+            validated: false,
+        };
+        toolbox
+            .replace_tool(Some("old_tool"), &new_meta, "return { ok = true }")
+            .unwrap();
+
+        assert!(toolbox.load_meta("old_tool").is_err());
+        assert!(toolbox.load_source("old_tool").is_err());
+        assert_eq!(
+            toolbox.load_meta("new_tool").unwrap().description,
+            "New tool"
+        );
     }
 }

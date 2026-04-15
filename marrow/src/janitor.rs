@@ -259,10 +259,7 @@ pub async fn review_and_fix(
         .await;
 
         let (new_meta, new_source) = regenerate_tool(&meta, &source, &review, backend).await?;
-        if new_meta.name != meta.name {
-            toolbox.delete_tool(&meta.name)?;
-        }
-        toolbox.save_tool(&new_meta, &new_source)?;
+        toolbox.replace_tool(Some(&meta.name), &new_meta, &new_source)?;
         meta = new_meta;
         source = new_source;
     }
@@ -402,10 +399,7 @@ pub async fn cleanup_toolbox(
                     provides: vec![new_name.clone()],
                     validated: false,
                 };
-                toolbox.save_tool(&new_meta, &new_source)?;
-                if new_name != meta.name {
-                    toolbox.delete_tool(&meta.name)?;
-                }
+                toolbox.replace_tool(Some(&meta.name), &new_meta, &new_source)?;
                 eprintln!("[janitor] refactored '{}' -> '{}'", meta.name, new_name);
                 changed = true;
             }
