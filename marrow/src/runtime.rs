@@ -8,7 +8,8 @@ use crate::agent;
 use crate::agent::{IncomingRx, ProgressTx};
 use crate::events::{Event, EventLog};
 use crate::janitor;
-use crate::memory::MemoryStore;
+use crate::memory::{Memory, MemoryStore};
+use crate::memory_provider;
 use crate::memory_writer;
 use crate::metrics::Metrics;
 use crate::model::ModelBackend;
@@ -34,6 +35,20 @@ pub struct Runtime {
     log: Arc<EventLog>,
     secrets: Arc<Secrets>,
     metrics: Arc<Metrics>,
+}
+
+async fn load_relevant_memories(
+    description: &str,
+    store: &MemoryStore,
+    backend: &dyn ModelBackend,
+) -> Vec<Memory> {
+    match memory_provider::select_memories(description, store, backend).await {
+        Ok(memories) => memories,
+        Err(e) => {
+            eprintln!("[marrow] memory retrieval error: {e}");
+            store.list().unwrap_or_default()
+        }
+    }
 }
 
 impl Runtime {
@@ -119,7 +134,8 @@ impl Runtime {
             .backend("code")
             .or_else(|_| self.router.backend("default"))?;
 
-        let memories = self.memory_store.list().unwrap_or_default();
+        let memories =
+            load_relevant_memories(description, self.memory_store.as_ref(), fast_backend).await;
 
         let answer = agent::run_loop(
             description,
@@ -180,5 +196,99 @@ impl Runtime {
         }
 
         Ok(answer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempfile::TempDir;
+    use tokio::sync::Mutex;
+
+    use crate::memory::{Memory, MemorySource};
+    use crate::model::CompletionResult;
+    use crate::session::Message;
+
+    struct MockBackend {
+        responses: Mutex<Vec<String>>,
+    }
+
+    impl MockBackend {
+        fn new(responses: Vec<&str>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into_iter().map(String::from).collect()),
+            }
+        }
+    }
+
+    impl ModelBackend for MockBackend {
+        fn complete(&self, _prompt: String) -> CompletionResult<'_> {
+            Box::pin(async {
+                let mut queue = self.responses.lock().await;
+                if queue.is_empty() {
+                    panic!("MockBackend: no more responses queued");
+                }
+                Ok(queue.remove(0))
+            })
+        }
+
+        fn complete_chat(&self, _messages: Vec<Message>) -> CompletionResult<'_> {
+            Box::pin(async {
+                let mut queue = self.responses.lock().await;
+                if queue.is_empty() {
+                    panic!("MockBackend: no more responses queued");
+                }
+                Ok(queue.remove(0))
+            })
+        }
+    }
+
+    struct FailingBackend;
+
+    impl ModelBackend for FailingBackend {
+        fn complete(&self, _prompt: String) -> CompletionResult<'_> {
+            Box::pin(async { Err("backend failed".into()) })
+        }
+
+        fn complete_chat(&self, _messages: Vec<Message>) -> CompletionResult<'_> {
+            Box::pin(async { Err("backend failed".into()) })
+        }
+    }
+
+    fn temp_dir(name: &str) -> TempDir {
+        tempfile::Builder::new().prefix(name).tempdir().unwrap()
+    }
+
+    #[tokio::test]
+    async fn load_relevant_memories_selects_matching_facts() {
+        let dir = temp_dir("marrow_runtime_mem");
+        let store = MemoryStore::new(dir.path());
+        let mem = Memory::new("user prefers dark mode", MemorySource::User);
+        let id = mem.id;
+        store.save(&mem).unwrap();
+
+        let backend = MockBackend::new(vec![&format!(r#"["{id}"]"#)]);
+        let selected = load_relevant_memories("theme?", &store, &backend).await;
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].fact, "user prefers dark mode");
+    }
+
+    #[tokio::test]
+    async fn load_relevant_memories_falls_back_to_all_on_error() {
+        let dir = temp_dir("marrow_runtime_mem");
+        let store = MemoryStore::new(dir.path());
+        let first = Memory::new("user prefers dark mode", MemorySource::User);
+        let second = Memory::new("user works in UTC", MemorySource::User);
+        store.save(&first).unwrap();
+        store.save(&second).unwrap();
+
+        let selected = load_relevant_memories("theme?", &store, &FailingBackend).await;
+
+        assert_eq!(selected.len(), 2);
+        let facts: Vec<&str> = selected.iter().map(|m| m.fact.as_str()).collect();
+        assert!(facts.contains(&"user prefers dark mode"));
+        assert!(facts.contains(&"user works in UTC"));
     }
 }
