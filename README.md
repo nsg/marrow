@@ -35,21 +35,21 @@ The agent loop:
 
 ```
 User Input
-  → Triage: needs external data? (yes/no)
-  → If yes: Tool Selection + Parameter Extraction
-    → If no match: Code Generation → Test Run → Save to Toolbox
-  → Memory Retrieval (relevant facts)
-  → Context Assembly (Lua sandbox + memories)
-  → Model Router → Backend (Ollama / OpenAI-compatible)
+  → Runtime setup (router, toolbox, memory, event log, secrets, janitor)
+  → Memory Retrieval (select relevant facts)
+  → Agent Loop
+    → Reuse an existing tool, or
+    → Run inline Lua in the sandbox, or
+    → Generate a new tool and save it to the toolbox
+  → Answer formatting
   → Response
   → Memory Writer (auto-save new facts)
-  → Janitor (async background validation)
 ```
 
 | Component | Description |
 |---|---|
-| **Triage** | Fast model decides if tools are needed before selection |
-| **Tool Selection** | Model picks tools + extracts parameters from task description |
+| **Runtime** | Shared app setup used by the CLI and Discord frontends |
+| **Agent Loop** | Model plans step-by-step actions: call a tool, run inline Lua, create a tool, or answer |
 | **Code Generation** | Model writes Lua scripts when no existing tool matches |
 | **Lua Sandbox** | Secure runtime — all I/O through controlled Rust host functions (`http_get`, `http_post`, `json_parse`, `json_encode`, `log`, `run_tool`, `secret`) |
 | **Toolbox** | Directory of validated Lua scripts with TOML metadata |
@@ -155,7 +155,7 @@ All configuration lives in `config.toml`. Three roles control which model handle
 | Role | Used for |
 |---|---|
 | `default` | Chat and task execution (smartest model) |
-| `fast` | Triage, tool selection, memory (fast but capable) |
+| `fast` | Memory retrieval, session summarization, and fast-path fallbacks |
 | `code` | Lua tool generation and janitor reviews |
 
 ```toml

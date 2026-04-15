@@ -2,17 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use marrow::agent;
-use marrow::answer_check;
 use marrow::context::LuaProvider;
 use marrow::events::{Event, EventLog};
-use marrow::executor::Context;
 use marrow::memory::{Memory, MemorySource, MemoryStore};
 use marrow::memory_provider;
 use marrow::memory_writer;
 use marrow::model::{CompletionResult, ModelBackend};
-use marrow::registry::TaskRegistry;
 use marrow::session::{ChatSession, Message};
-use marrow::task::Task;
 use marrow::toolbox::{ToolMeta, Toolbox};
 use reqwest::Client;
 use tokio::sync::Mutex;
@@ -66,10 +62,6 @@ fn temp_dir(name: &str) -> tempfile::TempDir {
 async fn noop_log() -> EventLog {
     EventLog::new(None, false).await.unwrap()
 }
-
-// ---------------------------------------------------------------------------
-// Triage tests
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Agent action parsing tests
@@ -598,32 +590,6 @@ async fn toolbox_delete_tool() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Registry tests
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn registry_run_succeeds() {
-    use marrow::executor::Executor;
-    struct MockExecutor;
-    impl Executor for MockExecutor {
-        async fn execute(
-            &self,
-            _: &Task,
-            _: &Context,
-            _: Option<&[Message]>,
-        ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-            Ok(serde_json::json!("done"))
-        }
-    }
-    let registry = TaskRegistry::new();
-    let task = Task::new("test");
-    let id = registry.create(task).await;
-    let ctx = Context::new(serde_json::json!({}));
-    let result = registry.run(id, &MockExecutor, &ctx, None).await.unwrap();
-    assert_eq!(result, "done");
-}
-
-// ---------------------------------------------------------------------------
 // Session tests
 // ---------------------------------------------------------------------------
 
@@ -713,30 +679,6 @@ async fn event_log_writes_to_file() {
     .await;
     let content = tokio::fs::read_to_string(&log_path).await.unwrap();
     assert!(content.contains("task_created"));
-}
-
-// ---------------------------------------------------------------------------
-// Answer check tests
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn answer_check_detects_success() {
-    let backend = MockBackend::new(vec!["```verdict\nYES\n```\n```reason\nGood answer.\n```"]);
-    let result = answer_check::check_answer("q?", "{}", "The answer.", &backend)
-        .await
-        .unwrap();
-    assert!(result.answered);
-}
-
-#[tokio::test]
-async fn answer_check_detects_failure() {
-    let backend = MockBackend::new(vec![
-        "```verdict\nNO\n```\n```reason\nInsufficient data.\n```",
-    ]);
-    let result = answer_check::check_answer("q?", "{}", "I can't answer.", &backend)
-        .await
-        .unwrap();
-    assert!(!result.answered);
 }
 
 // ---------------------------------------------------------------------------

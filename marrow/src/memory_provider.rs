@@ -59,16 +59,3 @@ fn parse_ids(response: &str) -> Vec<String> {
         _ => Vec::new(),
     }
 }
-
-pub fn memories_to_context(memories: &[Memory]) -> serde_json::Value {
-    let facts: Vec<serde_json::Value> = memories
-        .iter()
-        .map(|m| {
-            serde_json::json!({
-                "fact": m.fact,
-            })
-        })
-        .collect();
-
-    serde_json::json!({ "memories": facts })
-}

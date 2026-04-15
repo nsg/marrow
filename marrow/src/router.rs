@@ -7,11 +7,8 @@ use serde::Deserialize;
 
 use crate::backends::ollama::OllamaBackend;
 use crate::backends::openai::OpenAIBackend;
-use crate::executor::{Context, Executor};
 use crate::metrics::Metrics;
 use crate::model::ModelBackend;
-use crate::session::Message;
-use crate::task::Task;
 
 #[derive(Debug, Deserialize, Default)]
 pub struct DiscordConfig {
@@ -173,34 +170,5 @@ impl ModelRouter {
             .ok_or_else(|| format!("no backend configured for role: {role}"))?;
 
         Ok(backend.as_ref())
-    }
-}
-
-impl Executor for ModelRouter {
-    async fn execute(
-        &self,
-        task: &Task,
-        context: &Context,
-        history: Option<&[Message]>,
-    ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
-        let backend = self.backend(&task.model_role)?;
-
-        let system_context = format!(
-            "You are a helpful assistant. Tools have already been executed and their results are provided below. Use this data to answer the user's question directly. Do NOT suggest running more tools — all available data is here.\n\nTool results:\n{}",
-            context.data
-        );
-
-        let response = if let Some(msgs) = history {
-            // Build full message list: system context + history + current user message
-            let mut messages = vec![Message::system(system_context)];
-            messages.extend(msgs.iter().cloned());
-            messages.push(Message::user(&task.description));
-            backend.complete_chat(messages).await?
-        } else {
-            let prompt = format!("{system_context}\n\nTask: {}", task.description);
-            backend.complete(prompt).await?
-        };
-
-        Ok(serde_json::Value::String(response))
     }
 }
