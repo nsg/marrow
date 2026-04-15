@@ -1,0 +1,184 @@
+use std::error::Error;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use reqwest::Client;
+
+use crate::agent;
+use crate::agent::{IncomingRx, ProgressTx};
+use crate::events::{Event, EventLog};
+use crate::janitor;
+use crate::memory::MemoryStore;
+use crate::memory_writer;
+use crate::metrics::Metrics;
+use crate::model::ModelBackend;
+use crate::router::{ModelRouter, RouterConfig};
+use crate::secrets::Secrets;
+use crate::session::Message;
+use crate::toolbox::Toolbox;
+
+pub struct RuntimeOptions {
+    pub toolbox_path: String,
+    pub memory_path: String,
+    pub log_path: String,
+    pub verbose: bool,
+    pub secrets_path: String,
+}
+
+pub struct Runtime {
+    router: Arc<ModelRouter>,
+    toolbox: Arc<Toolbox>,
+    toolbox_path: String,
+    memory_store: Arc<MemoryStore>,
+    client: Arc<Client>,
+    log: Arc<EventLog>,
+    secrets: Arc<Secrets>,
+    metrics: Arc<Metrics>,
+}
+
+impl Runtime {
+    pub async fn from_config(
+        config: &RouterConfig,
+        options: RuntimeOptions,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        let metrics = Arc::new(Metrics::new());
+        let router = Arc::new(ModelRouter::from_config_with_metrics(
+            config,
+            Some(metrics.clone()),
+        )?);
+        let client = Arc::new(Client::new());
+        let toolbox = Arc::new(Toolbox::new(&options.toolbox_path));
+        let memory_store = Arc::new(MemoryStore::new(&options.memory_path));
+        let log =
+            Arc::new(EventLog::new(Some(PathBuf::from(&options.log_path)), options.verbose).await?);
+        let secrets = Arc::new(Secrets::load_or_empty(&options.secrets_path));
+
+        let janitor_backend = config
+            .build_backend("code")
+            .or_else(|_| config.build_backend("default"))?;
+        let janitor_toolbox = Toolbox::new(&options.toolbox_path);
+        let janitor_log = log.clone();
+        tokio::spawn(async move {
+            janitor::run(&janitor_toolbox, janitor_backend.as_ref(), &janitor_log).await;
+        });
+
+        Ok(Self {
+            router,
+            toolbox,
+            toolbox_path: options.toolbox_path,
+            memory_store,
+            client,
+            log,
+            secrets,
+            metrics,
+        })
+    }
+
+    pub fn fast_backend(&self) -> Result<&dyn ModelBackend, Box<dyn Error + Send + Sync>> {
+        self.router
+            .backend("fast")
+            .or_else(|_| self.router.backend("default"))
+    }
+
+    pub fn metrics(&self) -> &Metrics {
+        self.metrics.as_ref()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_task(
+        &self,
+        description: &str,
+        frontend: &str,
+        conversation: &[Message],
+        progress: Option<&ProgressTx>,
+        incoming: Option<&mut IncomingRx>,
+        formatting_hint: Option<&str>,
+    ) -> Result<String, Box<dyn Error + Send + Sync>> {
+        let task_id = uuid::Uuid::new_v4().to_string();
+
+        self.log
+            .emit(Event::TaskCreated {
+                task_id: task_id.clone(),
+                description: description.to_string(),
+                role: frontend.to_string(),
+            })
+            .await;
+
+        let agent_backend = self
+            .router
+            .backend("agent")
+            .or_else(|_| self.router.backend("default"))
+            .or_else(|_| self.router.backend("fast"))?;
+        let fast_backend = self.fast_backend()?;
+        let answer_backend = self
+            .router
+            .backend("default")
+            .or_else(|_| self.router.backend("fast"))?;
+        let code_backend = self
+            .router
+            .backend("code")
+            .or_else(|_| self.router.backend("default"))?;
+
+        let memories = self.memory_store.list().unwrap_or_default();
+
+        let answer = agent::run_loop(
+            description,
+            &task_id,
+            agent_backend,
+            answer_backend,
+            code_backend,
+            self.toolbox.as_ref(),
+            &self.toolbox_path,
+            self.client.clone(),
+            &memories,
+            self.log.as_ref(),
+            Some(self.secrets.as_ref()),
+            progress,
+            conversation,
+            incoming,
+            formatting_hint,
+        )
+        .await?;
+
+        self.log
+            .emit(Event::TaskExecuted {
+                task_id: task_id.clone(),
+                status: "succeeded".to_string(),
+            })
+            .await;
+
+        match memory_writer::process_interaction(
+            description,
+            &answer,
+            self.memory_store.as_ref(),
+            fast_backend,
+        )
+        .await
+        {
+            Ok(result) => {
+                for fact in &result.saved {
+                    if let Some(tx) = progress {
+                        let _ = tx.send(format!("🧠 Remembered: {fact}"));
+                    } else {
+                        eprintln!("[marrow] remembered: {fact}");
+                    }
+                }
+
+                for fact in &result.updated {
+                    if let Some(tx) = progress {
+                        let _ = tx.send(format!("🧠 Updated: {fact}"));
+                    }
+                }
+
+                if result.deleted > 0
+                    && let Some(tx) = progress
+                {
+                    let _ = tx.send(format!("🧠 Forgot {} fact(s)", result.deleted));
+                }
+            }
+            Err(e) => eprintln!("[marrow] memory writer error: {e}"),
+        }
+
+        Ok(answer)
+    }
+}

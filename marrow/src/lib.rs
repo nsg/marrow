@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod model;
 pub mod registry;
 pub mod router;
+pub mod runtime;
 pub mod sandbox;
 pub mod sandbox_host;
 pub mod secrets;

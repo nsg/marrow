@@ -214,7 +214,9 @@ pub fn build_agent_prompt(
         format!("Conversation so far:\n{lines}\n\n")
     };
 
-    let datetime = chrono::Local::now().format("%Y-%m-%d %H:%M (%A)").to_string();
+    let datetime = chrono::Local::now()
+        .format("%Y-%m-%d %H:%M (%A)")
+        .to_string();
 
     AGENT_PROMPT_TEMPLATE
         .replace("{tools}", tools_section)
@@ -337,7 +339,10 @@ fn auto_save_inline(
     }
 
     // Generate a name from a hash of the code
-    let hash = code.len() as u32 ^ code.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    let hash = code.len() as u32
+        ^ code
+            .bytes()
+            .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
     let name = format!("inline_{:08x}", hash);
 
     // Don't overwrite an existing tool with the same name
@@ -347,7 +352,10 @@ fn auto_save_inline(
 
     let meta = crate::toolbox::ToolMeta {
         name: name.clone(),
-        description: format!("Auto-saved from task: {}", task.chars().take(80).collect::<String>()),
+        description: format!(
+            "Auto-saved from task: {}",
+            task.chars().take(80).collect::<String>()
+        ),
         provides: vec![name.clone()],
         validated: false,
     };
@@ -864,7 +872,9 @@ async fn format_answer(
         format!("Your installed tools:\n{list}")
     };
 
-    let datetime = chrono::Local::now().format("%Y-%m-%d %H:%M (%A)").to_string();
+    let datetime = chrono::Local::now()
+        .format("%Y-%m-%d %H:%M (%A)")
+        .to_string();
     let system_context = format!(
         "You are Marrow, a workflow automation agent. You interact through Lua tools in a sandbox — you do NOT have shell access, curl, Python, or any command line tools. {tools_section}\n\nCurrent date/time: {datetime}\n\n"
     );

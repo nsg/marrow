@@ -1,8 +1,6 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use reqwest::Client;
 use serenity::async_trait;
 use serenity::model::channel::Message as DiscordMessage;
 use serenity::model::gateway::GatewayIntents;
@@ -12,59 +10,23 @@ use serenity::prelude::*;
 
 use tokio::sync::{RwLock, mpsc};
 
-use marrow::agent;
-use marrow::agent::{IncomingRx, ProgressTx};
-use marrow::events::{Event, EventLog};
-use marrow::janitor;
-use marrow::memory::MemoryStore;
-use marrow::memory_writer;
-use marrow::router::{ModelRouter, RouterConfig};
-use marrow::secrets::Secrets;
+use marrow::agent::IncomingRx;
+use marrow::router::RouterConfig;
+use marrow::runtime::{Runtime, RuntimeOptions};
 use marrow::session::{ChatSession, Message};
-use marrow::toolbox::Toolbox;
 
 // ---------------------------------------------------------------------------
 // Shared state stored in serenity's TypeMap
 // ---------------------------------------------------------------------------
 
-struct RouterKey;
-impl TypeMapKey for RouterKey {
-    type Value = Arc<ModelRouter>;
-}
-
-struct ToolboxKey;
-impl TypeMapKey for ToolboxKey {
-    type Value = Arc<Toolbox>;
-}
-
-struct ToolboxPathKey;
-impl TypeMapKey for ToolboxPathKey {
-    type Value = String;
-}
-
-struct MemoryKey;
-impl TypeMapKey for MemoryKey {
-    type Value = Arc<MemoryStore>;
-}
-
-struct HttpClientKey;
-impl TypeMapKey for HttpClientKey {
-    type Value = Arc<Client>;
-}
-
-struct EventLogKey;
-impl TypeMapKey for EventLogKey {
-    type Value = Arc<EventLog>;
+struct RuntimeKey;
+impl TypeMapKey for RuntimeKey {
+    type Value = Arc<Runtime>;
 }
 
 struct ChannelsKey;
 impl TypeMapKey for ChannelsKey {
     type Value = Arc<Vec<u64>>;
-}
-
-struct SecretsKey;
-impl TypeMapKey for SecretsKey {
-    type Value = Arc<Secrets>;
 }
 
 struct SessionsKey;
@@ -129,13 +91,7 @@ impl EventHandler for Handler {
 
         // Extract shared state
         let data = ctx.data.read().await;
-        let router = data.get::<RouterKey>().unwrap().clone();
-        let toolbox = data.get::<ToolboxKey>().unwrap().clone();
-        let toolbox_path = data.get::<ToolboxPathKey>().unwrap().clone();
-        let memory_store = data.get::<MemoryKey>().unwrap().clone();
-        let client = data.get::<HttpClientKey>().unwrap().clone();
-        let log = data.get::<EventLogKey>().unwrap().clone();
-        let secrets = data.get::<SecretsKey>().unwrap().clone();
+        let runtime = data.get::<RuntimeKey>().unwrap().clone();
         let sessions = data.get::<SessionsKey>().unwrap().clone();
         drop(data);
 
@@ -160,7 +116,10 @@ impl EventHandler for Handler {
             while let Some(status) = progress_rx.recv().await {
                 if let Some(ref mut msg) = status_msg {
                     let _ = msg
-                        .edit(&http, serenity::builder::EditMessage::new().content(&status))
+                        .edit(
+                            &http,
+                            serenity::builder::EditMessage::new().content(&status),
+                        )
                         .await;
                 } else {
                     if let Ok(m) = channel_id.say(&http, &status).await {
@@ -187,20 +146,14 @@ impl EventHandler for Handler {
         // Run the agent
         let response = match run_task(
             content,
-            &router,
-            &toolbox,
-            &toolbox_path,
-            &memory_store,
-            client,
-            &log,
-            &secrets,
+            runtime.as_ref(),
             &progress_tx,
             &conversation,
             &mut incoming_rx,
         )
         .await
         {
-            Ok(output) => output.as_str().unwrap_or("").to_string(),
+            Ok(output) => output,
             Err(e) => format!("Error: {e}"),
         };
 
@@ -233,9 +186,7 @@ impl EventHandler for Handler {
             session.append(Message::assistant(&response));
 
             if session.needs_summarization()
-                && let Ok(backend) = router
-                    .backend("fast")
-                    .or_else(|_| router.backend("default"))
+                && let Ok(backend) = runtime.fast_backend()
                 && let Err(e) = session.summarize(backend).await
             {
                 eprintln!("[marrow-discord] session summarize error: {e}");
@@ -250,87 +201,23 @@ impl EventHandler for Handler {
 
 const DISCORD_FORMATTING_HINT: &str = "Formatting: The response will be displayed in Discord. Discord supports **bold**, *italic*, __underline__, ~~strikethrough~~, `inline code`, ```code blocks```, > quotes, and bullet lists (- item). Discord does NOT support markdown tables, headings (#), or horizontal rules. Keep responses concise — messages over 2000 characters are split.";
 
-#[allow(clippy::too_many_arguments)]
 async fn run_task(
     description: &str,
-    router: &ModelRouter,
-    toolbox: &Toolbox,
-    toolbox_path: &str,
-    memory_store: &MemoryStore,
-    client: Arc<Client>,
-    log: &EventLog,
-    secrets: &Secrets,
-    progress: &ProgressTx,
+    runtime: &Runtime,
+    progress: &mpsc::UnboundedSender<String>,
     conversation: &[Message],
     incoming: &mut IncomingRx,
-) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    let task_id = uuid::Uuid::new_v4().to_string();
-
-    log.emit(Event::TaskCreated {
-        task_id: task_id.clone(),
-        description: description.to_string(),
-        role: "discord".to_string(),
-    })
-    .await;
-
-    let agent_backend = router
-        .backend("agent")
-        .or_else(|_| router.backend("default"))
-        .or_else(|_| router.backend("fast"))?;
-    let fast_backend = router
-        .backend("fast")
-        .or_else(|_| router.backend("default"))?;
-    let answer_backend = router
-        .backend("default")
-        .or_else(|_| router.backend("fast"))?;
-    let code_backend = router
-        .backend("code")
-        .or_else(|_| router.backend("default"))?;
-
-    let memories = memory_store.list().unwrap_or_default();
-
-    let answer = agent::run_loop(
-        description,
-        &task_id,
-        agent_backend,
-        answer_backend,
-        code_backend,
-        toolbox,
-        toolbox_path,
-        client,
-        &memories,
-        log,
-        Some(secrets),
-        Some(progress),
-        conversation,
-        Some(incoming),
-        Some(DISCORD_FORMATTING_HINT),
-    )
-    .await?;
-
-    log.emit(Event::TaskExecuted {
-        task_id: task_id.clone(),
-        status: "succeeded".to_string(),
-    })
-    .await;
-
-    match memory_writer::process_interaction(description, &answer, memory_store, fast_backend).await
-    {
-        Ok(result) => {
-            for fact in &result.saved {
-                let _ = progress.send(format!("🧠 Remembered: {fact}"));
-            }
-            for fact in &result.updated {
-                let _ = progress.send(format!("🧠 Updated: {fact}"));
-            }
-            if result.deleted > 0 {
-                let _ = progress.send(format!("🧠 Forgot {} fact(s)", result.deleted));
-            }
-        }
-        Err(e) => eprintln!("[marrow-discord] memory writer error: {e}"),
-    }
-
-    Ok(serde_json::Value::String(answer))
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    runtime
+        .run_task(
+            description,
+            "discord",
+            conversation,
+            Some(progress),
+            Some(incoming),
+            Some(DISCORD_FORMATTING_HINT),
+        )
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -391,22 +278,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .clone()
         .unwrap_or_else(|| "events.jsonl".to_string());
     let verbose = discord.verbose;
-    let router = Arc::new(ModelRouter::from_config(&config)?);
-    let client = Arc::new(Client::new());
-    let toolbox = Arc::new(Toolbox::new(&toolbox_path));
-    let memory_store = Arc::new(MemoryStore::new(&memory_path));
-    let log = Arc::new(EventLog::new(Some(PathBuf::from(&log_path)), verbose).await?);
-    let secrets = Arc::new(Secrets::load_or_empty("secrets.toml"));
-
-    // Spawn janitor in background
-    let janitor_backend = config
-        .build_backend("code")
-        .or_else(|_| config.build_backend("default"))?;
-    let janitor_toolbox = Toolbox::new(&toolbox_path);
-    let janitor_log = log.clone();
-    tokio::spawn(async move {
-        janitor::run(&janitor_toolbox, janitor_backend.as_ref(), &janitor_log).await;
-    });
+    let runtime = Arc::new(
+        Runtime::from_config(
+            &config,
+            RuntimeOptions {
+                toolbox_path,
+                memory_path,
+                log_path,
+                verbose,
+                secrets_path: "secrets.toml".to_string(),
+            },
+        )
+        .await?,
+    );
 
     // Discord gateway intents — we need message content to read user messages
     let intents = GatewayIntents::GUILD_MESSAGES
@@ -422,14 +306,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Store shared state
     {
         let mut data = discord_client.data.write().await;
-        data.insert::<RouterKey>(router);
-        data.insert::<ToolboxKey>(toolbox);
-        data.insert::<ToolboxPathKey>(toolbox_path);
-        data.insert::<MemoryKey>(memory_store);
-        data.insert::<HttpClientKey>(client);
-        data.insert::<EventLogKey>(log);
+        data.insert::<RuntimeKey>(runtime);
         data.insert::<ChannelsKey>(channels);
-        data.insert::<SecretsKey>(secrets);
         data.insert::<SessionsKey>(Arc::new(RwLock::new(HashMap::new())));
         data.insert::<ActiveTasksKey>(Arc::new(RwLock::new(HashMap::new())));
     }

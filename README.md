@@ -211,7 +211,6 @@ The codegen model sees secret **names** (not values) so it can generate tools th
 | Flag | Default | Description |
 |---|---|---|
 | `-c, --config` | `config.toml` | Path to config file |
-| `-r, --role` | `default` | Model role for task execution |
 | `-p, --prompt` | — | Single prompt (non-interactive) |
 | `-t, --toolbox` | `toolbox` | Path to toolbox directory |
 | `-m, --memory` | `memory` | Path to memory directory |

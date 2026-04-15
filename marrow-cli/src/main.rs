@@ -1,20 +1,8 @@
-use std::io::{self, Write};
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use clap::Parser;
-use reqwest::Client;
-
-use marrow::agent;
-use marrow::events::{Event, EventLog};
-use marrow::janitor;
-use marrow::memory::MemoryStore;
-use marrow::memory_writer;
-use marrow::metrics::Metrics;
-use marrow::router::{ModelRouter, RouterConfig};
-use marrow::secrets::Secrets;
+use marrow::router::RouterConfig;
+use marrow::runtime::{Runtime, RuntimeOptions};
 use marrow::session::{ChatSession, Message};
-use marrow::toolbox::Toolbox;
+use std::io::{self, Write};
 
 #[derive(Parser)]
 #[command(
@@ -24,9 +12,6 @@ use marrow::toolbox::Toolbox;
 struct Cli {
     #[arg(short, long, default_value = "config.toml")]
     config: String,
-
-    #[arg(short, long, default_value = "default")]
-    role: String,
 
     /// Run a single prompt and exit
     #[arg(short = 'p', long)]
@@ -49,128 +34,31 @@ struct Cli {
     log: String,
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_task(
-    description: &str,
-    router: &ModelRouter,
-    toolbox: &Toolbox,
-    toolbox_path: &str,
-    memory_store: &MemoryStore,
-    client: Arc<Client>,
-    log: &EventLog,
-    secrets: &Secrets,
-    conversation: &[Message],
-) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    let task_id = uuid::Uuid::new_v4().to_string();
-
-    log.emit(Event::TaskCreated {
-        task_id: task_id.clone(),
-        description: description.to_string(),
-        role: "agent".to_string(),
-    })
-    .await;
-
-    let agent_backend = router
-        .backend("agent")
-        .or_else(|_| router.backend("default"))
-        .or_else(|_| router.backend("fast"))?;
-    let fast_backend = router
-        .backend("fast")
-        .or_else(|_| router.backend("default"))?;
-    let answer_backend = router
-        .backend("default")
-        .or_else(|_| router.backend("fast"))?;
-    let code_backend = router
-        .backend("code")
-        .or_else(|_| router.backend("default"))?;
-
-    // Step 1: Load all memories
-    let memories = memory_store.list().unwrap_or_default();
-
-    // Step 2: Agent loop — fast model decides actions, default model answers
-    let answer = agent::run_loop(
-        description,
-        &task_id,
-        agent_backend,
-        answer_backend,
-        code_backend,
-        toolbox,
-        toolbox_path,
-        client,
-        &memories,
-        log,
-        Some(secrets),
-        None,
-        conversation,
-        None,
-        None,
-    )
-    .await?;
-
-    log.emit(Event::TaskExecuted {
-        task_id: task_id.clone(),
-        status: "succeeded".to_string(),
-    })
-    .await;
-
-    // Step 4: Post-task memory writer
-    match memory_writer::process_interaction(description, &answer, memory_store, fast_backend).await
-    {
-        Ok(result) => {
-            for fact in &result.saved {
-                eprintln!("[marrow] remembered: {fact}");
-            }
-        }
-        Err(e) => eprintln!("[marrow] memory writer error: {e}"),
-    }
-
-    Ok(serde_json::Value::String(answer))
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
 
     let config = RouterConfig::from_file(&cli.config)?;
-    let metrics = Arc::new(Metrics::new());
-    let router = ModelRouter::from_config_with_metrics(&config, Some(metrics.clone()))?;
-    let client = Arc::new(Client::new());
-    let toolbox = Toolbox::new(&cli.toolbox);
-    let memory_store = MemoryStore::new(&cli.memory);
-    let log = EventLog::new(Some(PathBuf::from(&cli.log)), cli.verbose).await?;
-    let secrets = Secrets::load_or_empty("secrets.toml");
+    let runtime = Runtime::from_config(
+        &config,
+        RuntimeOptions {
+            toolbox_path: cli.toolbox.clone(),
+            memory_path: cli.memory.clone(),
+            log_path: cli.log.clone(),
+            verbose: cli.verbose,
+            secrets_path: "secrets.toml".to_string(),
+        },
+    )
+    .await?;
     let verbose = cli.verbose;
 
-    // Spawn janitor in background (no metrics for janitor — it's background work)
-    let janitor_backend = config
-        .build_backend("code")
-        .or_else(|_| config.build_backend("default"))?;
-    let janitor_toolbox = Toolbox::new(&cli.toolbox);
-    let janitor_log = log.clone();
-    tokio::spawn(async move {
-        janitor::run(&janitor_toolbox, janitor_backend.as_ref(), &janitor_log).await;
-    });
-
     if let Some(prompt) = cli.prompt {
-        match run_task(
-            &prompt,
-            &router,
-            &toolbox,
-            &cli.toolbox,
-            &memory_store,
-            client,
-            &log,
-            &secrets,
-            &[],
-        )
-        .await
+        match runtime
+            .run_task(&prompt, "agent", &[], None, None, None)
+            .await
         {
             Ok(output) => {
-                if let Some(text) = output.as_str() {
-                    println!("{text}");
-                } else {
-                    println!("{output}");
-                }
+                println!("{output}");
             }
             Err(e) => {
                 eprintln!("error: {e}");
@@ -178,13 +66,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
     } else {
-        println!("marrow ready (role: {})", cli.role);
+        println!("marrow ready");
         println!("type 'quit' to exit\n");
 
         let mut session = ChatSession::new();
-        let fast_backend = router
-            .backend("fast")
-            .or_else(|_| router.backend("default"))?;
+        let fast_backend = runtime.fast_backend()?;
 
         let stdin = io::stdin();
         loop {
@@ -206,21 +92,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
 
             let conversation = session.build_messages(None);
-            match run_task(
-                input,
-                &router,
-                &toolbox,
-                &cli.toolbox,
-                &memory_store,
-                client.clone(),
-                &log,
-                &secrets,
-                &conversation,
-            )
-            .await
+            match runtime
+                .run_task(input, "agent", &conversation, None, None, None)
+                .await
             {
-                Ok(output) => {
-                    let text = output.as_str().unwrap_or("").to_string();
+                Ok(text) => {
                     println!("\n{text}\n");
 
                     session.append(Message::user(input));
@@ -238,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     if verbose {
-        metrics.display();
+        runtime.metrics().display();
     }
 
     Ok(())
