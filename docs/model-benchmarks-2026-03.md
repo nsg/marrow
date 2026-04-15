@@ -50,8 +50,8 @@ Faster than GLM-5.
 **Weaknesses:** Weaker on agentic tasks than GLM-5 (Terminal-Bench 50.8 vs 81). Slightly lower
 Intelligence Index (47 vs 50).
 
-**Verdict:** Best choice for fast role — smart enough for triage/selection, strong tool calling,
-~1s response time.
+**Verdict:** Best choice for fast role — smart enough for memory retrieval, summarization, and
+lightweight structured tasks, with ~1s response time.
 
 ---
 
@@ -95,7 +95,8 @@ work correctly), quality matters more than speed.
 
 **Not selected because:** Intelligence Index of 27 — same limitation as Coder-Next. Significantly
 behind GLM-5 and Kimi on AIME (69.5% vs 92.7%/96.1%), GPQA (72.9% vs 86.0%/87.6%), and
-overall intelligence. Too dumb for reliable triage and tool selection decisions despite being fast.
+overall intelligence. Too weak for reliable memory selection and other lightweight structured
+runtime tasks despite being fast.
 
 ---
 
@@ -114,7 +115,7 @@ an open model.
 
 **Not selected because:** Intelligence Index of 22 — less than half of GLM-5. A coding-focused
 model that's actually weaker at coding than GLM-5 (72.2% vs 77.8%) and Kimi (76.8%). Not smart
-enough for general triage and selection tasks.
+enough for reliable memory selection or other lightweight structured tasks.
 
 ---
 

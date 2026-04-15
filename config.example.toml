@@ -9,8 +9,8 @@ model = "glm-5:cloud"
 api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
-# Fast role — used for triage, tool selection, memory retrieval
-# Needs to be smart enough for reliable structured JSON, but fast
+# Fast role — used for memory retrieval, summarization, and fallbacks
+# Needs to be fast and reliable for lightweight structured tasks
 [roles.fast]
 provider = "ollama"
 model = "kimi-k2.5:cloud"
@@ -23,6 +23,14 @@ api_base = "https://ollama.com"
 provider = "ollama"
 model = "glm-5:cloud"
 api_base = "https://ollama.com"
+# api_key = "your-key-here"
+
+# Optional agent role — overrides the planner model used by the agent loop.
+# If omitted, Marrow falls back to roles.default, then roles.fast.
+# [roles.agent]
+# provider = "ollama"
+# model = "glm-5:cloud"
+# api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
 # --- Discord bot ---

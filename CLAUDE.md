@@ -22,12 +22,13 @@ No hardcoded integrations. No black boxes. Everything observable.
 
 Working prototype. Core architecture implemented and validated end-to-end
 against Ollama Cloud. Zero clippy warnings, zero dead code.
-Model research in `docs/model-benchmarks-2026-03.md` — GLM-5 (default/code)
-and Kimi K2.5 (fast) selected based on speed, intelligence index, and tool calling benchmarks.
+Model research in `docs/model-benchmarks-2026-03.md` — GLM-5
+(`default`/`code`) and Kimi K2.5 (`fast`) selected based on speed,
+intelligence index, and tool calling benchmarks.
 
 ### What's built
 - Cargo workspace: `marrow` (library), `marrow-cli` (CLI), `marrow-discord` (Discord bot)
-- Agentic loop: triage → model decides actions (inline Lua, call tool, create tool, answer) iteratively
+- Agentic loop: model decides actions (answer, inline Lua, call tool, create tool) iteratively
 - Inline Lua execution — model writes code blocks that run directly in the sandbox
 - Lua sandbox with Rust host functions for all external access
 - `run_tool(name, params)` host function — tools can call other tools directly in Lua
@@ -37,15 +38,13 @@ and Kimi K2.5 (fast) selected based on speed, intelligence index, and tool calli
 - Working memory (JSON files, model-selected per task, auto-saved post-interaction)
 - Conversation history with automatic summarization
 - Structured JSONL event logging with `--verbose` progressive detail
-- Ollama backend (local + cloud)
+- Ollama and OpenAI-compatible backends
 - Discord gateway (serenity) — responds to @mentions, DMs, and configured channels
 
 ### What's not built yet
 - **Background/scheduled tasks** — no scheduler, triggers, or cron. Currently prompt-driven only
 - **Long-term memory** — vector-backed store for deeper patterns. Ollama Cloud doesn't
   support embeddings yet, so deferred. Working memory covers short-term facts
-- **Multiple providers** — only Ollama. OpenAI-compatible backend is a quick add when needed
-- **Tests** — unit tests for core logic and integration tests with MockBackend
 
 ---
 
@@ -55,9 +54,9 @@ Context that isn't obvious from the code:
 
 - **Lua for generated tools** — chosen for easy sandboxing, low token cost for generation,
   and the "code toolbox" pattern where the janitor maintains quality
-- **Triage before tool selection** — a separate "needs external data?" model call prevents
-  the tool selection model from generating unnecessary tools for conversational prompts.
-  Rule-based heuristics were rejected as brittle and against the no-hardcoding philosophy
+- **Single agent loop over staged orchestration** — one planner owns the decision to answer,
+  run inline Lua, reuse a tool, or generate a new one. That replaced the earlier staged
+  design because it was simpler to share across frontends and drifted less in practice
 - **Working memory vs long-term** — two planned tiers. Working memory (now) is JSON files
   with model-based selection. Long-term memory (future) is vector DB with embeddings,
   deferred until Ollama Cloud supports embedding models or a local model is added
