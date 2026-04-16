@@ -306,51 +306,6 @@ pub fn parse_action(response: &str) -> Action {
     }
 }
 
-/// Auto-save the last successful inline code as a tool if the model didn't do it manually.
-fn auto_save_inline(
-    code: Option<String>,
-    toolbox: &Toolbox,
-    history: &[StepResult],
-    task: &str,
-    emit: &impl Fn(String),
-) {
-    let Some(code) = code else { return };
-
-    // Don't save if the model already saved a tool this session
-    let already_saved = history
-        .iter()
-        .any(|s| matches!(&s.action, Action::SaveTool { .. }));
-    if already_saved {
-        return;
-    }
-
-    // Generate a name from a hash of the code
-    let hash = code.len() as u32
-        ^ code
-            .bytes()
-            .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
-    let name = format!("inline_{:08x}", hash);
-
-    // Don't overwrite an existing tool with the same name
-    if toolbox.load_meta(&name).is_ok() {
-        return;
-    }
-
-    let meta = crate::toolbox::ToolMeta {
-        name: name.clone(),
-        description: format!(
-            "Auto-saved from task: {}",
-            task.chars().take(80).collect::<String>()
-        ),
-        provides: vec![name.clone()],
-        validated: false,
-    };
-
-    if toolbox.save_tool(&meta, &code).is_ok() {
-        emit(format!("💾 Auto-saved working code as \"{name}\""));
-    }
-}
-
 fn format_action_short(action: &Action) -> String {
     match action {
         Action::CallTool { tool, params } => {
@@ -408,7 +363,7 @@ pub async fn run_loop(
 
     let mut history: Vec<StepResult> = Vec::new();
     let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
-    let mut last_successful_code: Option<String> = None;
+    let mut last_successful_code: Option<String> = None; // tracked for save_tool action
 
     for step in 1..=MAX_AGENT_STEPS {
         // Drain any user messages that arrived since the last step
@@ -739,7 +694,6 @@ pub async fn run_loop(
                 if !history.is_empty() {
                     emit("💭 Thinking...".to_string());
                 }
-                auto_save_inline(last_successful_code.take(), toolbox, &history, task, &emit);
                 let answer = format_answer(
                     task,
                     memories,
@@ -756,7 +710,6 @@ pub async fn run_loop(
     }
 
     // Max steps reached — force an answer with what we have
-    auto_save_inline(last_successful_code.take(), toolbox, &history, task, &emit);
     history.push(StepResult {
         step: MAX_AGENT_STEPS + 1,
         action: Action::UserMessage {
