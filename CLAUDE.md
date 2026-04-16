@@ -78,6 +78,14 @@ Context that isn't obvious from the code:
 
 ---
 
+## CLI Usage (for agents)
+
+Use the CLI to test the agent loop, verify tools, and run the janitor.
+Build with `cargo build --bin marrow`, run `target/debug/marrow --help` for options.
+stdout is the response, stderr is progress and diagnostics.
+
+---
+
 ## Dogfood Use Case
 
 Build around the author's daily workflow:
