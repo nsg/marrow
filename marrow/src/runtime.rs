@@ -99,7 +99,6 @@ impl Runtime {
         self.metrics.as_ref()
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn run_task(
         &self,
         description: &str,
