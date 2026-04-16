@@ -1,6 +1,5 @@
 pub mod agent;
 pub mod backends;
-pub mod codegen;
 pub mod context;
 pub mod events;
 pub mod janitor;

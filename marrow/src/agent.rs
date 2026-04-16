@@ -6,7 +6,6 @@ use std::sync::Arc;
 use reqwest::Client;
 use tokio::sync::mpsc;
 
-use crate::codegen;
 use crate::events::{Event, EventLog};
 use crate::memory::Memory;
 use crate::model::ModelBackend;
@@ -64,9 +63,6 @@ To call an existing tool:
 To save the last successful inline code as a reusable tool:
 {{"action": "save_tool", "name": "generic_tool_name", "description": "one line description"}}
 
-To create a new tool via code generation (when you need something more complex):
-{{"action": "create_tool", "name": "generic_tool_name", "description": "one line description"}}
-
 To remove a broken tool from the toolbox:
 {{"action": "remove_tool", "name": "tool_name"}}
 
@@ -75,7 +71,6 @@ To give your final answer:
 
 Rules:
 - Use inline Lua for one-off tasks. If inline code works well and you'll need it again, use save_tool to keep it.
-- After creating a tool, you MUST call it in your next turn — creation alone does nothing.
 - If a tool or code fails, read the error carefully. Do NOT repeat the same approach — fix the specific issue.
 - NEVER retry something that already failed with the same error. If "require" failed, it will always fail. If a secret name was not found, try a different name.
 - If something worked in a previous step, reuse that exact approach. Do not regress to a pattern that already failed.
@@ -83,7 +78,7 @@ Rules:
 - If a follow-up question asks about different data (different dates, different items, etc.), you MUST fetch new data — previous conversation results do not cover it.
 - If a saved tool fails repeatedly, use remove_tool to delete it — you can always recreate it or use inline Lua instead.
 - Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
-- When creating tools, prefer generic names (e.g. "rss_reader" not "nsg_blog_reader").
+- When saving tools, prefer generic names (e.g. "rss_reader" not "nsg_blog_reader").
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
 - The answer action text should be a natural language response, NOT a JSON action.
 - If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling.
@@ -95,10 +90,6 @@ pub enum Action {
     CallTool {
         tool: String,
         params: HashMap<String, String>,
-    },
-    CreateTool {
-        name: String,
-        description: String,
     },
     RunCode {
         code: String,
@@ -287,11 +278,6 @@ pub fn parse_action(response: &str) -> Action {
                         return Action::CallTool { tool, params };
                     }
                 }
-                "create_tool" => {
-                    if let (Some(name), Some(description)) = (raw.name, raw.description) {
-                        return Action::CreateTool { name, description };
-                    }
-                }
                 "save_tool" => {
                     if let (Some(name), Some(description)) =
                         (raw.name.clone(), raw.description.clone())
@@ -375,7 +361,6 @@ fn format_action_short(action: &Action) -> String {
                 .join(", ");
             format!("Called tool \"{tool}\" ({params_str})")
         }
-        Action::CreateTool { name, .. } => format!("Created tool \"{name}\""),
         Action::RunCode { .. } => "Ran inline Lua".to_string(),
         Action::SaveTool { name, .. } => format!("Saved tool \"{name}\""),
         Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
@@ -404,7 +389,6 @@ pub async fn run_loop(
     task_id: &str,
     backend: &dyn ModelBackend,
     answer_backend: &dyn ModelBackend,
-    code_backend: &dyn ModelBackend,
     toolbox: &Toolbox,
     toolbox_path: &str,
     client: Arc<Client>,
@@ -479,9 +463,6 @@ pub async fn run_loop(
                         "[agent] step {step}: parsed call_tool \"{tool}\"\n  params passed:\n{params_str}\n  tool expects: {:?}",
                         expected
                     );
-                }
-                Action::CreateTool { name, description } => {
-                    eprintln!("[agent] step {step}: parsed create_tool \"{name}\" — {description}");
                 }
                 Action::RunCode { code } => {
                     let preview = if code.len() > 200 {
@@ -620,51 +601,6 @@ pub async fn run_loop(
                     }
                     Err(e) => {
                         format!("{{\"error\": \"tool not found: {e}\"}}")
-                    }
-                };
-
-                history.push(StepResult {
-                    step,
-                    action,
-                    output,
-                });
-            }
-
-            Action::CreateTool { name, description } => {
-                log.emit(Event::AgentAction {
-                    task_id: task_id.to_string(),
-                    step,
-                    action_type: "create_tool".to_string(),
-                    detail: name.clone(),
-                })
-                .await;
-
-                emit(format!("⚙️ Creating tool \"{name}\""));
-
-                let output = match codegen::generate_provider_for_agent(
-                    name,
-                    description,
-                    task,
-                    code_backend,
-                    toolbox,
-                    client.clone(),
-                    &available_tools,
-                    &secret_key_refs,
-                )
-                .await
-                {
-                    Ok(generated_name) => {
-                        log.emit(Event::ToolGenerated {
-                            name: generated_name.clone(),
-                            description: description.clone(),
-                        })
-                        .await;
-                        format!(
-                            "Tool \"{generated_name}\" created successfully. You can now call it."
-                        )
-                    }
-                    Err(e) => {
-                        format!("Failed to create tool: {e}")
                     }
                 };
 
@@ -940,18 +876,6 @@ mod tests {
                 assert_eq!(params.get("LOCATION").unwrap(), "Tokyo");
             }
             other => panic!("expected CallTool, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_create_tool_action() {
-        let input = r#"{"action": "create_tool", "name": "blog_reader", "description": "Reads blog posts"}"#;
-        match parse_action(input) {
-            Action::CreateTool { name, description } => {
-                assert_eq!(name, "blog_reader");
-                assert_eq!(description, "Reads blog posts");
-            }
-            other => panic!("expected CreateTool, got {other:?}"),
         }
     }
 

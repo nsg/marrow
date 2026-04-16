@@ -140,11 +140,6 @@ impl Runtime {
             .router
             .backend("default")
             .or_else(|_| self.router.backend("fast"))?;
-        let code_backend = self
-            .router
-            .backend("code")
-            .or_else(|_| self.router.backend("default"))?;
-
         let memories =
             load_relevant_memories(description, self.memory_store.as_ref(), fast_backend).await;
 
@@ -153,7 +148,6 @@ impl Runtime {
             &task_id,
             agent_backend,
             answer_backend,
-            code_backend,
             self.toolbox.as_ref(),
             &self.toolbox_path,
             self.client.clone(),

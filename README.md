@@ -49,8 +49,7 @@ User Input
 | Component | Description |
 |---|---|
 | **Runtime** | Shared app setup used by the CLI and Discord frontends |
-| **Agent Loop** | Model plans step-by-step actions: call a tool, run inline Lua, create a tool, or answer |
-| **Code Generation** | Model writes Lua scripts when no existing tool matches |
+| **Agent Loop** | Model plans step-by-step actions: call a tool, run inline Lua, save a tool, or answer |
 | **Lua Sandbox** | Secure runtime — all I/O through controlled Rust host functions (`http_get`, `http_post`, `json_parse`, `json_encode`, `log`, `run_tool`, `secret`) |
 | **Toolbox** | Directory of validated Lua scripts with TOML metadata |
 | **Janitor** | Async reviewer — validates code matches description, regenerates on failure, escalates after 3 attempts |
@@ -205,7 +204,7 @@ local resp = http_get("https://api.github.com/user",
     { Authorization = "Bearer " .. token })
 ```
 
-The codegen model sees secret **names** (not values) so it can generate tools that use them. `secrets.toml` is in `.gitignore` by default.
+The model sees secret **names** (not values) so it can generate tools that use them. `secrets.toml` is in `.gitignore` by default.
 
 ## CLI Reference
 

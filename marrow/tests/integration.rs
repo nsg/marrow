@@ -80,18 +80,6 @@ fn agent_parse_call_tool() {
 }
 
 #[test]
-fn agent_parse_create_tool() {
-    let input = r#"{"action": "create_tool", "name": "blog_reader", "description": "Reads blog"}"#;
-    match agent::parse_action(input) {
-        agent::Action::CreateTool { name, description } => {
-            assert_eq!(name, "blog_reader");
-            assert_eq!(description, "Reads blog");
-        }
-        other => panic!("expected CreateTool, got {other:?}"),
-    }
-}
-
-#[test]
 fn agent_parse_answer() {
     let input = r#"{"action": "answer", "text": "The answer is 42."}"#;
     match agent::parse_action(input) {
@@ -145,7 +133,6 @@ async fn agent_loop_call_tool_then_answer() {
         "test-task",
         &agent_backend,
         &answer_backend,
-        &agent_backend,
         &toolbox,
         dir.path().to_str().unwrap(),
         client,
@@ -164,25 +151,23 @@ async fn agent_loop_call_tool_then_answer() {
 }
 
 #[tokio::test]
-async fn agent_loop_create_tool_then_call_then_answer() {
+async fn agent_loop_save_tool_then_call_then_answer() {
     let dir = temp_dir("marrow_tb");
     let toolbox = Toolbox::new(dir.path());
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
-    // Step 1: model requests tool creation
-    // Step 2: codegen model generates the tool
-    // Step 3: model calls the new tool
+    // Step 1: model runs inline Lua
+    // Step 2: model saves it as a tool
+    // Step 3: model calls the saved tool
     // Step 4: model answers from result
     let agent_backend = MockBackend::new(vec![
-        r#"{"action": "create_tool", "name": "echo_tool", "description": "Echoes a message"}"#,
+        "```lua\nreturn { echo = \"hi\" }\n```",
+        r#"{"action": "save_tool", "name": "echo_tool", "description": "Echoes a message"}"#,
         r#"{"action": "call_tool", "tool": "echo_tool", "params": {"MSG": "hi"}}"#,
         r#"{"action": "answer", "text": ""}"#,
     ]);
 
-    let code_backend = MockBackend::new(vec![
-        "```name\necho_tool\n```\n```description\nEchoes a message\n```\n```lua\nreturn { echo = PARAMS[\"MSG\"] or \"no message\" }\n```",
-    ]);
     let answer_backend = MockBackend::new(vec!["Echo says: hi"]);
 
     let result = agent::run_loop(
@@ -190,7 +175,6 @@ async fn agent_loop_create_tool_then_call_then_answer() {
         "test-task",
         &agent_backend,
         &answer_backend,
-        &code_backend,
         &toolbox,
         dir.path().to_str().unwrap(),
         client,
@@ -206,6 +190,7 @@ async fn agent_loop_create_tool_then_call_then_answer() {
     .unwrap();
 
     assert!(result.contains("Echo says"));
+    assert!(toolbox.load_meta("echo_tool").is_ok());
 }
 
 #[tokio::test]
@@ -223,7 +208,6 @@ async fn agent_loop_direct_answer() {
         "test-task",
         &agent_backend,
         &answer_backend,
-        &agent_backend,
         &toolbox,
         dir.path().to_str().unwrap(),
         client,
@@ -262,7 +246,6 @@ async fn agent_loop_tool_failure_recovery() {
         "test-task",
         &agent_backend,
         &answer_backend,
-        &agent_backend,
         &toolbox,
         dir.path().to_str().unwrap(),
         client,
@@ -681,34 +664,3 @@ async fn event_log_writes_to_file() {
     assert!(content.contains("task_created"));
 }
 
-// ---------------------------------------------------------------------------
-// Codegen tests
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn codegen_generates_and_saves_tool() {
-    let dir = temp_dir("marrow_tb");
-    let toolbox = Toolbox::new(dir.path());
-    let client = Arc::new(Client::new());
-    let backend = MockBackend::new(vec![
-        "```name\ngreeter\n```\n```description\nGreets\n```\n```lua\nreturn { greeting = \"hello\" }\n```",
-    ]);
-    let name = marrow::codegen::generate_provider("greet", &backend, &toolbox, client)
-        .await
-        .unwrap();
-    assert_eq!(name, "greeter");
-    assert!(toolbox.load_meta("greeter").is_ok());
-}
-
-#[tokio::test]
-async fn codegen_rejects_broken_lua() {
-    let dir = temp_dir("marrow_tb");
-    let toolbox = Toolbox::new(dir.path());
-    let client = Arc::new(Client::new());
-    let backend = MockBackend::new(vec![
-        "```name\nbroken\n```\n```description\nBroken\n```\n```lua\nerror('boom')\n```",
-    ]);
-    let result = marrow::codegen::generate_provider("test", &backend, &toolbox, client).await;
-    assert!(result.is_err());
-    assert!(toolbox.list_tools().unwrap().is_empty());
-}
