@@ -1,7 +1,9 @@
 use clap::Parser;
+use marrow::memory::MemoryStore;
 use marrow::router::RouterConfig;
 use marrow::runtime::{Runtime, RuntimeOptions};
 use marrow::session::{ChatSession, Message};
+use marrow::toolbox::Toolbox;
 use std::io::{self, Write};
 use tokio::sync::mpsc;
 
@@ -37,11 +39,54 @@ struct Cli {
     /// Run a single janitor pass (review + cleanup) and exit
     #[arg(long)]
     janitor: bool,
+
+    /// List all tools in the toolbox and exit
+    #[arg(long)]
+    list_tools: bool,
+
+    /// List all stored memories and exit
+    #[arg(long)]
+    list_memories: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
+
+    if cli.list_tools {
+        let toolbox = Toolbox::new(&cli.toolbox);
+        match toolbox.list_tools() {
+            Ok(tools) if tools.is_empty() => println!("(no tools)"),
+            Ok(tools) => {
+                for tool in &tools {
+                    let status = if tool.validated { "validated" } else { "unvalidated" };
+                    println!("{} [{}] — {}", tool.name, status, tool.description);
+                }
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    if cli.list_memories {
+        let store = MemoryStore::new(&cli.memory);
+        match store.list() {
+            Ok(memories) if memories.is_empty() => println!("(no memories)"),
+            Ok(memories) => {
+                for mem in &memories {
+                    println!("{} [{:?}] — {}", mem.id, mem.source, mem.fact);
+                }
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
 
     let config = RouterConfig::from_file(&cli.config)?;
     let runtime = Runtime::from_config(
