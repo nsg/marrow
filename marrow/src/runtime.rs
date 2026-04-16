@@ -24,6 +24,7 @@ pub struct RuntimeOptions {
     pub log_path: String,
     pub verbose: bool,
     pub secrets_path: String,
+    pub spawn_janitor: bool,
 }
 
 pub struct Runtime {
@@ -68,14 +69,16 @@ impl Runtime {
             Arc::new(EventLog::new(Some(PathBuf::from(&options.log_path)), options.verbose).await?);
         let secrets = Arc::new(Secrets::load_or_empty(&options.secrets_path));
 
-        let janitor_backend = config
-            .build_backend("code")
-            .or_else(|_| config.build_backend("default"))?;
-        let janitor_toolbox = Toolbox::new(&options.toolbox_path);
-        let janitor_log = log.clone();
-        tokio::spawn(async move {
-            janitor::run(&janitor_toolbox, janitor_backend.as_ref(), &janitor_log).await;
-        });
+        if options.spawn_janitor {
+            let janitor_backend = config
+                .build_backend("code")
+                .or_else(|_| config.build_backend("default"))?;
+            let janitor_toolbox = Toolbox::new(&options.toolbox_path);
+            let janitor_log = log.clone();
+            tokio::spawn(async move {
+                janitor::run(&janitor_toolbox, janitor_backend.as_ref(), &janitor_log).await;
+            });
+        }
 
         Ok(Self {
             router,
@@ -97,6 +100,15 @@ impl Runtime {
 
     pub fn metrics(&self) -> &Metrics {
         self.metrics.as_ref()
+    }
+
+    /// Run a single janitor pass: review unvalidated tools and clean up the toolbox.
+    pub async fn run_janitor_once(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
+        let code_backend = self
+            .router
+            .backend("code")
+            .or_else(|_| self.router.backend("default"))?;
+        janitor::run_once(self.toolbox.as_ref(), code_backend, self.log.as_ref()).await
     }
 
     pub async fn run_task(

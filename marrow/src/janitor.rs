@@ -426,6 +426,31 @@ fn extract_json_block(response: &str) -> String {
     "{}".to_string()
 }
 
+/// Run a single janitor pass: review all unvalidated tools, then run cleanup.
+/// Returns the number of tools processed.
+pub async fn run_once(
+    toolbox: &Toolbox,
+    backend: &dyn ModelBackend,
+    log: &EventLog,
+) -> Result<u32, Box<dyn Error + Send + Sync>> {
+    let unvalidated = toolbox.list_unvalidated()?;
+    let mut processed = 0;
+
+    for tool in &unvalidated {
+        if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log).await {
+            eprintln!("[janitor] error processing '{}': {e}", tool.name);
+        }
+        processed += 1;
+    }
+
+    match cleanup_toolbox(toolbox, backend, log).await {
+        Ok(_) => {}
+        Err(e) => eprintln!("[janitor] toolbox cleanup error: {e}"),
+    }
+
+    Ok(processed)
+}
+
 pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) {
     let mut idle_cycles: u32 = 0;
     let mut cleanup_backed_off = false;

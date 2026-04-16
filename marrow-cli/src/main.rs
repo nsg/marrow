@@ -33,6 +33,10 @@ struct Cli {
     /// Path to event log file
     #[arg(long, default_value = "events.jsonl")]
     log: String,
+
+    /// Run a single janitor pass (review + cleanup) and exit
+    #[arg(long)]
+    janitor: bool,
 }
 
 #[tokio::main]
@@ -48,12 +52,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             log_path: cli.log.clone(),
             verbose: cli.verbose,
             secrets_path: "secrets.toml".to_string(),
+            spawn_janitor: false,
         },
     )
     .await?;
     let verbose = cli.verbose;
 
-    if let Some(prompt) = cli.prompt {
+    if cli.janitor {
+        eprintln!("[marrow] running janitor pass...");
+        match runtime.run_janitor_once().await {
+            Ok(count) => eprintln!("[marrow] janitor done — {count} tool(s) reviewed"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else if let Some(prompt) = cli.prompt {
         let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
         let progress_handle = tokio::spawn(async move {
             while let Some(status) = progress_rx.recv().await {
