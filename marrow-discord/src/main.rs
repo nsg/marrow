@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use clap::Parser;
 use serenity::async_trait;
 use serenity::model::channel::Message as DiscordMessage;
 use serenity::model::gateway::GatewayIntents;
 use serenity::model::gateway::Ready;
-use serenity::model::id::ChannelId;
+use serenity::model::id::{ChannelId, MessageId};
 use serenity::prelude::*;
 
 use tokio::sync::{RwLock, mpsc};
@@ -39,6 +40,11 @@ impl TypeMapKey for ActiveTasksKey {
     type Value = Arc<RwLock<HashMap<ChannelId, mpsc::UnboundedSender<String>>>>;
 }
 
+struct SeenMessagesKey;
+impl TypeMapKey for SeenMessagesKey {
+    type Value = Arc<RwLock<Vec<MessageId>>>;
+}
+
 // ---------------------------------------------------------------------------
 // Event handler
 // ---------------------------------------------------------------------------
@@ -55,6 +61,22 @@ impl EventHandler for Handler {
         // Ignore messages from bots (including ourselves)
         if msg.author.bot {
             return;
+        }
+
+        // Deduplicate — Discord gateway can deliver the same message event twice
+        {
+            let data = ctx.data.read().await;
+            let seen = data.get::<SeenMessagesKey>().unwrap().clone();
+            drop(data);
+            let mut seen = seen.write().await;
+            if seen.contains(&msg.id) {
+                return;
+            }
+            seen.push(msg.id);
+            if seen.len() > 256 {
+                let excess = seen.len() - 256;
+                seen.drain(..excess);
+            }
         }
 
         // Respond in DMs, when @mentioned, or in configured channels
@@ -250,12 +272,44 @@ fn split_message(text: &str, max_len: usize) -> Vec<&str> {
 }
 
 // ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+#[derive(Parser)]
+#[command(
+    name = "marrow-discord",
+    about = "Marrow agent as a Discord bot"
+)]
+struct Cli {
+    #[arg(short, long, default_value = "config.toml")]
+    config: String,
+
+    /// Path to the toolbox directory (overrides config)
+    #[arg(short, long)]
+    toolbox: Option<String>,
+
+    /// Path to the memory directory (overrides config)
+    #[arg(short, long)]
+    memory: Option<String>,
+
+    /// Show full event stream
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Path to event log file (overrides config)
+    #[arg(long)]
+    log: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config = RouterConfig::from_file("config.toml")?;
+    let cli = Cli::parse();
+
+    let config = RouterConfig::from_file(&cli.config)?;
     let discord = config
         .discord
         .as_ref()
@@ -265,19 +319,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .token
         .as_deref()
         .ok_or("[discord] token missing from config.toml")?;
-    let toolbox_path = discord
-        .toolbox
-        .clone()
-        .unwrap_or_else(|| "toolbox".to_string());
-    let memory_path = discord
-        .memory
-        .clone()
-        .unwrap_or_else(|| "memory".to_string());
-    let log_path = discord
-        .log
-        .clone()
-        .unwrap_or_else(|| "events.jsonl".to_string());
-    let verbose = discord.verbose;
+    let toolbox_path = cli.toolbox.unwrap_or_else(|| {
+        discord
+            .toolbox
+            .clone()
+            .unwrap_or_else(|| "toolbox".to_string())
+    });
+    let memory_path = cli.memory.unwrap_or_else(|| {
+        discord
+            .memory
+            .clone()
+            .unwrap_or_else(|| "memory".to_string())
+    });
+    let log_path = cli.log.unwrap_or_else(|| {
+        discord
+            .log
+            .clone()
+            .unwrap_or_else(|| "events.jsonl".to_string())
+    });
+    let verbose = cli.verbose || discord.verbose;
     let runtime = Arc::new(
         Runtime::from_config(
             &config,
@@ -311,6 +371,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         data.insert::<ChannelsKey>(channels);
         data.insert::<SessionsKey>(Arc::new(RwLock::new(HashMap::new())));
         data.insert::<ActiveTasksKey>(Arc::new(RwLock::new(HashMap::new())));
+        data.insert::<SeenMessagesKey>(Arc::new(RwLock::new(Vec::new())));
     }
 
     eprintln!("[marrow-discord] starting...");

@@ -1073,6 +1073,7 @@ dependencies = [
 name = "marrow-discord"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "marrow",
  "reqwest 0.13.2",
  "serde_json",
