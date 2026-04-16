@@ -3,6 +3,7 @@ use marrow::router::RouterConfig;
 use marrow::runtime::{Runtime, RuntimeOptions};
 use marrow::session::{ChatSession, Message};
 use std::io::{self, Write};
+use tokio::sync::mpsc;
 
 #[derive(Parser)]
 #[command(
@@ -53,14 +54,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let verbose = cli.verbose;
 
     if let Some(prompt) = cli.prompt {
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
+        let progress_handle = tokio::spawn(async move {
+            while let Some(status) = progress_rx.recv().await {
+                eprintln!("[progress] {status}");
+            }
+        });
+
         match runtime
-            .run_task(&prompt, "agent", &[], None, None, None)
+            .run_task(&prompt, "cli", &[], Some(&progress_tx), None, None)
             .await
         {
             Ok(output) => {
+                drop(progress_tx);
+                let _ = progress_handle.await;
                 println!("{output}");
             }
             Err(e) => {
+                drop(progress_tx);
+                let _ = progress_handle.await;
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
@@ -91,12 +103,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 break;
             }
 
+            let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
+            let progress_handle = tokio::spawn(async move {
+                while let Some(status) = progress_rx.recv().await {
+                    eprintln!("[progress] {status}");
+                }
+            });
+
             let conversation = session.build_messages(None);
             match runtime
-                .run_task(input, "agent", &conversation, None, None, None)
+                .run_task(input, "cli", &conversation, Some(&progress_tx), None, None)
                 .await
             {
                 Ok(text) => {
+                    drop(progress_tx);
+                    let _ = progress_handle.await;
                     println!("\n{text}\n");
 
                     session.append(Message::user(input));
@@ -108,7 +129,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         eprintln!("[marrow] summarization error: {e}");
                     }
                 }
-                Err(e) => eprintln!("\nerror: {e}\n"),
+                Err(e) => {
+                    drop(progress_tx);
+                    let _ = progress_handle.await;
+                    eprintln!("\nerror: {e}\n");
+                }
             }
         }
     }

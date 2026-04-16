@@ -71,6 +71,10 @@ Context that isn't obvious from the code:
   staging. Keeps composition logic in testable code, avoids multi-model-call orchestration
   that hallucinated in practice. Data tools do one thing; glue tools compose them.
   Recursion depth capped at 5. New sandbox per nested call for isolation
+- **Two frontends, different audiences** — Discord is the human-facing frontend (the author
+  uses it daily). The CLI is primarily for agentic usage — Claude Code and other agents use
+  it to test tools, verify behavior, and validate changes. The human may also use the CLI
+  occasionally, but optimize CLI design decisions for automated/agentic workflows first
 
 ---
 
