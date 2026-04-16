@@ -60,8 +60,9 @@ return {{ result = data }}
 To call an existing tool:
 {{"action": "call_tool", "tool": "TOOL_NAME", "params": {{"KEY": "value"}}}}
 
-To save the last successful inline code as a reusable tool:
+To save the last successful inline Lua as a reusable tool (saves the code from your most recent successful ```lua block):
 {{"action": "save_tool", "name": "generic_tool_name", "description": "one line description"}}
+IMPORTANT: save_tool must be its own action — do NOT combine it with a ```lua block in the same response.
 
 To remove a broken tool from the toolbox:
 {{"action": "remove_tool", "name": "tool_name"}}
@@ -70,7 +71,7 @@ To give your final answer:
 {{"action": "answer", "text": "your complete answer to the user"}}
 
 Rules:
-- Use inline Lua for one-off tasks. If inline code works well and you'll need it again, use save_tool to keep it.
+- After inline Lua succeeds: if the code is generally useful (API calls, data fetching, etc.), save it with save_tool before answering. The flow is: (1) write and run inline Lua, (2) if it works, send save_tool as the next action, (3) then answer. Skip saving only if a tool with the same purpose already exists.
 - If a tool or code fails, read the error carefully. Do NOT repeat the same approach — fix the specific issue.
 - NEVER retry something that already failed with the same error. If "require" failed, it will always fail. If a secret name was not found, try a different name.
 - If something worked in a previous step, reuse that exact approach. Do not regress to a pattern that already failed.
@@ -78,7 +79,7 @@ Rules:
 - If a follow-up question asks about different data (different dates, different items, etc.), you MUST fetch new data — previous conversation results do not cover it.
 - If a saved tool fails repeatedly, use remove_tool to delete it — you can always recreate it or use inline Lua instead.
 - Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
-- When saving tools, prefer generic names (e.g. "rss_reader" not "nsg_blog_reader").
+- When saving tools, prefer generic names and use PARAMS for inputs (e.g. PARAMS["LOCATION"] instead of hardcoded "Stockholm"). This makes tools reusable for different inputs.
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
 - The answer action text should be a natural language response, NOT a JSON action.
 - If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling.
