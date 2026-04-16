@@ -72,6 +72,7 @@ To give your final answer:
 
 Rules:
 - After inline Lua succeeds: if the code is generally useful (API calls, data fetching, etc.), save it with save_tool before answering. The flow is: (1) write and run inline Lua, (2) if it works, send save_tool as the next action, (3) then answer. Skip saving only if a tool with the same purpose already exists.
+- CRITICAL: When a step already returned the data you need, do NOT rewrite the code. Use save_tool immediately on the last successful code. Rewriting working code risks regression — save first, then answer with the data you already have.
 - If a tool or code fails, read the error carefully. Do NOT repeat the same approach — fix the specific issue.
 - NEVER retry something that already failed with the same error. If "require" failed, it will always fail. If a secret name was not found, try a different name.
 - If something worked in a previous step, reuse that exact approach. Do not regress to a pattern that already failed.
@@ -115,6 +116,9 @@ pub struct StepResult {
     pub step: u32,
     pub action: Action,
     pub output: String,
+    pub success: bool,
+    /// One-line summary of what this step discovered or accomplished (for working context).
+    pub finding: Option<String>,
 }
 
 pub fn build_agent_prompt(
@@ -145,40 +149,70 @@ pub fn build_agent_prompt(
     let history_section = if history.is_empty() {
         String::new()
     } else {
-        const RECENT_STEPS: usize = 5;
+        const RECENT_STEPS: usize = 3;
         let total = history.len();
         let split = total.saturating_sub(RECENT_STEPS);
 
         let mut parts = Vec::new();
 
-        // Older steps: one-line summaries
+        // Working context: pinned findings from ALL successful steps
+        let findings: Vec<String> = history
+            .iter()
+            .filter_map(|s| {
+                s.finding
+                    .as_ref()
+                    .map(|f| format!("- Step {}: {f}", s.step))
+            })
+            .collect();
+        if !findings.is_empty() {
+            parts.push("Working context (confirmed discoveries):".to_string());
+            parts.extend(findings);
+            parts.push(String::new());
+        }
+
+        // Older steps: compressed differently based on success/failure
         if split > 0 {
-            parts.push("Earlier actions (summary):".to_string());
+            parts.push("Earlier actions:".to_string());
             for s in &history[..split] {
                 let desc = format_action_short(&s.action);
-                let status = if s.output.contains("\"error\"") || s.output.contains("error") {
-                    "FAILED"
+                if s.success {
+                    // Successful older steps: action + finding (or brief output)
+                    let detail = s.finding.as_deref().unwrap_or("OK");
+                    parts.push(format!("  Step {}: {} → {detail}", s.step, desc));
                 } else {
-                    "OK"
-                };
-                parts.push(format!("  Step {}: {} → {status}", s.step, desc));
+                    // Failed older steps: action + brief error reason
+                    let reason = extract_error_reason(&s.output);
+                    parts.push(format!(
+                        "  Step {}: {} → FAILED: {reason}",
+                        s.step, desc
+                    ));
+                }
             }
             parts.push(String::new());
         }
 
-        // Recent steps: full detail
+        // Recent steps: full detail for successes, compressed for failures
         parts.push("Recent actions:".to_string());
         for s in &history[split..] {
             let desc = format_action_short(&s.action);
-            let output_display = if s.output.len() > 1000 {
-                format!("{}... (truncated)", &s.output[..1000])
+            if s.success {
+                let output_display = if s.output.len() > 1000 {
+                    format!("{}... (truncated)", &s.output[..1000])
+                } else {
+                    s.output.clone()
+                };
+                parts.push(format!(
+                    "[Step {}] {}\nResult: {}\n",
+                    s.step, desc, output_display
+                ));
             } else {
-                s.output.clone()
-            };
-            parts.push(format!(
-                "[Step {}] {}\nResult: {}\n",
-                s.step, desc, output_display
-            ));
+                // Failed recent steps: show error but not the full output
+                let reason = extract_error_reason(&s.output);
+                parts.push(format!(
+                    "[Step {}] {} → FAILED: {reason}\n",
+                    s.step, desc
+                ));
+            }
         }
 
         format!("{}\n", parts.join("\n"))
@@ -325,6 +359,107 @@ fn format_action_short(action: &Action) -> String {
     }
 }
 
+/// Extract a brief error reason from a failed step output.
+fn extract_error_reason(output: &str) -> String {
+    // Try to parse as JSON and extract "error" field
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(output) {
+        if let Some(err) = val.get("error").and_then(|e| e.as_str()) {
+            let truncated = if err.len() > 120 {
+                format!("{}...", &err[..120])
+            } else {
+                err.to_string()
+            };
+            return truncated;
+        }
+    }
+    // Fallback: first 120 chars of output
+    if output.len() > 120 {
+        format!("{}...", &output[..120])
+    } else {
+        output.to_string()
+    }
+}
+
+/// Extract a one-line finding from a successful step output.
+/// Uses template-based extraction from JSON — no model call needed.
+fn extract_finding(output: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(output).ok()?;
+
+    // Handle array wrapping (inline Lua returns arrays)
+    let obj = if let Some(arr) = val.as_array() {
+        arr.first()?.as_object()?
+    } else {
+        val.as_object()?
+    };
+
+    // Skip if it contains an error
+    if obj.contains_key("error") {
+        return None;
+    }
+
+    // Build a summary from numeric/string fields (skip large nested data)
+    let mut parts = Vec::new();
+    for (key, value) in obj {
+        match value {
+            serde_json::Value::Number(n) => {
+                parts.push(format!("{key}={n}"));
+            }
+            serde_json::Value::String(s) if s.len() <= 80 => {
+                parts.push(format!("{key}=\"{}\"", s));
+            }
+            serde_json::Value::String(s) => {
+                parts.push(format!("{key}=({} chars)", s.len()));
+            }
+            serde_json::Value::Bool(b) => {
+                parts.push(format!("{key}={b}"));
+            }
+            serde_json::Value::Array(arr) => {
+                parts.push(format!("{key}=[{} items]", arr.len()));
+            }
+            serde_json::Value::Object(map) => {
+                parts.push(format!("{key}={{{} fields}}", map.len()));
+            }
+            serde_json::Value::Null => {}
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    Some(parts.join(", "))
+}
+
+/// Use the fast model to summarize a complex/large output into a one-line finding.
+/// Called only when extract_finding returns something too long or when the output
+/// is large enough to warrant model-based summarization.
+async fn summarize_finding(
+    output: &str,
+    fast_backend: &dyn ModelBackend,
+) -> Option<String> {
+    let truncated = if output.len() > 2000 {
+        &output[..2000]
+    } else {
+        output
+    };
+    let prompt = format!(
+        "Summarize what this tool output tells us in ONE short sentence (under 20 words). \
+         Focus on what was discovered or confirmed — data structure, counts, key values. \
+         Reply with ONLY the summary, no preamble.\n\nOutput:\n{truncated}"
+    );
+    match fast_backend.complete(prompt).await {
+        Ok(summary) => {
+            let s = summary.trim().to_string();
+            if s.is_empty() || s.len() > 200 {
+                None
+            } else {
+                Some(s)
+            }
+        }
+        Err(_) => None,
+    }
+}
+
 fn extract_lua_block(text: &str) -> Option<String> {
     let start = text.find("```lua")?;
     let rest = &text[start + 6..];
@@ -345,6 +480,7 @@ pub async fn run_loop(
     task_id: &str,
     backend: &dyn ModelBackend,
     answer_backend: &dyn ModelBackend,
+    fast_backend: &dyn ModelBackend,
     toolbox: &Toolbox,
     toolbox_path: &str,
     client: Arc<Client>,
@@ -374,6 +510,8 @@ pub async fn run_loop(
                     step,
                     action: Action::UserMessage { text: msg.clone() },
                     output: msg,
+                    success: true,
+                    finding: None,
                 });
             }
         }
@@ -460,6 +598,8 @@ pub async fn run_loop(
                         step,
                         action: action.clone(),
                         output: format!("{{\"error\": \"tool '{tool}' has failed {fail_count} times already. You MUST use a different tool or create a new one.\"}}"),
+                        success: false,
+                        finding: None,
                     });
                     continue;
                 }
@@ -500,7 +640,7 @@ pub async fn run_loop(
                     );
                 }
 
-                let output = match toolbox.load_provider(tool) {
+                let (output, step_success) = match toolbox.load_provider(tool) {
                     Ok(provider) => {
                         let toolbox_dir = Some(PathBuf::from(toolbox_path));
                         match provider
@@ -537,7 +677,7 @@ pub async fn run_loop(
                                     output: output_str.clone(),
                                 })
                                 .await;
-                                output_str
+                                (output_str, !has_error)
                             }
                             Err(e) => {
                                 let output_str =
@@ -551,19 +691,33 @@ pub async fn run_loop(
                                     output: output_str.clone(),
                                 })
                                 .await;
-                                output_str
+                                (output_str, false)
                             }
                         }
                     }
                     Err(e) => {
-                        format!("{{\"error\": \"tool not found: {e}\"}}")
+                        (format!("{{\"error\": \"tool not found: {e}\"}}"), false)
                     }
                 };
 
+                let finding = if step_success {
+                    let template = extract_finding(&output);
+                    match template {
+                        Some(ref s) if s.len() <= 150 => template,
+                        _ if output.len() > 500 => {
+                            summarize_finding(&output, fast_backend).await
+                        }
+                        other => other,
+                    }
+                } else {
+                    None
+                };
                 history.push(StepResult {
                     step,
                     action,
                     output,
+                    success: step_success,
+                    finding,
                 });
             }
 
@@ -580,7 +734,7 @@ pub async fn run_loop(
 
                 let provider = crate::context::LuaProvider::new("inline", code);
                 let toolbox_dir = Some(PathBuf::from(toolbox_path));
-                let output = match provider
+                let (output, step_success) = match provider
                     .execute_with_params(
                         task,
                         client.clone(),
@@ -601,7 +755,7 @@ pub async fn run_loop(
                             output: output_str.clone(),
                         })
                         .await;
-                        output_str
+                        (output_str, true)
                     }
                     Err(e) => {
                         let output_str = format!("{{\"error\": \"inline code failed: {e}\"}}");
@@ -613,14 +767,28 @@ pub async fn run_loop(
                             output: output_str.clone(),
                         })
                         .await;
-                        output_str
+                        (output_str, false)
                     }
                 };
 
+                let finding = if step_success {
+                    let template = extract_finding(&output);
+                    match template {
+                        Some(ref s) if s.len() <= 150 => template,
+                        _ if output.len() > 500 => {
+                            summarize_finding(&output, fast_backend).await
+                        }
+                        other => other,
+                    }
+                } else {
+                    None
+                };
                 history.push(StepResult {
                     step,
                     action,
                     output,
+                    success: step_success,
+                    finding,
                 });
             }
 
@@ -651,10 +819,13 @@ pub async fn run_loop(
                     "No successful inline code to save. Run inline code first.".to_string()
                 };
 
+                let step_success = output.starts_with("Tool \"") && output.ends_with("call_tool.");
                 history.push(StepResult {
                     step,
                     action,
                     output,
+                    success: step_success,
+                    finding: None,
                 });
             }
 
@@ -675,10 +846,13 @@ pub async fn run_loop(
                     Err(e) => format!("Failed to remove tool: {e}"),
                 };
 
+                let step_success = !output.starts_with("Failed");
                 history.push(StepResult {
                     step,
                     action,
                     output,
+                    success: step_success,
+                    finding: None,
                 });
             }
 
@@ -717,6 +891,8 @@ pub async fn run_loop(
             text: String::new(),
         },
         output: "SYSTEM: You have run out of steps. Summarize what you accomplished and what remains unfinished so the user knows where things stand.".to_string(),
+        success: false,
+        finding: None,
     });
     format_answer(
         task,

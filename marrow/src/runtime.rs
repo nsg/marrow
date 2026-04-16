@@ -148,6 +148,7 @@ impl Runtime {
             &task_id,
             agent_backend,
             answer_backend,
+            fast_backend,
             self.toolbox.as_ref(),
             &self.toolbox_path,
             self.client.clone(),
