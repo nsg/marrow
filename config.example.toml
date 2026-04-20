@@ -17,8 +17,8 @@ model = "kimi-k2.5:cloud"
 api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
-# Code role — used for Lua tool generation and janitor reviews
-# Needs strong coding ability (SWE-bench, LiveCodeBench)
+# Code role — used for runtime Lua tool generation and janitor reviews
+# Supplements built-in Rust tools. Needs strong coding ability (SWE-bench, LiveCodeBench)
 [roles.code]
 provider = "ollama"
 model = "glm-5:cloud"

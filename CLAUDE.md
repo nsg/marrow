@@ -3,14 +3,17 @@
 ## Project Overview
 
 Marrow — a lean, open source agent framework for personal and small business
-workflow automation. Model-agnostic, provider-agnostic, integration-agnostic.
-No hardcoded integrations. No black boxes. Everything observable.
+workflow automation. Model-agnostic, provider-agnostic. Two-tier tool system:
+built-in Rust tools for reliable integrations, runtime Lua generation for
+everything else. No black boxes. Everything observable.
 
 ---
 
 ## Core Philosophy
 
-- **No hardcoded integrations — ever.** All connectors are generated at runtime.
+- **Built-in tools for reliability, Lua generation for flexibility.** Core and
+  vendor-specific integrations ship as built-in Rust tools. The model can still
+  generate Lua tools at runtime for anything not covered.
 - **Lean, task-specific context.** No passive accumulation. No "context rot."
 - **No black boxes.** Progressive detail — summary by default, full on request.
 - **Self-healing.** Fix it silently, or stop and tell the user clearly.
@@ -29,12 +32,16 @@ intelligence index, and tool calling benchmarks.
 ### What's built
 - Cargo workspace: `marrow` (library), `marrow-cli` (CLI), `marrow-discord` (Discord bot)
 - Agentic loop: model decides actions (answer, inline Lua, call tool, create tool) iteratively
+- **Two-tier tool system**: built-in Rust tools + runtime-generated Lua tools, unified behind
+  `ToolRegistry`. Agent sees one list, doesn't know which is which
+- Built-in tools in `marrow/src/tools/` — implement the `Tool` trait, compiled into the binary.
+  Currently ships: `rss_feed` (RSS/Atom reader with topic filtering)
+- Runtime Lua tool generation — model creates tools on demand when none exist for the task
 - Inline Lua execution — model writes code blocks that run directly in the sandbox
 - Lua sandbox with Rust host functions for all external access
-- `run_tool(name, params)` host function — tools can call other tools directly in Lua
+- `run_tool(name, params)` host function — tools can call other tools (built-in or Lua)
 - `secret(name)` host function — tools access API keys from `secrets.toml`
-- Runtime tool generation — model creates tools on demand when none exist for the task
-- Janitor (async background review, regeneration, escalation after 3 attempts)
+- Janitor (async background review, regeneration, escalation after 3 attempts) — Lua tools only
 - Working memory (JSON files, model-selected per task, auto-saved post-interaction)
 - Conversation history with automatic summarization
 - Structured JSONL event logging with `--verbose` progressive detail
@@ -52,6 +59,13 @@ intelligence index, and tool calling benchmarks.
 
 Context that isn't obvious from the code:
 
+- **Two-tier tools: built-in Rust + generated Lua** — current models aren't reliable enough
+  to generate tools on the fly for critical workflows. Built-in Rust tools (`marrow/src/tools/`)
+  provide reliable baselines; Lua generation remains for the future when models improve.
+  Both tiers are unified behind `ToolRegistry` — the agent sees one merged list and the
+  dispatch is transparent. Built-in tools shadow Lua tools with the same name. Lua `run_tool()`
+  can call built-in tools and vice versa. The janitor only manages Lua tools (built-ins
+  don't need healing)
 - **Lua for generated tools** — chosen for easy sandboxing, low token cost for generation,
   and the "code toolbox" pattern where the janitor maintains quality
 - **Single agent loop over staged orchestration** — one planner owns the decision to answer,
@@ -84,6 +98,8 @@ Use the CLI to test the agent loop, verify tools, and run the janitor.
 Build with `cargo build --bin marrow`, run `target/debug/marrow --help` for options.
 stdout is the response, stderr is progress and diagnostics.
 
+`--list-tools` shows all available tools (both built-in Rust tools and Lua toolbox tools).
+
 ---
 
 ## Dogfood Use Case
@@ -101,7 +117,7 @@ Not started yet — infrastructure supports it, needs real-world API testing.
 
 ## Key Constraints
 
-- Every integration must be generated, never hardcoded
+- Built-in tools cover both standard protocols and vendor-specific services
 - Every failure must be visible to the user at some level
 - Every model routing decision must be inspectable
 - Context scope must be auditable per task
