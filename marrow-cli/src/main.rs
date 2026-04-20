@@ -3,6 +3,7 @@ use marrow::memory::MemoryStore;
 use marrow::router::RouterConfig;
 use marrow::runtime::{Runtime, RuntimeOptions};
 use marrow::session::{ChatSession, Message};
+use marrow::tool::ToolRegistry;
 use marrow::toolbox::Toolbox;
 use std::io::{self, Write};
 use tokio::sync::mpsc;
@@ -40,7 +41,7 @@ struct Cli {
     #[arg(long)]
     janitor: bool,
 
-    /// List all tools in the toolbox and exit
+    /// List all tools (built-in and Lua) and exit
     #[arg(long)]
     list_tools: bool,
 
@@ -55,17 +56,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if cli.list_tools {
         let toolbox = Toolbox::new(&cli.toolbox);
-        match toolbox.list_tools() {
-            Ok(tools) if tools.is_empty() => println!("(no tools)"),
-            Ok(tools) => {
-                for tool in &tools {
-                    let status = if tool.validated { "validated" } else { "unvalidated" };
-                    println!("{} [{}] — {}", tool.name, status, tool.description);
-                }
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                std::process::exit(1);
+        let mut registry = ToolRegistry::new(toolbox, &cli.toolbox);
+        marrow::tools::register_all(&mut registry);
+
+        let tools = registry.list_all();
+        if tools.is_empty() {
+            println!("(no tools)");
+        } else {
+            for tool in &tools {
+                let status = if tool.builtin { "built-in" } else { "lua" };
+                println!("{} [{}] — {}", tool.name, status, tool.description);
             }
         }
         return Ok(());

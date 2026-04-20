@@ -14,5 +14,7 @@ pub mod sandbox;
 pub mod sandbox_host;
 pub mod secrets;
 pub mod session;
+pub mod tool;
 pub mod toolbox;
+pub mod tools;
 pub mod xml;

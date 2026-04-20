@@ -10,6 +10,7 @@ use reqwest::Client;
 use crate::sandbox::create_sandbox;
 use crate::sandbox_host::{HostConfig, register_host_functions};
 use crate::secrets::Secrets;
+use crate::tool::Tool;
 
 pub struct LuaProvider {
     pub name: String,
@@ -37,8 +38,15 @@ impl LuaProvider {
         task_description: &str,
         client: Arc<Client>,
     ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
-        self.execute_with_params(task_description, client, &HashMap::new(), None, None)
-            .await
+        self.execute_with_params(
+            task_description,
+            client,
+            &HashMap::new(),
+            None,
+            None,
+            Arc::new(HashMap::new()),
+        )
+        .await
     }
 
     pub async fn execute_with_params(
@@ -48,9 +56,8 @@ impl LuaProvider {
         params: &HashMap<String, String>,
         toolbox_dir: Option<PathBuf>,
         secrets: Option<&Secrets>,
+        builtins: Arc<HashMap<String, Arc<dyn Tool>>>,
     ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
-        let lua = create_sandbox()?;
-
         let secrets_map: HashMap<String, String> = secrets
             .map(|s| {
                 s.keys()
@@ -66,15 +73,24 @@ impl LuaProvider {
             task_description: task_description.to_string(),
             recursion_depth: Arc::new(AtomicU32::new(0)),
             secrets: Arc::new(secrets_map),
+            builtins,
         };
-        register_host_functions(&lua, &config)?;
 
-        // TASK table
+        self.execute_with_host_config(&config, params).await
+    }
+
+    pub async fn execute_with_host_config(
+        &self,
+        config: &HostConfig,
+        params: &HashMap<String, String>,
+    ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
+        let lua = create_sandbox()?;
+        register_host_functions(&lua, config)?;
+
         let task_table = lua.create_table()?;
-        task_table.set("description", task_description.to_string())?;
+        task_table.set("description", config.task_description.clone())?;
         lua.globals().set("TASK", task_table)?;
 
-        // PARAMS table
         let params_table = lua.create_table()?;
         for (key, value) in params {
             params_table.set(key.as_str(), value.as_str())?;

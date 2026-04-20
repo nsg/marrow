@@ -9,6 +9,7 @@ use marrow::memory_provider;
 use marrow::memory_writer;
 use marrow::model::{CompletionResult, ModelBackend};
 use marrow::session::{ChatSession, Message};
+use marrow::tool::ToolRegistry;
 use marrow::toolbox::{ToolMeta, Toolbox};
 use reqwest::Client;
 use tokio::sync::Mutex;
@@ -119,6 +120,8 @@ async fn agent_loop_call_tool_then_answer() {
         )
         .unwrap();
 
+    let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
+
     // Step 1: agent calls greeter tool
     // Step 2: agent says answer
     // Step 3: answer_backend formulates final response
@@ -127,14 +130,15 @@ async fn agent_loop_call_tool_then_answer() {
         r#"{"action": "answer", "text": ""}"#,
     ]);
     let answer_backend = MockBackend::new(vec!["The greeting is: hello world"]);
+    let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
         "say hello",
         "test-task",
         &agent_backend,
         &answer_backend,
-        &toolbox,
-        dir.path().to_str().unwrap(),
+        &fast_backend,
+        &registry,
         client,
         &[],
         &log,
@@ -157,6 +161,8 @@ async fn agent_loop_save_tool_then_call_then_answer() {
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
+    let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
+
     // Step 1: model runs inline Lua
     // Step 2: model saves it as a tool
     // Step 3: model calls the saved tool
@@ -169,14 +175,15 @@ async fn agent_loop_save_tool_then_call_then_answer() {
     ]);
 
     let answer_backend = MockBackend::new(vec!["Echo says: hi"]);
+    let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
         "echo something",
         "test-task",
         &agent_backend,
         &answer_backend,
-        &toolbox,
-        dir.path().to_str().unwrap(),
+        &fast_backend,
+        &registry,
         client,
         &[],
         &log,
@@ -196,20 +203,22 @@ async fn agent_loop_save_tool_then_call_then_answer() {
 #[tokio::test]
 async fn agent_loop_direct_answer() {
     let dir = temp_dir("marrow_tb");
-    let toolbox = Toolbox::new(dir.path());
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
+    let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
+
     let agent_backend = MockBackend::new(vec![r#"{"action": "answer", "text": ""}"#]);
     let answer_backend = MockBackend::new(vec!["2 + 2 = 4"]);
+    let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
         "what is 2+2?",
         "test-task",
         &agent_backend,
         &answer_backend,
-        &toolbox,
-        dir.path().to_str().unwrap(),
+        &fast_backend,
+        &registry,
         client,
         &[],
         &log,
@@ -228,9 +237,10 @@ async fn agent_loop_direct_answer() {
 #[tokio::test]
 async fn agent_loop_tool_failure_recovery() {
     let dir = temp_dir("marrow_tb");
-    let toolbox = Toolbox::new(dir.path());
     let log = noop_log().await;
     let client = Arc::new(Client::new());
+
+    let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
 
     // Step 1: agent tries nonexistent tool → gets error
     // Step 2: agent says answer
@@ -240,14 +250,15 @@ async fn agent_loop_tool_failure_recovery() {
         r#"{"action": "answer", "text": ""}"#,
     ]);
     let answer_backend = MockBackend::new(vec!["Tool was not available, but I can tell you..."]);
+    let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
         "do something",
         "test-task",
         &agent_backend,
         &answer_backend,
-        &toolbox,
-        dir.path().to_str().unwrap(),
+        &fast_backend,
+        &registry,
         client,
         &[],
         &log,
@@ -282,7 +293,14 @@ async fn lua_provider_receives_params_table() {
     let mut params = HashMap::new();
     params.insert("LOCATION".to_string(), "Paris".to_string());
     let result = provider
-        .execute_with_params("test", client, &params, None, None)
+        .execute_with_params(
+            "test",
+            client,
+            &params,
+            None,
+            None,
+            Arc::new(HashMap::new()),
+        )
         .await
         .unwrap();
     assert_eq!(result["city"], "Paris");
@@ -337,6 +355,7 @@ async fn run_tool_calls_another_tool() {
             &HashMap::new(),
             Some(dir.path().to_path_buf()),
             None,
+            Arc::new(HashMap::new()),
         )
         .await
         .unwrap();
@@ -369,6 +388,7 @@ async fn run_tool_passes_params() {
             &HashMap::new(),
             Some(dir.path().to_path_buf()),
             None,
+            Arc::new(HashMap::new()),
         )
         .await
         .unwrap();
@@ -401,6 +421,7 @@ async fn run_tool_recursion_guard() {
             &HashMap::new(),
             Some(dir.path().to_path_buf()),
             None,
+            Arc::new(HashMap::new()),
         )
         .await;
     assert!(result.is_err());
@@ -468,6 +489,7 @@ async fn run_tool_glue_composition() {
             &params,
             Some(dir.path().to_path_buf()),
             None,
+            Arc::new(HashMap::new()),
         )
         .await
         .unwrap();
@@ -609,7 +631,7 @@ async fn janitor_validates_passing_tool() {
     let backend = MockBackend::new(vec![
         "```verdict\nPASS\n```\n```issues\nnone\n```\n```suggestions\nnone\n```",
     ]);
-    marrow::janitor::review_and_fix(&toolbox, "good", &backend, &log)
+    marrow::janitor::review_and_fix(&toolbox, "good", &backend, &log, &[])
         .await
         .unwrap();
     assert!(toolbox.load_meta("good").unwrap().validated);
@@ -634,7 +656,7 @@ async fn janitor_deletes_after_max_failures() {
         "```name\nbad\n```\n```description\nBad\n```\n```lua\nreturn {}\n```",
         "```verdict\nFAIL\n```\n```issues\n- broken\n```\n```suggestions\n- fix\n```",
     ]);
-    marrow::janitor::review_and_fix(&toolbox, "bad", &backend, &log)
+    marrow::janitor::review_and_fix(&toolbox, "bad", &backend, &log, &[])
         .await
         .unwrap();
     assert!(toolbox.list_tools().unwrap().is_empty());
@@ -663,4 +685,3 @@ async fn event_log_writes_to_file() {
     let content = tokio::fs::read_to_string(&log_path).await.unwrap();
     assert!(content.contains("task_created"));
 }
-

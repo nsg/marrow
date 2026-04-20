@@ -276,10 +276,7 @@ fn split_message(text: &str, max_len: usize) -> Vec<&str> {
 // ---------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(
-    name = "marrow-discord",
-    about = "Marrow agent as a Discord bot"
-)]
+#[command(name = "marrow-discord", about = "Marrow agent as a Discord bot")]
 struct Cli {
     #[arg(short, long, default_value = "config.toml")]
     config: String,

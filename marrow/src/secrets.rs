@@ -10,12 +10,16 @@ struct SecretsFile {
     values: HashMap<String, String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Secrets {
     values: HashMap<String, String>,
 }
 
 impl Secrets {
+    pub fn from_map(values: HashMap<String, String>) -> Self {
+        Self { values }
+    }
+
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let content = std::fs::read_to_string(path)?;
         let file: SecretsFile = toml::from_str(&content)?;

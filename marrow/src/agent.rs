@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::error::Error;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use reqwest::Client;
@@ -11,7 +10,7 @@ use crate::memory::Memory;
 use crate::model::ModelBackend;
 use crate::secrets::Secrets;
 use crate::session::Message;
-use crate::toolbox::Toolbox;
+use crate::tool::{ToolContext, ToolRegistry};
 
 /// Sender for progress updates from the agent loop.
 /// Each message is a human-readable status string.
@@ -182,10 +181,7 @@ pub fn build_agent_prompt(
                 } else {
                     // Failed older steps: action + brief error reason
                     let reason = extract_error_reason(&s.output);
-                    parts.push(format!(
-                        "  Step {}: {} → FAILED: {reason}",
-                        s.step, desc
-                    ));
+                    parts.push(format!("  Step {}: {} → FAILED: {reason}", s.step, desc));
                 }
             }
             parts.push(String::new());
@@ -208,10 +204,7 @@ pub fn build_agent_prompt(
             } else {
                 // Failed recent steps: show error but not the full output
                 let reason = extract_error_reason(&s.output);
-                parts.push(format!(
-                    "[Step {}] {} → FAILED: {reason}\n",
-                    s.step, desc
-                ));
+                parts.push(format!("[Step {}] {} → FAILED: {reason}\n", s.step, desc));
             }
         }
 
@@ -362,15 +355,15 @@ fn format_action_short(action: &Action) -> String {
 /// Extract a brief error reason from a failed step output.
 fn extract_error_reason(output: &str) -> String {
     // Try to parse as JSON and extract "error" field
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(output) {
-        if let Some(err) = val.get("error").and_then(|e| e.as_str()) {
-            let truncated = if err.len() > 120 {
-                format!("{}...", &err[..120])
-            } else {
-                err.to_string()
-            };
-            return truncated;
-        }
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(output)
+        && let Some(err) = val.get("error").and_then(|e| e.as_str())
+    {
+        let truncated = if err.len() > 120 {
+            format!("{}...", &err[..120])
+        } else {
+            err.to_string()
+        };
+        return truncated;
     }
     // Fallback: first 120 chars of output
     if output.len() > 120 {
@@ -433,10 +426,7 @@ fn extract_finding(output: &str) -> Option<String> {
 /// Use the fast model to summarize a complex/large output into a one-line finding.
 /// Called only when extract_finding returns something too long or when the output
 /// is large enough to warrant model-based summarization.
-async fn summarize_finding(
-    output: &str,
-    fast_backend: &dyn ModelBackend,
-) -> Option<String> {
+async fn summarize_finding(output: &str, fast_backend: &dyn ModelBackend) -> Option<String> {
     let truncated = if output.len() > 2000 {
         &output[..2000]
     } else {
@@ -481,8 +471,7 @@ pub async fn run_loop(
     backend: &dyn ModelBackend,
     answer_backend: &dyn ModelBackend,
     fast_backend: &dyn ModelBackend,
-    toolbox: &Toolbox,
-    toolbox_path: &str,
+    registry: &ToolRegistry,
     client: Arc<Client>,
     memories: &[Memory],
     log: &EventLog,
@@ -496,6 +485,12 @@ pub async fn run_loop(
         if let Some(tx) = progress {
             let _ = tx.send(msg);
         }
+    };
+
+    let tool_ctx = ToolContext {
+        client: client.clone(),
+        secrets: Arc::new(secrets.cloned().unwrap_or_default()),
+        task_description: task.to_string(),
     };
 
     let mut history: Vec<StepResult> = Vec::new();
@@ -515,10 +510,10 @@ pub async fn run_loop(
                 });
             }
         }
-        let available_tools = toolbox.list_tools().unwrap_or_default();
+        let available_tools = registry.list_all();
         let tools_section = available_tools
             .iter()
-            .map(|t| toolbox.tool_usage(t))
+            .map(|t| t.usage_line())
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -552,7 +547,7 @@ pub async fn run_loop(
                         .map(|(k, v)| format!("  {k} = \"{v}\""))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    let expected = toolbox.extract_params(tool);
+                    let expected = registry.extract_params(tool);
                     eprintln!(
                         "[agent] step {step}: parsed call_tool \"{tool}\"\n  params passed:\n{params_str}\n  tool expects: {:?}",
                         expected
@@ -640,73 +635,53 @@ pub async fn run_loop(
                     );
                 }
 
-                let (output, step_success) = match toolbox.load_provider(tool) {
-                    Ok(provider) => {
-                        let toolbox_dir = Some(PathBuf::from(toolbox_path));
-                        match provider
-                            .execute_with_params(
-                                task,
-                                client.clone(),
-                                &upper_params,
-                                toolbox_dir,
-                                secrets,
-                            )
-                            .await
-                        {
-                            Ok(value) => {
-                                let has_error = value.get("error").is_some();
-                                let output_str = value.to_string();
-                                if log.is_verbose() {
-                                    let preview = if output_str.len() > 500 {
-                                        format!("{}...", &output_str[..500])
-                                    } else {
-                                        output_str.clone()
-                                    };
-                                    eprintln!(
-                                        "[agent] step {step}: tool \"{tool}\" output: {preview}"
-                                    );
-                                }
-                                if has_error {
-                                    *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
-                                }
-                                log.emit(Event::AgentToolResult {
-                                    task_id: task_id.to_string(),
-                                    step,
-                                    tool: tool.clone(),
-                                    success: !has_error,
-                                    output: output_str.clone(),
-                                })
-                                .await;
-                                (output_str, !has_error)
+                let (output, step_success) =
+                    match registry.execute_tool(tool, &upper_params, &tool_ctx).await {
+                        Ok(value) => {
+                            let has_error = value.get("error").is_some();
+                            let output_str = value.to_string();
+                            if log.is_verbose() {
+                                let preview = if output_str.len() > 500 {
+                                    format!("{}...", &output_str[..500])
+                                } else {
+                                    output_str.clone()
+                                };
+                                eprintln!("[agent] step {step}: tool \"{tool}\" output: {preview}");
                             }
-                            Err(e) => {
-                                let output_str =
-                                    format!("{{\"error\": \"tool execution failed: {e}\"}}");
+                            if has_error {
                                 *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
-                                log.emit(Event::AgentToolResult {
-                                    task_id: task_id.to_string(),
-                                    step,
-                                    tool: tool.clone(),
-                                    success: false,
-                                    output: output_str.clone(),
-                                })
-                                .await;
-                                (output_str, false)
                             }
+                            log.emit(Event::AgentToolResult {
+                                task_id: task_id.to_string(),
+                                step,
+                                tool: tool.clone(),
+                                success: !has_error,
+                                output: output_str.clone(),
+                            })
+                            .await;
+                            (output_str, !has_error)
                         }
-                    }
-                    Err(e) => {
-                        (format!("{{\"error\": \"tool not found: {e}\"}}"), false)
-                    }
-                };
+                        Err(e) => {
+                            let output_str =
+                                format!("{{\"error\": \"tool execution failed: {e}\"}}");
+                            *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
+                            log.emit(Event::AgentToolResult {
+                                task_id: task_id.to_string(),
+                                step,
+                                tool: tool.clone(),
+                                success: false,
+                                output: output_str.clone(),
+                            })
+                            .await;
+                            (output_str, false)
+                        }
+                    };
 
                 let finding = if step_success {
                     let template = extract_finding(&output);
                     match template {
                         Some(ref s) if s.len() <= 150 => template,
-                        _ if output.len() > 500 => {
-                            summarize_finding(&output, fast_backend).await
-                        }
+                        _ if output.len() > 500 => summarize_finding(&output, fast_backend).await,
                         other => other,
                     }
                 } else {
@@ -733,7 +708,7 @@ pub async fn run_loop(
                 emit("⚡ Running inline Lua...".to_string());
 
                 let provider = crate::context::LuaProvider::new("inline", code);
-                let toolbox_dir = Some(PathBuf::from(toolbox_path));
+                let toolbox_dir = Some(registry.toolbox_path().to_path_buf());
                 let (output, step_success) = match provider
                     .execute_with_params(
                         task,
@@ -741,6 +716,7 @@ pub async fn run_loop(
                         &HashMap::new(),
                         toolbox_dir,
                         secrets,
+                        registry.builtins_arc(),
                     )
                     .await
                 {
@@ -775,9 +751,7 @@ pub async fn run_loop(
                     let template = extract_finding(&output);
                     match template {
                         Some(ref s) if s.len() <= 150 => template,
-                        _ if output.len() > 500 => {
-                            summarize_finding(&output, fast_backend).await
-                        }
+                        _ if output.len() > 500 => summarize_finding(&output, fast_backend).await,
                         other => other,
                     }
                 } else {
@@ -808,7 +782,7 @@ pub async fn run_loop(
                         provides: vec![name.clone()],
                         validated: false,
                     };
-                    match toolbox.save_tool(&meta, code) {
+                    match registry.toolbox().save_tool(&meta, code) {
                         Ok(()) => {
                             emit(format!("💾 Saved tool \"{name}\""));
                             format!("Tool \"{name}\" saved. You can now call it with call_tool.")
@@ -838,7 +812,7 @@ pub async fn run_loop(
                 })
                 .await;
 
-                let output = match toolbox.delete_tool(name) {
+                let output = match registry.toolbox().delete_tool(name) {
                     Ok(()) => {
                         emit(format!("🗑️ Removed tool \"{name}\""));
                         format!("Tool \"{name}\" has been removed.")
@@ -875,7 +849,7 @@ pub async fn run_loop(
                     &history,
                     answer_backend,
                     conversation,
-                    toolbox,
+                    registry,
                     formatting_hint,
                 )
                 .await;
@@ -900,7 +874,7 @@ pub async fn run_loop(
         &history,
         answer_backend,
         conversation,
-        toolbox,
+        registry,
         formatting_hint,
     )
     .await
@@ -912,7 +886,7 @@ async fn format_answer(
     history: &[StepResult],
     answer_backend: &dyn ModelBackend,
     conversation: &[Message],
-    toolbox: &Toolbox,
+    registry: &ToolRegistry,
     formatting_hint: Option<&str>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let conversation_section = if conversation.is_empty() {
@@ -926,13 +900,16 @@ async fn format_answer(
         format!("Conversation so far:\n{lines}\n\n")
     };
 
-    let tools_list = toolbox.list_tools().unwrap_or_default();
+    let tools_list = registry.list_all();
     let tools_section = if tools_list.is_empty() {
         "You have no tools installed yet. You can create tools on demand when tasks require external data.".to_string()
     } else {
         let list = tools_list
             .iter()
-            .map(|t| format!("- {}: {}", t.name, t.description))
+            .map(|t| {
+                let marker = if t.builtin { " [built-in]" } else { "" };
+                format!("- {}: {}{marker}", t.name, t.description)
+            })
             .collect::<Vec<_>>()
             .join("\n");
         format!("Your installed tools:\n{list}")

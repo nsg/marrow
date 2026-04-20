@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::error::Error;
 use std::time::Duration;
 
@@ -8,6 +9,27 @@ use crate::model::ModelBackend;
 use crate::toolbox::{ToolMeta, Toolbox};
 
 const MAX_FIX_ATTEMPTS: u32 = 3;
+
+pub struct BuiltinInfo {
+    pub name: String,
+    pub description: String,
+}
+
+pub fn format_builtins_for_prompt(builtins: &[BuiltinInfo]) -> String {
+    if builtins.is_empty() {
+        return String::new();
+    }
+    let list = builtins
+        .iter()
+        .map(|b| format!("- {}: {}", b.name, b.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "\nBuilt-in tools (compiled into the application, always available via run_tool()):\n\
+         {list}\n\
+         These are NOT Lua tools — they cannot be reviewed, modified, or deleted.\n"
+    )
+}
 
 const REVIEW_PROMPT_TEMPLATE: &str = r#"You are a code reviewer for Lua scripts that run in a sandboxed environment. Review the following tool for quality and correctness.
 
@@ -31,7 +53,7 @@ Available host functions in the sandbox:
 - log(message) -> nil
 - run_tool(name, params_table) -> table (call another tool by name, passing it a params table)
 - secret(name) -> string (retrieve a secret by name, e.g. API keys — NEVER hardcode credentials)
-
+{builtins}
 Global tables available:
 - TASK.description (string): the user's task description
 - PARAMS (table): per-tool parameters (e.g. PARAMS["LOCATION"])
@@ -84,7 +106,7 @@ Available host functions in the sandbox:
 - log(message) -> nil
 - run_tool(name, params_table) -> table (call another tool by name, passing it a params table)
 - secret(name) -> string (retrieve a secret by name, e.g. API keys — NEVER hardcode credentials)
-
+{builtins}
 Global tables available:
 - TASK.description (string): the user's task description
 - PARAMS (table): per-tool parameters (e.g. PARAMS["LOCATION"])
@@ -115,28 +137,36 @@ pub struct ReviewResult {
     pub suggestions: String,
 }
 
-fn build_review_prompt(meta: &ToolMeta, source: &str) -> String {
+fn build_review_prompt(meta: &ToolMeta, source: &str, builtins: &str) -> String {
     REVIEW_PROMPT_TEMPLATE
         .replace("{name}", &meta.name)
         .replace("{description}", &meta.description)
         .replace("{source}", source)
+        .replace("{builtins}", builtins)
 }
 
-fn build_regenerate_prompt(meta: &ToolMeta, source: &str, review: &ReviewResult) -> String {
+fn build_regenerate_prompt(
+    meta: &ToolMeta,
+    source: &str,
+    review: &ReviewResult,
+    builtins: &str,
+) -> String {
     REGENERATE_PROMPT_TEMPLATE
         .replace("{name}", &meta.name)
         .replace("{description}", &meta.description)
         .replace("{source}", source)
         .replace("{issues}", &review.issues)
         .replace("{suggestions}", &review.suggestions)
+        .replace("{builtins}", builtins)
 }
 
 async fn review_tool(
     meta: &ToolMeta,
     source: &str,
     backend: &dyn ModelBackend,
+    builtins: &str,
 ) -> Result<ReviewResult, Box<dyn Error + Send + Sync>> {
-    let prompt = build_review_prompt(meta, source);
+    let prompt = build_review_prompt(meta, source, builtins);
     let response = backend.complete(prompt).await?;
     parse_review_response(&response)
 }
@@ -162,8 +192,9 @@ async fn regenerate_tool(
     source: &str,
     review: &ReviewResult,
     backend: &dyn ModelBackend,
+    builtins: &str,
 ) -> Result<(ToolMeta, String), Box<dyn Error + Send + Sync>> {
-    let prompt = build_regenerate_prompt(meta, source, review);
+    let prompt = build_regenerate_prompt(meta, source, review, builtins);
     let response = backend.complete(prompt).await?;
 
     let (name, description, lua_code) = parse_codegen_response(&response)?;
@@ -209,12 +240,14 @@ pub async fn review_and_fix(
     tool_name: &str,
     backend: &dyn ModelBackend,
     log: &EventLog,
+    builtins: &[BuiltinInfo],
 ) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    let builtins_str = format_builtins_for_prompt(builtins);
     let mut meta = toolbox.load_meta(tool_name)?;
     let mut source = toolbox.load_source(tool_name)?;
 
     for attempt in 1..=MAX_FIX_ATTEMPTS {
-        let review = review_tool(&meta, &source, backend).await?;
+        let review = review_tool(&meta, &source, backend, &builtins_str).await?;
 
         log.emit(Event::JanitorReview {
             tool: meta.name.clone(),
@@ -258,7 +291,8 @@ pub async fn review_and_fix(
         })
         .await;
 
-        let (new_meta, new_source) = regenerate_tool(&meta, &source, &review, backend).await?;
+        let (new_meta, new_source) =
+            regenerate_tool(&meta, &source, &review, backend, &builtins_str).await?;
         toolbox.replace_tool(Some(&meta.name), &new_meta, &new_source)?;
         meta = new_meta;
         source = new_source;
@@ -267,14 +301,18 @@ pub async fn review_and_fix(
     Ok(false)
 }
 
-const REDUNDANCY_PROMPT: &str = r#"You are reviewing a toolbox for redundant tools. Here are all the tools:
-
+const REDUNDANCY_PROMPT: &str = r#"You are reviewing a Lua toolbox for redundant tools.
+{builtin_section}
+Lua tools in the toolbox:
 {tool_list}
 
-Identify groups of tools that do the same or very similar thing. For each group, decide:
-1. If one tool is clearly better (more generic, better error handling), keep it and delete the others.
-2. If multiple tools have complementary features, merge them into the best one.
-3. If a tool is site-specific (hardcoded domain/URL) but could be generic, note it for refactoring.
+Identify groups of Lua tools that do the same or very similar thing. For each group, decide:
+1. If a Lua tool duplicates a built-in tool, recommend deleting the Lua tool.
+2. If one Lua tool is clearly better (more generic, better error handling), keep it and delete the others.
+3. If multiple Lua tools have complementary features, merge them into the best one.
+4. If a Lua tool is site-specific (hardcoded domain/URL) but could be generic, note it for refactoring.
+
+NEVER include built-in tool names in the "delete" or "refactor" lists — they are compiled into the application.
 
 Respond in this exact JSON format:
 ```json
@@ -321,11 +359,27 @@ pub async fn cleanup_toolbox(
     toolbox: &Toolbox,
     backend: &dyn ModelBackend,
     log: &EventLog,
+    builtins: &[BuiltinInfo],
 ) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let tools = toolbox.list_tools()?;
     if tools.len() < 3 {
         return Ok(false);
     }
+
+    let builtin_names: HashSet<&str> = builtins.iter().map(|b| b.name.as_str()).collect();
+
+    let builtin_section = if builtins.is_empty() {
+        String::new()
+    } else {
+        let list = builtins
+            .iter()
+            .map(|b| format!("- {} [BUILT-IN]: {}", b.name, b.description))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "\nBuilt-in tools (compiled into application, cannot be modified or deleted):\n{list}\n"
+        )
+    };
 
     // Build tool list with descriptions and param info
     let tool_list = tools
@@ -342,7 +396,9 @@ pub async fn cleanup_toolbox(
         .collect::<Vec<_>>()
         .join("\n");
 
-    let prompt = REDUNDANCY_PROMPT.replace("{tool_list}", &tool_list);
+    let prompt = REDUNDANCY_PROMPT
+        .replace("{builtin_section}", &builtin_section)
+        .replace("{tool_list}", &tool_list);
     let response = backend.complete(prompt).await?;
 
     // Parse response
@@ -366,8 +422,11 @@ pub async fn cleanup_toolbox(
 
     let mut changed = false;
 
-    // Delete redundant tools
+    // Delete redundant Lua tools (never touch built-ins)
     for name in &result.delete {
+        if builtin_names.contains(name.as_str()) {
+            continue;
+        }
         if toolbox.load_meta(name).is_ok() {
             toolbox.delete_tool(name)?;
             log.emit(Event::JanitorDeleted {
@@ -379,8 +438,11 @@ pub async fn cleanup_toolbox(
         }
     }
 
-    // Refactor site-specific tools
+    // Refactor site-specific Lua tools (never touch built-ins)
     for name in &result.refactor {
+        if builtin_names.contains(name.as_str()) {
+            continue;
+        }
         if let Ok(meta) = toolbox.load_meta(name)
             && let Ok(source) = toolbox.load_source(name)
         {
@@ -432,18 +494,19 @@ pub async fn run_once(
     toolbox: &Toolbox,
     backend: &dyn ModelBackend,
     log: &EventLog,
+    builtins: &[BuiltinInfo],
 ) -> Result<u32, Box<dyn Error + Send + Sync>> {
     let unvalidated = toolbox.list_unvalidated()?;
     let mut processed = 0;
 
     for tool in &unvalidated {
-        if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log).await {
+        if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log, builtins).await {
             eprintln!("[janitor] error processing '{}': {e}", tool.name);
         }
         processed += 1;
     }
 
-    match cleanup_toolbox(toolbox, backend, log).await {
+    match cleanup_toolbox(toolbox, backend, log, builtins).await {
         Ok(_) => {}
         Err(e) => eprintln!("[janitor] toolbox cleanup error: {e}"),
     }
@@ -451,7 +514,12 @@ pub async fn run_once(
     Ok(processed)
 }
 
-pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) {
+pub async fn run(
+    toolbox: &Toolbox,
+    backend: &dyn ModelBackend,
+    log: &EventLog,
+    builtins: &[BuiltinInfo],
+) {
     let mut idle_cycles: u32 = 0;
     let mut cleanup_backed_off = false;
 
@@ -470,7 +538,7 @@ pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) 
 
             // Clean up redundant/site-specific tools (~50s after idle)
             if !cleanup_backed_off && idle_cycles == 10 {
-                match cleanup_toolbox(toolbox, backend, log).await {
+                match cleanup_toolbox(toolbox, backend, log, builtins).await {
                     Ok(true) => {}
                     Ok(false) => cleanup_backed_off = true,
                     Err(e) => eprintln!("[janitor] toolbox cleanup error: {e}"),
@@ -484,7 +552,7 @@ pub async fn run(toolbox: &Toolbox, backend: &dyn ModelBackend, log: &EventLog) 
         idle_cycles = 0;
         cleanup_backed_off = false;
         for tool in &unvalidated {
-            if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log).await {
+            if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log, builtins).await {
                 eprintln!("[janitor] error processing '{}': {e}", tool.name);
             }
         }

@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::sandbox::create_sandbox;
+use crate::secrets::Secrets;
+use crate::tool::{Tool, ToolContext};
 use crate::xml::XmlNode;
 
 const MAX_RECURSION_DEPTH: u32 = 5;
@@ -16,6 +18,7 @@ pub struct HostConfig {
     pub task_description: String,
     pub recursion_depth: Arc<AtomicU32>,
     pub secrets: Arc<HashMap<String, String>>,
+    pub builtins: Arc<HashMap<String, Arc<dyn Tool>>>,
 }
 
 impl HostConfig {
@@ -26,6 +29,7 @@ impl HostConfig {
             task_description: String::new(),
             recursion_depth: Arc::new(AtomicU32::new(0)),
             secrets: Arc::new(HashMap::new()),
+            builtins: Arc::new(HashMap::new()),
         }
     }
 }
@@ -49,6 +53,7 @@ pub fn register_host_functions(lua: &Lua, config: &HostConfig) -> Result<()> {
             config.task_description.clone(),
             config.recursion_depth.clone(),
             config.secrets.clone(),
+            config.builtins.clone(),
         )?;
     }
 
@@ -62,6 +67,7 @@ fn register_run_tool(
     task_description: String,
     depth: Arc<AtomicU32>,
     secrets: Arc<HashMap<String, String>>,
+    builtins: Arc<HashMap<String, Arc<dyn Tool>>>,
 ) -> Result<()> {
     let func =
         lua.create_async_function(move |lua, (name, params): (String, Option<mlua::Table>)| {
@@ -70,6 +76,7 @@ fn register_run_tool(
             let task_description = task_description.clone();
             let depth = depth.clone();
             let secrets = secrets.clone();
+            let builtins = builtins.clone();
             async move {
                 let current = depth.fetch_add(1, Ordering::SeqCst);
                 if current >= MAX_RECURSION_DEPTH {
@@ -87,6 +94,7 @@ fn register_run_tool(
                     &task_description,
                     &depth,
                     &secrets,
+                    &builtins,
                 )
                 .await;
 
@@ -102,6 +110,7 @@ fn register_run_tool(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_tool_inner(
     name: &str,
     params: Option<&mlua::Table>,
@@ -110,7 +119,21 @@ async fn run_tool_inner(
     task_description: &str,
     depth: &Arc<AtomicU32>,
     secrets: &Arc<HashMap<String, String>>,
+    builtins: &HashMap<String, Arc<dyn Tool>>,
 ) -> std::result::Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    // Check built-in tools first
+    if let Some(tool) = builtins.get(name) {
+        let params_map = lua_params_to_hashmap(params)?;
+        let secrets_obj = secrets_map_to_secrets(secrets);
+        let ctx = ToolContext {
+            client: Arc::new(client.clone()),
+            secrets: Arc::new(secrets_obj),
+            task_description: task_description.to_string(),
+        };
+        return tool.execute(params_map, ctx).await;
+    }
+
+    // Fall back to Lua toolbox
     let lua_path = toolbox_dir.join(format!("{name}.lua"));
     let source = std::fs::read_to_string(&lua_path)
         .map_err(|e| format!("failed to load tool '{name}': {e}"))?;
@@ -123,15 +146,14 @@ async fn run_tool_inner(
         task_description: task_description.to_string(),
         recursion_depth: depth.clone(),
         secrets: secrets.clone(),
+        builtins: Arc::new(builtins.clone()),
     };
     register_host_functions(&inner_lua, &inner_config)?;
 
-    // Set TASK table
     let task_table = inner_lua.create_table()?;
     task_table.set("description", task_description.to_string())?;
     inner_lua.globals().set("TASK", task_table)?;
 
-    // Set PARAMS table from caller's params
     let params_table = inner_lua.create_table()?;
     if let Some(p) = params {
         for pair in p.pairs::<String, mlua::Value>() {
@@ -148,6 +170,31 @@ async fn run_tool_inner(
     let json: serde_json::Value = inner_lua.from_value(result)?;
 
     Ok(json)
+}
+
+fn lua_params_to_hashmap(
+    params: Option<&mlua::Table>,
+) -> std::result::Result<HashMap<String, String>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut map = HashMap::new();
+    if let Some(p) = params {
+        for pair in p.pairs::<String, mlua::Value>() {
+            let (k, v) = pair?;
+            let s = match v {
+                Value::String(s) => s.to_str()?.to_string(),
+                Value::Integer(n) => n.to_string(),
+                Value::Number(n) => n.to_string(),
+                Value::Boolean(b) => b.to_string(),
+                _ => serde_json::to_string(&mlua::Lua::new().from_value::<serde_json::Value>(v)?)
+                    .unwrap_or_default(),
+            };
+            map.insert(k, s);
+        }
+    }
+    Ok(map)
+}
+
+fn secrets_map_to_secrets(map: &HashMap<String, String>) -> Secrets {
+    Secrets::from_map(map.clone())
 }
 
 fn register_http_request(lua: &Lua, client: Arc<Client>) -> Result<()> {

@@ -16,6 +16,7 @@ use crate::model::ModelBackend;
 use crate::router::{ModelRouter, RouterConfig};
 use crate::secrets::Secrets;
 use crate::session::Message;
+use crate::tool::ToolRegistry;
 use crate::toolbox::Toolbox;
 
 pub struct RuntimeOptions {
@@ -29,8 +30,7 @@ pub struct RuntimeOptions {
 
 pub struct Runtime {
     router: Arc<ModelRouter>,
-    toolbox: Arc<Toolbox>,
-    toolbox_path: String,
+    registry: Arc<ToolRegistry>,
     memory_store: Arc<MemoryStore>,
     client: Arc<Client>,
     log: Arc<EventLog>,
@@ -63,7 +63,10 @@ impl Runtime {
             Some(metrics.clone()),
         )?);
         let client = Arc::new(Client::new());
-        let toolbox = Arc::new(Toolbox::new(&options.toolbox_path));
+        let toolbox = Toolbox::new(&options.toolbox_path);
+        let mut registry = ToolRegistry::new(toolbox, &options.toolbox_path);
+        crate::tools::register_all(&mut registry);
+        let registry = Arc::new(registry);
         let memory_store = Arc::new(MemoryStore::new(&options.memory_path));
         let log =
             Arc::new(EventLog::new(Some(PathBuf::from(&options.log_path)), options.verbose).await?);
@@ -75,15 +78,21 @@ impl Runtime {
                 .or_else(|_| config.build_backend("default"))?;
             let janitor_toolbox = Toolbox::new(&options.toolbox_path);
             let janitor_log = log.clone();
+            let janitor_builtins = registry.builtin_info();
             tokio::spawn(async move {
-                janitor::run(&janitor_toolbox, janitor_backend.as_ref(), &janitor_log).await;
+                janitor::run(
+                    &janitor_toolbox,
+                    janitor_backend.as_ref(),
+                    &janitor_log,
+                    &janitor_builtins,
+                )
+                .await;
             });
         }
 
         Ok(Self {
             router,
-            toolbox,
-            toolbox_path: options.toolbox_path,
+            registry,
             memory_store,
             client,
             log,
@@ -108,7 +117,14 @@ impl Runtime {
             .router
             .backend("code")
             .or_else(|_| self.router.backend("default"))?;
-        janitor::run_once(self.toolbox.as_ref(), code_backend, self.log.as_ref()).await
+        let builtins = self.registry.builtin_info();
+        janitor::run_once(
+            self.registry.toolbox(),
+            code_backend,
+            self.log.as_ref(),
+            &builtins,
+        )
+        .await
     }
 
     pub async fn run_task(
@@ -149,8 +165,7 @@ impl Runtime {
             agent_backend,
             answer_backend,
             fast_backend,
-            self.toolbox.as_ref(),
-            &self.toolbox_path,
+            self.registry.as_ref(),
             self.client.clone(),
             &memories,
             self.log.as_ref(),
