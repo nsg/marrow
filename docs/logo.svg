@@ -1,44 +1,45 @@
-<svg width="520" height="320" viewBox="0 0 520 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<svg width="420" height="320" viewBox="0 0 420 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Marrow logo</title>
-  <desc id="desc">A stylized bone with a warm marrow core.</desc>
+  <desc id="desc">A simple white bone rotated 45 degrees and snapped in the middle to reveal red marrow.</desc>
   <defs>
-    <radialGradient id="halo" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(260 160) rotate(90) scale(126 204)">
-      <stop stop-color="#FFE7DA"/>
-      <stop offset="1" stop-color="#FFE7DA" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="bone" x1="98" y1="108" x2="397" y2="252" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFF9F0"/>
-      <stop offset="0.58" stop-color="#F9E9D6"/>
-      <stop offset="1" stop-color="#EFCFB2"/>
+    <path id="boneShape" d="M86 160C73 160 62 152 57 141C52 129 57 116 68 110C82 102 98 106 108 120C118 134 136 140 157 140H263C284 140 302 134 312 120C322 106 338 102 352 110C363 116 368 129 363 141C358 152 347 160 334 160C347 160 358 168 363 179C368 191 363 204 352 210C338 218 322 214 312 200C302 186 284 180 263 180H157C136 180 118 186 108 200C98 214 82 218 68 210C57 204 52 191 57 179C62 168 73 160 86 160Z"/>
+    <linearGradient id="boneFill" x1="70" y1="112" x2="352" y2="208" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F1F4F7"/>
     </linearGradient>
-    <linearGradient id="marrow" x1="174" y1="132" x2="343" y2="217" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#E96E54"/>
-      <stop offset="0.55" stop-color="#BE3E2E"/>
-      <stop offset="1" stop-color="#7D201C"/>
+    <linearGradient id="marrowFill" x1="185" y1="142" x2="235" y2="180" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D56F59"/>
+      <stop offset="1" stop-color="#A12F24"/>
     </linearGradient>
-    <linearGradient id="highlight" x1="260" y1="126" x2="260" y2="236" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFFFFF" stop-opacity="0.72"/>
-      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
-    </linearGradient>
-    <filter id="shadow" x="22" y="65" width="476" height="190" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <filter id="shadow" x="44" y="28" width="332" height="264" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feFlood flood-opacity="0" result="BackgroundImageFix"/>
       <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
       <feOffset dy="8"/>
       <feGaussianBlur stdDeviation="10"/>
       <feComposite in2="hardAlpha" operator="out"/>
-      <feColorMatrix type="matrix" values="0 0 0 0 0.180392 0 0 0 0 0.101961 0 0 0 0 0.0862745 0 0 0 0.18 0"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.141176 0 0 0 0 0.137255 0 0 0 0 0.156863 0 0 0 0.16 0"/>
       <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
       <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
     </filter>
+    <mask id="leftHalf" maskUnits="userSpaceOnUse" x="0" y="0" width="420" height="320">
+      <path d="M0 0H206L195 143L204 149L197 157L205 166L194 178L206 320H0V0Z" fill="white"/>
+    </mask>
+    <mask id="rightHalf" maskUnits="userSpaceOnUse" x="0" y="0" width="420" height="320">
+      <path d="M420 0H214L225 142L216 150L223 158L215 168L226 179L214 320H420V0Z" fill="white"/>
+    </mask>
   </defs>
-  <ellipse cx="260" cy="166" rx="194" ry="118" fill="url(#halo)"/>
-  <g filter="url(#shadow)">
-    <path d="M117 118C102 97 74 92 56 104C38 116 34 143 46 159C55 170 71 178 89 181C71 184 55 192 46 203C34 219 38 246 56 258C74 270 102 265 117 244H403C418 265 446 270 464 258C482 246 486 219 474 203C465 192 449 184 431 181C449 178 465 170 474 159C486 143 482 116 464 104C446 92 418 97 403 118H117Z" fill="url(#bone)"/>
-    <path d="M117 118C102 97 74 92 56 104C38 116 34 143 46 159C55 170 71 178 89 181C71 184 55 192 46 203C34 219 38 246 56 258C74 270 102 265 117 244H403C418 265 446 270 464 258C482 246 486 219 474 203C465 192 449 184 431 181C449 178 465 170 474 159C486 143 482 116 464 104C446 92 418 97 403 118H117Z" stroke="#2A1B18" stroke-width="14" stroke-linejoin="round"/>
-    <rect x="156" y="128" width="208" height="106" rx="52" fill="#FFFDF8" opacity="0.62"/>
-    <rect x="170" y="137" width="180" height="88" rx="44" fill="url(#marrow)"/>
-    <path d="M170 137H350V179C321 188 293 194 260 194C227 194 199 188 170 179V137Z" fill="url(#highlight)" opacity="0.72"/>
-    <path d="M93 181C101 181 108 174 108 166C108 158 101 151 93 151C85 151 78 158 78 166C78 174 85 181 93 181Z" fill="#F7B47D"/>
-    <path d="M427 181C435 181 442 174 442 166C442 158 435 151 427 151C419 151 412 158 412 166C412 174 419 181 427 181Z" fill="#F7B47D"/>
+  <g filter="url(#shadow)" transform="rotate(-45 210 160)">
+    <g mask="url(#leftHalf)">
+      <use href="#boneShape" fill="url(#boneFill)"/>
+      <use href="#boneShape" stroke="#D5DADF" stroke-width="6"/>
+    </g>
+    <g mask="url(#rightHalf)">
+      <use href="#boneShape" fill="url(#boneFill)"/>
+      <use href="#boneShape" stroke="#D5DADF" stroke-width="6"/>
+    </g>
+    <path d="M194 145C199 147 205 150 209 156C205 163 200 168 194 176C195 165 195 154 194 145Z" fill="url(#marrowFill)"/>
+    <path d="M226 144C221 146 216 151 212 158C216 164 220 169 226 177C225 165 225 154 226 144Z" fill="url(#marrowFill)"/>
+    <path d="M194 144L203 149L197 157L205 166L194 177" stroke="#D9DEE2" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M226 143L217 150L223 158L215 168L226 178" stroke="#D9DEE2" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>
