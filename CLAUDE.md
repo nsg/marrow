@@ -119,6 +119,9 @@ Not started yet — infrastructure supports it, needs real-world API testing.
 
 ## Key Constraints
 
+- **Use existing infrastructure** — before writing any parsing, formatting, or utility
+  code, check what already exists in the codebase. XML parsing uses `xml.rs` (quick_xml
+  with namespace resolution). Never hand-roll parsers when a proper one is available.
 - Built-in tools cover both standard protocols and vendor-specific services
 - Every failure must be visible to the user at some level
 - Every model routing decision must be inspectable
