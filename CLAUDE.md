@@ -102,6 +102,21 @@ stdout is the response, stderr is progress and diagnostics.
 
 `--list-tools` shows all available tools (both built-in Rust tools and Lua toolbox tools).
 
+## Release Flow
+
+For tagged releases, follow this sequence:
+
+1. Bump the workspace crate version in the root `Cargo.toml`
+2. Run `cargo fmt`
+3. Run `cargo clippy -- -D warnings`
+4. Run `cargo build` to refresh `Cargo.lock` and verify the workspace builds
+5. Run `cargo test`
+6. Commit the release prep
+7. Create an annotated git tag named `v<version>`
+
+Keep crate versions inherited from `workspace.package` so future releases only
+need one manifest version change.
+
 ---
 
 ## Dogfood Use Case
