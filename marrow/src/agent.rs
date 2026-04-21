@@ -40,6 +40,7 @@ Write a ```lua code block and it will be executed in a sandbox with ONLY these f
 - json_parse(string) / json_encode(table)
 - xml_parse(string) / xml_encode(table)
 - secret(name) — retrieve API keys/passwords (ONLY names listed under "Available secrets" above)
+NOTE: For call_tool actions, pass secrets as param values with "secret:" prefix (e.g. "secret:my_api_key"). They are resolved automatically — the tool receives the actual value.
 - run_tool(name, params) — call an existing tool
 - log(message)
 - Standard Lua: string.*, table.*, math.*, tonumber, tostring, type, pairs, ipairs, pcall
@@ -125,7 +126,7 @@ pub fn build_agent_prompt(
     tools_section: &str,
     memories: &[Memory],
     history: &[StepResult],
-    secret_keys: &[&str],
+    secret_descriptions: &[(&str, &str)],
     conversation: &[Message],
 ) -> String {
     let tools_section = if tools_section.is_empty() {
@@ -211,15 +212,23 @@ pub fn build_agent_prompt(
         format!("{}\n", parts.join("\n"))
     };
 
-    let secrets_section = if secret_keys.is_empty() {
+    let secrets_section = if secret_descriptions.is_empty() {
         String::new()
     } else {
-        let list = secret_keys
+        let list = secret_descriptions
             .iter()
-            .map(|k| format!("- {k}"))
+            .map(|(name, desc)| {
+                if desc.is_empty() {
+                    format!("- {name}")
+                } else {
+                    format!("- {name}: {desc}")
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n");
-        format!("Available secrets (use secret(\"name\") in Lua tools):\n{list}\n\n")
+        format!(
+            "Available secrets (pass as \"secret:NAME\" in tool params, or use secret(\"NAME\") in Lua):\n{list}\n\n"
+        )
     };
 
     let conversation_section = if conversation.is_empty() {
@@ -521,14 +530,13 @@ pub async fn run_loop(
             eprintln!("[agent] step {step}: tools shown to model:\n{tools_section}");
         }
 
-        let secret_keys = secrets.map(|s| s.keys()).unwrap_or_default();
-        let secret_key_refs: Vec<&str> = secret_keys.to_vec();
+        let secret_descs = secrets.map(|s| s.descriptions()).unwrap_or_default();
         let prompt = build_agent_prompt(
             task,
             &tools_section,
             memories,
             &history,
-            &secret_key_refs,
+            &secret_descs,
             conversation,
         );
         let response = backend.complete(prompt).await?;

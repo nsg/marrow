@@ -40,7 +40,9 @@ intelligence index, and tool calling benchmarks.
 - Inline Lua execution — model writes code blocks that run directly in the sandbox
 - Lua sandbox with Rust host functions for all external access
 - `run_tool(name, params)` host function — tools can call other tools (built-in or Lua)
-- `secret(name)` host function — tools access API keys from `secrets.toml`
+- Described secrets store (`secrets.toml`) — agent sees names + descriptions, passes
+  them as `secret:name` tool params; execution layer resolves to actual values
+- `secret(name)` host function — Lua tools can also access secrets directly
 - Janitor (async background review, regeneration, escalation after 3 attempts) — Lua tools only
 - Working memory (JSON files, model-selected per task, auto-saved post-interaction)
 - Conversation history with automatic summarization

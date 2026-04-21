@@ -27,7 +27,9 @@ impl Tool for CalDavCalendarTool {
     fn params(&self) -> Vec<ParamDef> {
         vec![
             ParamDef::required("ACTION"),
-            ParamDef::optional("SERVER_URL"),
+            ParamDef::required("SERVER_URL"),
+            ParamDef::required("USERNAME"),
+            ParamDef::required("PASSWORD"),
             ParamDef::optional("CALENDAR_PATH"),
             ParamDef::optional("START_DATE"),
             ParamDef::optional("END_DATE"),
@@ -58,32 +60,27 @@ impl Tool for CalDavCalendarTool {
                 }
             };
 
-            let server_url = params
-                .get("SERVER_URL")
-                .cloned()
-                .or_else(|| ctx.secret("CALDAV_SERVER_URL").map(|s| s.to_string()))
-                .unwrap_or_default();
-
+            let server_url = params.get("SERVER_URL").map(|s| s.as_str()).unwrap_or("");
             if server_url.is_empty() {
                 return Ok(serde_json::json!({
-                    "error": "no server URL: set SERVER_URL param or CALDAV_SERVER_URL secret"
+                    "error": "missing required parameter: SERVER_URL"
                 }));
             }
 
-            let auth = build_auth(&ctx);
+            let auth = build_auth_from_params(&params);
 
             match action.as_str() {
-                "list_calendars" => list_calendars(&ctx.client, &server_url, &auth).await,
+                "list_calendars" => list_calendars(&ctx.client, server_url, &auth).await,
                 "list_events" => {
                     let cal_path = require_param(&params, "CALENDAR_PATH", "list_events")?;
                     let start = params.get("START_DATE").cloned().unwrap_or_default();
                     let end = params.get("END_DATE").cloned().unwrap_or_default();
-                    list_events(&ctx.client, &server_url, &cal_path, &start, &end, &auth).await
+                    list_events(&ctx.client, server_url, &cal_path, &start, &end, &auth).await
                 }
                 "get_event" => {
                     let cal_path = require_param(&params, "CALENDAR_PATH", "get_event")?;
                     let uid = require_param(&params, "UID", "get_event")?;
-                    get_event(&ctx.client, &server_url, &cal_path, &uid, &auth).await
+                    get_event(&ctx.client, server_url, &cal_path, &uid, &auth).await
                 }
                 "create_event" => {
                     let cal_path = require_param(&params, "CALENDAR_PATH", "create_event")?;
@@ -93,7 +90,7 @@ impl Tool for CalDavCalendarTool {
                     let description = params.get("DESCRIPTION").cloned().unwrap_or_default();
                     create_event(
                         &ctx.client,
-                        &server_url,
+                        server_url,
                         &cal_path,
                         &summary,
                         &start,
@@ -132,7 +129,9 @@ impl Tool for CalDavTasksTool {
     fn params(&self) -> Vec<ParamDef> {
         vec![
             ParamDef::required("ACTION"),
-            ParamDef::optional("SERVER_URL"),
+            ParamDef::required("SERVER_URL"),
+            ParamDef::required("USERNAME"),
+            ParamDef::required("PASSWORD"),
             ParamDef::optional("CALENDAR_PATH"),
             ParamDef::optional("UID"),
             ParamDef::optional("SUMMARY"),
@@ -163,25 +162,20 @@ impl Tool for CalDavTasksTool {
                 }
             };
 
-            let server_url = params
-                .get("SERVER_URL")
-                .cloned()
-                .or_else(|| ctx.secret("CALDAV_SERVER_URL").map(|s| s.to_string()))
-                .unwrap_or_default();
-
+            let server_url = params.get("SERVER_URL").map(|s| s.as_str()).unwrap_or("");
             if server_url.is_empty() {
                 return Ok(serde_json::json!({
-                    "error": "no server URL: set SERVER_URL param or CALDAV_SERVER_URL secret"
+                    "error": "missing required parameter: SERVER_URL"
                 }));
             }
 
-            let auth = build_auth(&ctx);
+            let auth = build_auth_from_params(&params);
 
             match action.as_str() {
                 "list_tasks" => {
                     let cal_path = require_param(&params, "CALENDAR_PATH", "list_tasks")?;
                     let status_filter = params.get("STATUS_FILTER").cloned().unwrap_or_default();
-                    list_tasks(&ctx.client, &server_url, &cal_path, &status_filter, &auth).await
+                    list_tasks(&ctx.client, server_url, &cal_path, &status_filter, &auth).await
                 }
                 "create_task" => {
                     let cal_path = require_param(&params, "CALENDAR_PATH", "create_task")?;
@@ -191,7 +185,7 @@ impl Tool for CalDavTasksTool {
                     let priority = params.get("PRIORITY").cloned().unwrap_or_default();
                     create_task(
                         &ctx.client,
-                        &server_url,
+                        server_url,
                         &cal_path,
                         &summary,
                         &description,
@@ -204,12 +198,12 @@ impl Tool for CalDavTasksTool {
                 "complete_task" => {
                     let cal_path = require_param(&params, "CALENDAR_PATH", "complete_task")?;
                     let uid = require_param(&params, "UID", "complete_task")?;
-                    complete_task(&ctx.client, &server_url, &cal_path, &uid, &auth).await
+                    complete_task(&ctx.client, server_url, &cal_path, &uid, &auth).await
                 }
                 "delete_task" => {
                     let cal_path = require_param(&params, "CALENDAR_PATH", "delete_task")?;
                     let uid = require_param(&params, "UID", "delete_task")?;
-                    delete_task(&ctx.client, &server_url, &cal_path, &uid, &auth).await
+                    delete_task(&ctx.client, server_url, &cal_path, &uid, &auth).await
                 }
                 other => Ok(serde_json::json!({
                     "error": format!("unknown action: {other}. Use: list_tasks, create_task, complete_task, delete_task")
@@ -236,9 +230,9 @@ fn require_param(
     }
 }
 
-fn build_auth(ctx: &ToolContext) -> Option<(String, String)> {
-    let user = ctx.secret("CALDAV_USERNAME")?;
-    let pass = ctx.secret("CALDAV_PASSWORD").unwrap_or("");
+fn build_auth_from_params(params: &HashMap<String, String>) -> Option<(String, String)> {
+    let user = params.get("USERNAME").filter(|s| !s.is_empty())?;
+    let pass = params.get("PASSWORD").map(|s| s.as_str()).unwrap_or("");
     Some((user.to_string(), pass.to_string()))
 }
 

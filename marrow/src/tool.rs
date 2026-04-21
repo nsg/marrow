@@ -44,12 +44,6 @@ pub struct ToolContext {
     pub task_description: String,
 }
 
-impl ToolContext {
-    pub fn secret(&self, name: &str) -> Option<&str> {
-        self.secrets.get(name)
-    }
-}
-
 pub trait Tool: Send + Sync {
     fn meta(&self) -> ToolMeta;
     fn params(&self) -> Vec<ParamDef>;
@@ -138,8 +132,11 @@ impl ToolRegistry {
         params: &HashMap<String, String>,
         ctx: &ToolContext,
     ) -> Result<serde_json::Value, BoxError> {
+        // Resolve secret: prefixed param values before dispatching
+        let resolved = ctx.secrets.resolve_params(params);
+
         if let Some(tool) = self.builtins.get(name) {
-            return tool.execute(params.clone(), ctx.clone()).await;
+            return tool.execute(resolved, ctx.clone()).await;
         }
 
         let provider = self.toolbox.load_provider(name)?;
@@ -147,7 +144,7 @@ impl ToolRegistry {
             .execute_with_params(
                 &ctx.task_description,
                 ctx.client.clone(),
-                params,
+                &resolved,
                 Some(self.toolbox_path.clone()),
                 Some(ctx.secrets.as_ref()),
                 self.builtins_arc(),
