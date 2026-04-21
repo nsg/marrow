@@ -1,0 +1,33 @@
+[Unit]
+Description=Marrow Discord bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=marrow
+Group=marrow
+
+# marrow-discord resolves secrets.toml relative to WorkingDirectory.
+# Keep secrets.toml here, alongside the writable toolbox/memory/log paths.
+WorkingDirectory=/var/lib/marrow
+StateDirectory=marrow
+LogsDirectory=marrow
+
+ExecStart=/usr/local/bin/marrow-discord \
+  --config /etc/marrow/config.toml \
+  --toolbox /var/lib/marrow/toolbox \
+  --memory /var/lib/marrow/memory \
+  --log /var/log/marrow/events.jsonl
+
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/marrow /var/log/marrow
+
+[Install]
+WantedBy=multi-user.target
