@@ -125,12 +125,14 @@ async fn run_tool_inner(
     if let Some(tool) = builtins.get(name) {
         let params_map = lua_params_to_hashmap(params)?;
         let secrets_obj = secrets_map_to_secrets(secrets);
+        // Resolve secret: prefixed param values before dispatching
+        let resolved = secrets_obj.resolve_params(&params_map);
         let ctx = ToolContext {
             client: Arc::new(client.clone()),
             secrets: Arc::new(secrets_obj),
             task_description: task_description.to_string(),
         };
-        return tool.execute(params_map, ctx).await;
+        return tool.execute(resolved, ctx).await;
     }
 
     // Fall back to Lua toolbox
