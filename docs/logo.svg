@@ -1,41 +1,44 @@
-<svg width="420" height="420" viewBox="0 0 420 420" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<svg width="520" height="320" viewBox="0 0 520 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Marrow logo</title>
-  <desc id="desc">A warm geometric emblem with a stylized M and connected nodes.</desc>
+  <desc id="desc">A stylized bone with a warm marrow core.</desc>
   <defs>
-    <linearGradient id="shell" x1="90" y1="82" x2="330" y2="338" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFF5ED"/>
-      <stop offset="1" stop-color="#FFD8C8"/>
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(260 160) rotate(90) scale(126 204)">
+      <stop stop-color="#FFE7DA"/>
+      <stop offset="1" stop-color="#FFE7DA" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bone" x1="98" y1="108" x2="397" y2="252" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF9F0"/>
+      <stop offset="0.58" stop-color="#F9E9D6"/>
+      <stop offset="1" stop-color="#EFCFB2"/>
     </linearGradient>
-    <linearGradient id="core" x1="122" y1="124" x2="301" y2="289" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FF7A59"/>
-      <stop offset="1" stop-color="#B93A2F"/>
+    <linearGradient id="marrow" x1="174" y1="132" x2="343" y2="217" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E96E54"/>
+      <stop offset="0.55" stop-color="#BE3E2E"/>
+      <stop offset="1" stop-color="#7D201C"/>
     </linearGradient>
-    <linearGradient id="glow" x1="210" y1="104" x2="210" y2="316" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFF5ED" stop-opacity="0.92"/>
-      <stop offset="1" stop-color="#FFF5ED" stop-opacity="0.12"/>
+    <linearGradient id="highlight" x1="260" y1="126" x2="260" y2="236" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
-    <filter id="shadow" x="48" y="44" width="324" height="332" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <filter id="shadow" x="22" y="65" width="476" height="190" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feFlood flood-opacity="0" result="BackgroundImageFix"/>
       <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
-      <feOffset dy="10"/>
-      <feGaussianBlur stdDeviation="12"/>
+      <feOffset dy="8"/>
+      <feGaussianBlur stdDeviation="10"/>
       <feComposite in2="hardAlpha" operator="out"/>
-      <feColorMatrix type="matrix" values="0 0 0 0 0.2875 0 0 0 0 0.133333 0 0 0 0 0.105882 0 0 0 0.16 0"/>
-      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_6"/>
-      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_6" result="shape"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.180392 0 0 0 0 0.101961 0 0 0 0 0.0862745 0 0 0 0.18 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
     </filter>
   </defs>
+  <ellipse cx="260" cy="166" rx="194" ry="118" fill="url(#halo)"/>
   <g filter="url(#shadow)">
-    <path d="M210 56C277.379 56 334 112.621 334 180V240C334 307.379 277.379 364 210 364C142.621 364 86 307.379 86 240V180C86 112.621 142.621 56 210 56Z" fill="url(#shell)"/>
-    <path d="M210 56C277.379 56 334 112.621 334 180V240C334 307.379 277.379 364 210 364C142.621 364 86 307.379 86 240V180C86 112.621 142.621 56 210 56Z" stroke="#24313A" stroke-width="14"/>
-    <path d="M210 104C248.108 104 279 134.892 279 173V248C279 286.108 248.108 317 210 317C171.892 317 141 286.108 141 248V173C141 134.892 171.892 104 210 104Z" fill="url(#glow)"/>
-    <path d="M128 287V145L179 145L210 196L241 145H292V287" stroke="url(#core)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M128 145L210 257L292 145" stroke="#24313A" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" opacity="0.88"/>
-    <circle cx="128" cy="145" r="20" fill="#24313A"/>
-    <circle cx="292" cy="145" r="20" fill="#24313A"/>
-    <circle cx="210" cy="257" r="23" fill="#24313A"/>
-    <circle cx="128" cy="287" r="16" fill="#F7B267"/>
-    <circle cx="292" cy="287" r="16" fill="#F7B267"/>
-    <circle cx="210" cy="257" r="11" fill="#F7B267"/>
+    <path d="M117 118C102 97 74 92 56 104C38 116 34 143 46 159C55 170 71 178 89 181C71 184 55 192 46 203C34 219 38 246 56 258C74 270 102 265 117 244H403C418 265 446 270 464 258C482 246 486 219 474 203C465 192 449 184 431 181C449 178 465 170 474 159C486 143 482 116 464 104C446 92 418 97 403 118H117Z" fill="url(#bone)"/>
+    <path d="M117 118C102 97 74 92 56 104C38 116 34 143 46 159C55 170 71 178 89 181C71 184 55 192 46 203C34 219 38 246 56 258C74 270 102 265 117 244H403C418 265 446 270 464 258C482 246 486 219 474 203C465 192 449 184 431 181C449 178 465 170 474 159C486 143 482 116 464 104C446 92 418 97 403 118H117Z" stroke="#2A1B18" stroke-width="14" stroke-linejoin="round"/>
+    <rect x="156" y="128" width="208" height="106" rx="52" fill="#FFFDF8" opacity="0.62"/>
+    <rect x="170" y="137" width="180" height="88" rx="44" fill="url(#marrow)"/>
+    <path d="M170 137H350V179C321 188 293 194 260 194C227 194 199 188 170 179V137Z" fill="url(#highlight)" opacity="0.72"/>
+    <path d="M93 181C101 181 108 174 108 166C108 158 101 151 93 151C85 151 78 158 78 166C78 174 85 181 93 181Z" fill="#F7B47D"/>
+    <path d="M427 181C435 181 442 174 442 166C442 158 435 151 427 151C419 151 412 158 412 166C412 174 419 181 427 181Z" fill="#F7B47D"/>
   </g>
 </svg>

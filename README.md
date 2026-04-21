@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/logo.svg" alt="Marrow logo" width="220">
+  <img src="docs/logo.svg" alt="Marrow bone logo" width="280">
   <h1>Marrow</h1>
   <p>A lean, open source agent framework for personal and small business workflow automation.</p>
 </div>
