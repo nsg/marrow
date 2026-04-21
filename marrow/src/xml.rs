@@ -13,6 +13,24 @@ pub struct XmlNode {
     pub children: Vec<XmlNode>,
 }
 
+impl XmlNode {
+    pub fn find(&self, tag: &str) -> Option<&XmlNode> {
+        self.children.iter().find(|c| c.tag == tag)
+    }
+
+    pub fn find_all(&self, tag: &str) -> Vec<&XmlNode> {
+        self.children.iter().filter(|c| c.tag == tag).collect()
+    }
+
+    pub fn child_text(&self, tag: &str) -> Option<&str> {
+        self.find(tag).and_then(|n| n.text.as_deref())
+    }
+
+    pub fn has_child(&self, tag: &str) -> bool {
+        self.children.iter().any(|c| c.tag == tag)
+    }
+}
+
 /// Parse an XML string into a tree of `XmlNode`s.
 /// Namespace URIs are resolved and prefixed to tag names (e.g. `DAV::displayname`).
 pub fn parse(input: &str) -> Result<XmlNode, String> {

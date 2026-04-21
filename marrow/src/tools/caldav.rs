@@ -782,26 +782,43 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn parse_calendar_list(xml: &str) -> Vec<serde_json::Value> {
-    let mut calendars = Vec::new();
+const DAV_RESPONSE: &str = "DAV::response";
+const DAV_HREF: &str = "DAV::href";
+const DAV_PROPSTAT: &str = "DAV::propstat";
+const DAV_PROP: &str = "DAV::prop";
+const DAV_DISPLAYNAME: &str = "DAV::displayname";
+const DAV_RESOURCETYPE: &str = "DAV::resourcetype";
+const DAV_STATUS: &str = "DAV::status";
+const CALDAV_CALENDAR: &str = "urn:ietf:params:xml:ns:caldav:calendar";
+const CALDAV_COMP_SET: &str = "urn:ietf:params:xml:ns:caldav:supported-calendar-component-set";
+const CALDAV_COMP: &str = "urn:ietf:params:xml:ns:caldav:comp";
+const CALDAV_DATA: &str = "urn:ietf:params:xml:ns:caldav:calendar-data";
 
-    // Extract href paths from the multistatus. CalDAV calendar collections
-    // have <d:resourcetype> containing both <d:collection/> and <cal:calendar/>.
-    // We use a simple text-scanning approach that handles common namespace patterns.
-    let responses = split_responses(xml);
+use crate::xml::{self, XmlNode};
 
-    for block in &responses {
-        // Must contain an actual <cal:calendar/> resource type, not just "calendar" in the URL
-        let is_calendar = (block.contains("<cal:calendar")
-            || block.contains("<Cal:calendar")
-            || block.contains("<CAL:calendar"))
-            && block.contains("collection");
-        if !is_calendar {
-            continue;
+/// Find the first `DAV::propstat` with a 200 status, return its `DAV::prop`.
+fn ok_prop(response: &XmlNode) -> Option<&XmlNode> {
+    for propstat in response.find_all(DAV_PROPSTAT) {
+        let is_ok = propstat
+            .child_text(DAV_STATUS)
+            .map(|s| s.contains("200"))
+            .unwrap_or(true); // no status = assume OK
+        if is_ok {
+            return propstat.find(DAV_PROP);
         }
+    }
+    None
+}
 
-        let href = extract_xml_text(block, "href");
-        let displayname = extract_xml_text(block, "displayname");
+fn parse_calendar_list(body: &str) -> Vec<serde_json::Value> {
+    let root = match xml::parse(body) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut calendars = Vec::new();
+    for response in root.find_all(DAV_RESPONSE) {
+        let href = response.child_text(DAV_HREF).unwrap_or_default();
 
         // Skip inbox/outbox/trashbin
         if href.ends_with("/inbox")
@@ -815,8 +832,33 @@ fn parse_calendar_list(xml: &str) -> Vec<serde_json::Value> {
             continue;
         }
 
-        let supports_events = block.contains("VEVENT");
-        let supports_tasks = block.contains("VTODO");
+        let prop = match ok_prop(response) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        // Must be a calendar collection
+        let rtype = match prop.find(DAV_RESOURCETYPE) {
+            Some(r) => r,
+            None => continue,
+        };
+        if !rtype.has_child(CALDAV_CALENDAR) {
+            continue;
+        }
+
+        let displayname = prop.child_text(DAV_DISPLAYNAME).unwrap_or_default();
+
+        let mut supports_events = false;
+        let mut supports_tasks = false;
+        if let Some(comp_set) = prop.find(CALDAV_COMP_SET) {
+            for comp in comp_set.find_all(CALDAV_COMP) {
+                match comp.attrs.get("name").map(|s| s.as_str()) {
+                    Some("VEVENT") => supports_events = true,
+                    Some("VTODO") => supports_tasks = true,
+                    _ => {}
+                }
+            }
+        }
 
         calendars.push(serde_json::json!({
             "href": href,
@@ -829,63 +871,30 @@ fn parse_calendar_list(xml: &str) -> Vec<serde_json::Value> {
     calendars
 }
 
-fn split_responses(xml: &str) -> Vec<String> {
-    let mut blocks = Vec::new();
-    // Try <d:response>, <D:response>, <response> patterns
-    for tag in &["d:response", "D:response", "response"] {
-        let open = format!("<{tag}>");
-        let close = format!("</{tag}>");
-        if xml.contains(&open) {
-            let mut search = xml;
-            while let Some(start) = search.find(&open) {
-                let after = &search[start + open.len()..];
-                if let Some(end) = after.find(&close) {
-                    blocks.push(after[..end].to_string());
-                    search = &after[end + close.len()..];
-                } else {
-                    break;
-                }
-            }
-            if !blocks.is_empty() {
-                return blocks;
-            }
+fn extract_all_calendar_data(body: &str) -> Vec<String> {
+    let root = match xml::parse(body) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut results = Vec::new();
+    for response in root.find_all(DAV_RESPONSE) {
+        if let Some(prop) = ok_prop(response)
+            && let Some(data_node) = prop.find(CALDAV_DATA)
+            && let Some(text) = &data_node.text
+            && !text.is_empty()
+        {
+            results.push(text.clone());
         }
     }
-    // Fallback: treat whole XML as one block (for non-multistatus responses)
-    blocks.push(xml.to_string());
-    blocks
+    results
 }
 
-fn extract_xml_text(block: &str, tag: &str) -> String {
-    for prefix in &["d:", "D:", "DAV:", "cs:", "C:", "cal:", ""] {
-        let open = format!("<{prefix}{tag}");
-        if let Some(start_pos) = block.find(&open) {
-            let after_open = &block[start_pos + open.len()..];
-            // Self-closing tag (e.g. <d:displayname/>) — no content
-            if after_open.starts_with("/>") {
-                return String::new();
-            }
-            if let Some(gt) = after_open.find('>') {
-                // Also catch self-closing with attributes: <tag attr="x"/>
-                if gt > 0 && after_open.as_bytes()[gt - 1] == b'/' {
-                    return String::new();
-                }
-                let content = &after_open[gt + 1..];
-                // Find closing tag
-                let close_patterns = [format!("</{prefix}{tag}>"), format!("</{tag}>")];
-                for close in &close_patterns {
-                    if let Some(end_pos) = content.find(close.as_str()) {
-                        return content[..end_pos].trim().to_string();
-                    }
-                }
-                // Try generic close
-                if let Some(end_pos) = content.find("</") {
-                    return content[..end_pos].trim().to_string();
-                }
-            }
-        }
-    }
-    String::new()
+fn extract_first_calendar_data(body: &str) -> String {
+    extract_all_calendar_data(body)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
 }
 
 fn parse_events_from_multistatus(xml: &str) -> Vec<serde_json::Value> {
@@ -928,50 +937,6 @@ fn parse_todos_from_multistatus(xml: &str) -> Vec<serde_json::Value> {
     }
 
     tasks
-}
-
-fn extract_all_calendar_data(xml: &str) -> Vec<String> {
-    let mut results = Vec::new();
-
-    // CalDAV responses embed iCal data in <cal:calendar-data> or <C:calendar-data> tags
-    let patterns = [
-        ("cal:calendar-data>", "</cal:calendar-data>"),
-        ("C:calendar-data>", "</C:calendar-data>"),
-        ("c:calendar-data>", "</c:calendar-data>"),
-        ("calendar-data>", "</calendar-data>"),
-    ];
-
-    for (open_suffix, close) in &patterns {
-        let mut search = xml;
-        while let Some(start) = search.find(open_suffix) {
-            let content_start = start + open_suffix.len();
-            let remaining = &search[content_start..];
-            if let Some(end) = remaining.find(close) {
-                let data = &remaining[..end];
-                let decoded = data
-                    .replace("&lt;", "<")
-                    .replace("&gt;", ">")
-                    .replace("&amp;", "&")
-                    .replace("&quot;", "\"");
-                results.push(decoded);
-                search = &search[content_start + end + close.len()..];
-            } else {
-                break;
-            }
-        }
-        if !results.is_empty() {
-            break;
-        }
-    }
-
-    results
-}
-
-fn extract_first_calendar_data(xml: &str) -> String {
-    extract_all_calendar_data(xml)
-        .into_iter()
-        .next()
-        .unwrap_or_default()
 }
 
 fn parse_ical_components(ical: &str, component_type: &str) -> Vec<HashMap<String, String>> {
