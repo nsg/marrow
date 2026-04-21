@@ -1,6 +1,8 @@
 mod caldav;
 mod http_fetch;
 mod rss;
+mod sl_transit;
+mod stathost;
 
 use crate::tool::ToolRegistry;
 
@@ -10,4 +12,6 @@ pub fn register_all(registry: &mut ToolRegistry) {
     registry.register(http_fetch::HttpFetchTool);
     registry.register(caldav::CalDavCalendarTool);
     registry.register(caldav::CalDavTasksTool);
+    registry.register(sl_transit::SlTransitTool);
+    registry.register(stathost::StathostTool);
 }
