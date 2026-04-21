@@ -791,7 +791,10 @@ fn parse_calendar_list(xml: &str) -> Vec<serde_json::Value> {
     let responses = split_responses(xml);
 
     for block in &responses {
-        let is_calendar = (block.contains("calendar") || block.contains("Calendar"))
+        // Must contain an actual <cal:calendar/> resource type, not just "calendar" in the URL
+        let is_calendar = (block.contains("<cal:calendar")
+            || block.contains("<Cal:calendar")
+            || block.contains("<CAL:calendar"))
             && block.contains("collection");
         if !is_calendar {
             continue;
@@ -858,7 +861,15 @@ fn extract_xml_text(block: &str, tag: &str) -> String {
         let open = format!("<{prefix}{tag}");
         if let Some(start_pos) = block.find(&open) {
             let after_open = &block[start_pos + open.len()..];
+            // Self-closing tag (e.g. <d:displayname/>) — no content
+            if after_open.starts_with("/>") {
+                return String::new();
+            }
             if let Some(gt) = after_open.find('>') {
+                // Also catch self-closing with attributes: <tag attr="x"/>
+                if gt > 0 && after_open.as_bytes()[gt - 1] == b'/' {
+                    return String::new();
+                }
                 let content = &after_open[gt + 1..];
                 // Find closing tag
                 let close_patterns = [format!("</{prefix}{tag}>"), format!("</{tag}>")];
