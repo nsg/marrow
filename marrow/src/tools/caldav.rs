@@ -944,8 +944,13 @@ fn parse_ical_components(ical: &str, component_type: &str) -> Vec<HashMap<String
     let begin_marker = format!("BEGIN:{component_type}");
     let end_marker = format!("END:{component_type}");
 
-    // Unfold iCalendar line continuations (RFC 5545 §3.1)
-    let unfolded = ical.replace("\r\n ", "").replace("\r\n\t", "");
+    // Unfold iCalendar line continuations (RFC 5545 §3.1).
+    // Handle both CRLF and LF — XML parsers normalize CRLF to LF.
+    let unfolded = ical
+        .replace("\r\n ", "")
+        .replace("\r\n\t", "")
+        .replace("\n ", "")
+        .replace("\n\t", "");
 
     let mut search = unfolded.as_str();
     while let Some(begin) = search.find(&begin_marker) {
