@@ -304,6 +304,10 @@ struct Cli {
     /// Path to event log file (overrides config)
     #[arg(long)]
     log: Option<String>,
+
+    /// Check for updates and apply if available
+    #[arg(long)]
+    update: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +317,20 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
+
+    if cli.update {
+        match marrow::update::check_and_update().await {
+            Ok(true) => {
+                eprintln!("[marrow-discord] restart to use the new version");
+                return Ok(());
+            }
+            Ok(false) => return Ok(()),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let config = RouterConfig::from_file(&cli.config)?;
     let discord = config
