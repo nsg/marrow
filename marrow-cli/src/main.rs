@@ -1,4 +1,5 @@
 use clap::Parser;
+use marrow::agent::ProgressUpdate;
 use marrow::heartbeat;
 use marrow::memory::MemoryStore;
 use marrow::router::RouterConfig;
@@ -225,7 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
     } else if let Some(prompt) = cli.prompt {
-        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<ProgressUpdate>();
         let progress_handle = tokio::spawn(async move {
             while let Some(status) = progress_rx.recv().await {
                 eprintln!("[progress] {status}");
@@ -274,7 +275,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 break;
             }
 
-            let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
+            let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<ProgressUpdate>();
             let progress_handle = tokio::spawn(async move {
                 while let Some(status) = progress_rx.recv().await {
                     eprintln!("[progress] {status}");

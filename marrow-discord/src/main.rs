@@ -11,12 +11,13 @@ use serenity::prelude::*;
 
 use tokio::sync::{RwLock, mpsc};
 
-use marrow::agent::IncomingRx;
+use marrow::agent::{IncomingRx, ProgressUpdate};
 use marrow::heartbeat;
 use marrow::router::RouterConfig;
 use marrow::runtime::{Runtime, RuntimeOptions};
 use marrow::session::{ChatSession, Message};
 use marrow::tool::FrontendContext;
+use serenity::model::channel::ReactionType;
 
 // ---------------------------------------------------------------------------
 // Shared state stored in serenity's TypeMap
@@ -131,29 +132,53 @@ impl EventHandler for Handler {
         // Show typing indicator while processing
         let typing = msg.channel_id.start_typing(&ctx.http);
 
-        // Progress channel — agent sends updates, we forward to Discord
-        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
-        let channel_id = msg.channel_id;
+        // Acknowledge receipt with 👀 reaction
+        let _ = msg.react(&ctx.http, '👀').await;
+
+        // Progress channel — agent sends updates, we show as reactions
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<ProgressUpdate>();
+        let user_msg = msg.clone();
         let http = ctx.http.clone();
         let progress_handle = tokio::spawn(async move {
-            let mut status_msg: Option<serenity::model::channel::Message> = None;
-            while let Some(status) = progress_rx.recv().await {
-                if let Some(ref mut msg) = status_msg {
-                    let _ = msg
-                        .edit(
-                            &http,
-                            serenity::builder::EditMessage::new().content(&status),
-                        )
-                        .await;
-                } else {
-                    if let Ok(m) = channel_id.say(&http, &status).await {
-                        status_msg = Some(m);
+            let reaction = |emoji: &str| ReactionType::Unicode(emoji.to_string());
+            while let Some(update) = progress_rx.recv().await {
+                match update {
+                    ProgressUpdate::ToolCallStart => {
+                        let _ = user_msg.react(&http, reaction("🔧")).await;
+                    }
+                    ProgressUpdate::ToolCallEnd => {
+                        let _ = user_msg.delete_reaction(&http, None, reaction("🔧")).await;
+                    }
+                    ProgressUpdate::CodeRunStart => {
+                        let _ = user_msg.react(&http, reaction("⚡")).await;
+                    }
+                    ProgressUpdate::CodeRunEnd => {
+                        let _ = user_msg.delete_reaction(&http, None, reaction("⚡")).await;
+                    }
+                    ProgressUpdate::Thinking => {
+                        let _ = user_msg.react(&http, reaction("💭")).await;
+                    }
+                    ProgressUpdate::ToolCreated => {
+                        let _ = user_msg.react(&http, reaction("⚙️")).await;
+                    }
+                    ProgressUpdate::ToolRemoved => {
+                        let _ = user_msg.react(&http, reaction("🗑️")).await;
+                    }
+                    ProgressUpdate::MemoryNew => {
+                        let _ = user_msg.react(&http, reaction("🧠")).await;
+                    }
+                    ProgressUpdate::MemoryUpdated => {
+                        let _ = user_msg.react(&http, reaction("📝")).await;
+                    }
+                    ProgressUpdate::MemoryCleared => {
+                        let _ = user_msg.react(&http, reaction("♻️")).await;
                     }
                 }
             }
-            // Delete the status message when the task is done
-            if let Some(msg) = status_msg {
-                let _ = msg.delete(&http).await;
+            // Cleanup: remove temporary reactions (bot's own only)
+            let reaction = |emoji: &str| ReactionType::Unicode(emoji.to_string());
+            for emoji in ["👀", "💭"] {
+                let _ = user_msg.delete_reaction(&http, None, reaction(emoji)).await;
             }
         });
 
@@ -229,7 +254,7 @@ const DISCORD_FORMATTING_HINT: &str = "Formatting: The response will be displaye
 async fn run_task(
     description: &str,
     runtime: &Runtime,
-    progress: &mpsc::UnboundedSender<String>,
+    progress: &mpsc::UnboundedSender<ProgressUpdate>,
     conversation: &[Message],
     incoming: &mut IncomingRx,
     channel_id: u64,

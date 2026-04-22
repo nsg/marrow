@@ -5,7 +5,7 @@ use std::sync::Arc;
 use reqwest::Client;
 
 use crate::agent;
-use crate::agent::{IncomingRx, ProgressTx};
+use crate::agent::{IncomingRx, ProgressTx, ProgressUpdate};
 use crate::events::{Event, EventLog};
 use crate::janitor;
 use crate::memory::{Memory, MemoryStore};
@@ -210,24 +210,25 @@ impl Runtime {
         .await
         {
             Ok(result) => {
-                for fact in &result.saved {
+                if !result.saved.is_empty() {
                     if let Some(tx) = progress {
-                        let _ = tx.send(format!("🧠 Remembered: {fact}"));
-                    } else {
+                        let _ = tx.send(ProgressUpdate::MemoryNew);
+                    }
+                    for fact in &result.saved {
                         eprintln!("[marrow] remembered: {fact}");
                     }
                 }
 
-                for fact in &result.updated {
-                    if let Some(tx) = progress {
-                        let _ = tx.send(format!("🧠 Updated: {fact}"));
-                    }
+                if !result.updated.is_empty()
+                    && let Some(tx) = progress
+                {
+                    let _ = tx.send(ProgressUpdate::MemoryUpdated);
                 }
 
                 if result.deleted > 0
                     && let Some(tx) = progress
                 {
-                    let _ = tx.send(format!("🧠 Forgot {} fact(s)", result.deleted));
+                    let _ = tx.send(ProgressUpdate::MemoryCleared);
                 }
             }
             Err(e) => eprintln!("[marrow] memory writer error: {e}"),

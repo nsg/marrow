@@ -12,9 +12,44 @@ use crate::secrets::Secrets;
 use crate::session::Message;
 use crate::tool::{FrontendContext, ToolContext, ToolRegistry};
 
+/// Structured progress updates from the agent loop.
+/// Discord renders these as emoji reactions; CLI prints via `Display`.
+#[derive(Debug, Clone)]
+pub enum ProgressUpdate {
+    // Temporary — paired start/end
+    ToolCallStart, // 🔧
+    ToolCallEnd,   // 🔧
+    CodeRunStart,  // ⚡
+    CodeRunEnd,    // ⚡
+    Thinking,      // 💭
+
+    // Persistent
+    ToolCreated,   // ⚙️
+    ToolRemoved,   // 🗑️
+    MemoryNew,     // 🧠
+    MemoryUpdated, // 📝
+    MemoryCleared, // ♻️
+}
+
+impl std::fmt::Display for ProgressUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ToolCallStart => write!(f, "🔧 Calling tool"),
+            Self::ToolCallEnd => write!(f, "🔧 Tool call done"),
+            Self::CodeRunStart => write!(f, "⚡ Running inline Lua..."),
+            Self::CodeRunEnd => write!(f, "⚡ Code execution done"),
+            Self::Thinking => write!(f, "💭 Thinking..."),
+            Self::ToolCreated => write!(f, "⚙️ New tool created"),
+            Self::ToolRemoved => write!(f, "🗑️ Tool removed"),
+            Self::MemoryNew => write!(f, "🧠 New memory"),
+            Self::MemoryUpdated => write!(f, "📝 Memory updated"),
+            Self::MemoryCleared => write!(f, "♻️ Memory cleaned"),
+        }
+    }
+}
+
 /// Sender for progress updates from the agent loop.
-/// Each message is a human-readable status string.
-pub type ProgressTx = mpsc::UnboundedSender<String>;
+pub type ProgressTx = mpsc::UnboundedSender<ProgressUpdate>;
 
 /// Receiver for user messages injected mid-loop (e.g. Discord follow-ups).
 pub type IncomingRx = mpsc::UnboundedReceiver<String>;
@@ -492,9 +527,9 @@ pub async fn run_loop(
     schedule_store: Option<Arc<crate::schedule::ScheduleStore>>,
     frontend_context: Option<FrontendContext>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
-    let emit = |msg: String| {
+    let emit = |update: ProgressUpdate| {
         if let Some(tx) = progress {
-            let _ = tx.send(msg);
+            let _ = tx.send(update);
         }
     };
 
@@ -619,16 +654,7 @@ pub async fn run_loop(
                 })
                 .await;
 
-                let params_preview = params
-                    .iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                if params_preview.is_empty() {
-                    emit(format!("🔧 Calling tool \"{tool}\""));
-                } else {
-                    emit(format!("🔧 Calling tool \"{tool}\" ({params_preview})"));
-                }
+                emit(ProgressUpdate::ToolCallStart);
 
                 // Normalize param keys to uppercase
                 let upper_params: HashMap<String, String> = params
@@ -699,6 +725,8 @@ pub async fn run_loop(
                 } else {
                     None
                 };
+                emit(ProgressUpdate::ToolCallEnd);
+
                 history.push(StepResult {
                     step,
                     action,
@@ -717,7 +745,7 @@ pub async fn run_loop(
                 })
                 .await;
 
-                emit("⚡ Running inline Lua...".to_string());
+                emit(ProgressUpdate::CodeRunStart);
 
                 let provider = crate::context::LuaProvider::new("inline", code);
                 let toolbox_dir = Some(registry.toolbox_path().to_path_buf());
@@ -759,6 +787,8 @@ pub async fn run_loop(
                     }
                 };
 
+                emit(ProgressUpdate::CodeRunEnd);
+
                 let finding = if step_success {
                     let template = extract_finding(&output);
                     match template {
@@ -796,7 +826,7 @@ pub async fn run_loop(
                     };
                     match registry.toolbox().save_tool(&meta, code) {
                         Ok(()) => {
-                            emit(format!("💾 Saved tool \"{name}\""));
+                            emit(ProgressUpdate::ToolCreated);
                             format!("Tool \"{name}\" saved. You can now call it with call_tool.")
                         }
                         Err(e) => format!("Failed to save tool: {e}"),
@@ -826,7 +856,7 @@ pub async fn run_loop(
 
                 let output = match registry.toolbox().delete_tool(name) {
                     Ok(()) => {
-                        emit(format!("🗑️ Removed tool \"{name}\""));
+                        emit(ProgressUpdate::ToolRemoved);
                         format!("Tool \"{name}\" has been removed.")
                     }
                     Err(e) => format!("Failed to remove tool: {e}"),
@@ -853,7 +883,7 @@ pub async fn run_loop(
                 })
                 .await;
                 if !history.is_empty() {
-                    emit("💭 Thinking...".to_string());
+                    emit(ProgressUpdate::Thinking);
                 }
                 let answer = format_answer(
                     task,
