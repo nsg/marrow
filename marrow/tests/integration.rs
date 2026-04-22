@@ -84,7 +84,10 @@ fn agent_parse_call_tool() {
 fn agent_parse_answer() {
     let input = r#"{"action": "answer", "text": "The answer is 42."}"#;
     match agent::parse_action(input) {
-        agent::Action::Answer { text } => assert_eq!(text, "The answer is 42."),
+        agent::Action::Answer { text, fallback } => {
+            assert_eq!(text, "The answer is 42.");
+            assert!(!fallback);
+        }
         other => panic!("expected Answer, got {other:?}"),
     }
 }
@@ -92,7 +95,10 @@ fn agent_parse_answer() {
 #[test]
 fn agent_parse_malformed_defaults_to_answer() {
     match agent::parse_action("I don't know") {
-        agent::Action::Answer { text } => assert_eq!(text, "I don't know"),
+        agent::Action::Answer { text, fallback } => {
+            assert_eq!(text, "I don't know");
+            assert!(fallback);
+        }
         other => panic!("expected Answer, got {other:?}"),
     }
 }

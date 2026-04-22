@@ -118,6 +118,7 @@ Rules:
 - When saving tools, prefer generic names and use PARAMS for inputs (e.g. PARAMS["LOCATION"] instead of hardcoded "Stockholm"). This makes tools reusable for different inputs.
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
 - The answer action text should be a natural language response, NOT a JSON action.
+- CRITICAL: Every response MUST be either a JSON action or a ```lua block. Plain text without an action will be treated as your final answer and sent to the user immediately. Do NOT output bare text as a thinking or planning step — if you are not ready to answer, use a JSON action or ```lua block.
 - If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling.
 
 {history}Your action:"#;
@@ -140,6 +141,11 @@ pub enum Action {
     },
     Answer {
         text: String,
+        /// True when the answer was inferred from unparseable text (no explicit
+        /// `{"action":"answer"}` was found).  The main loop uses this to nudge
+        /// the model back into the loop instead of accepting a half-finished
+        /// response.
+        fallback: bool,
     },
     UserMessage {
         text: String,
@@ -364,7 +370,10 @@ pub fn parse_action(response: &str) -> Action {
                 }
                 "answer" => {
                     if let Some(text) = raw.text {
-                        return Action::Answer { text };
+                        return Action::Answer {
+                            text,
+                            fallback: false,
+                        };
                     }
                 }
                 _ => {}
@@ -373,9 +382,45 @@ pub fn parse_action(response: &str) -> Action {
     }
 
     // If we can't parse an action, treat the whole response as an answer
+    // (marked as fallback so the main loop can challenge it)
     Action::Answer {
         text: trimmed.to_string(),
+        fallback: true,
     }
+}
+
+/// Heuristic: does this text look like the model was mid-thought rather than
+/// giving a complete answer?  Used to decide whether a fallback answer should
+/// be nudged back into the agent loop.
+fn looks_incomplete(text: &str) -> bool {
+    let trimmed = text.trim();
+
+    // Trailing punctuation that signals "I was about to list/continue"
+    if trimmed.ends_with(':') || trimmed.ends_with("...") || trimmed.ends_with('—') {
+        return true;
+    }
+
+    // Future-intent phrases — the model is narrating what it's *about* to do
+    let lower = trimmed.to_lowercase();
+    let intent_phrases = [
+        "i will ",
+        "i'll ",
+        "let me ",
+        "let's ",
+        "i'm going to ",
+        "i am going to ",
+        "checking ",
+        "i need to ",
+        "first, i",
+        "sure, i",
+    ];
+    for phrase in &intent_phrases {
+        if lower.contains(phrase) {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn format_action_short(action: &Action) -> String {
@@ -391,7 +436,13 @@ fn format_action_short(action: &Action) -> String {
         Action::RunCode { .. } => "Ran inline Lua".to_string(),
         Action::SaveTool { name, .. } => format!("Saved tool \"{name}\""),
         Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
-        Action::Answer { .. } => "Answered".to_string(),
+        Action::Answer { fallback, .. } => {
+            if *fallback {
+                "Answered (fallback — no action parsed)".to_string()
+            } else {
+                "Answered".to_string()
+            }
+        }
         Action::UserMessage { text } => format!("User: \"{text}\""),
     }
 }
@@ -546,6 +597,8 @@ pub async fn run_loop(
     let mut history: Vec<StepResult> = Vec::new();
     let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
     let mut last_successful_code: Option<String> = None; // tracked for save_tool action
+    let mut fallback_nudges: u32 = 0;
+    const MAX_FALLBACK_NUDGES: u32 = 2;
 
     for step in 1..=MAX_AGENT_STEPS {
         // Drain any user messages that arrived since the last step
@@ -616,13 +669,18 @@ pub async fn run_loop(
                 Action::RemoveTool { name } => {
                     eprintln!("[agent] step {step}: parsed remove_tool \"{name}\"");
                 }
-                Action::Answer { text } => {
+                Action::Answer { text, fallback } => {
                     let preview = if text.len() > 200 {
                         format!("{}...", &text[..200])
                     } else {
                         text.clone()
                     };
-                    eprintln!("[agent] step {step}: parsed answer — {preview}");
+                    let tag = if *fallback {
+                        "fallback answer"
+                    } else {
+                        "answer"
+                    };
+                    eprintln!("[agent] step {step}: parsed {tag} — {preview}");
                 }
                 Action::UserMessage { .. } => {}
             }
@@ -876,7 +934,36 @@ pub async fn run_loop(
 
             Action::UserMessage { .. } => unreachable!(),
 
-            Action::Answer { .. } => {
+            Action::Answer { text, fallback } => {
+                // If this is a fallback answer (no explicit action parsed) and
+                // the model was mid-work, it likely intended to continue.
+                // Nudge it back into the loop instead of accepting a
+                // half-finished response.
+                if *fallback
+                    && !history.is_empty()
+                    && fallback_nudges < MAX_FALLBACK_NUDGES
+                    && looks_incomplete(text)
+                {
+                    fallback_nudges += 1;
+                    if log.is_verbose() {
+                        eprintln!(
+                            "[agent] step {step}: fallback answer looks incomplete, nudging model (attempt {fallback_nudges}/{MAX_FALLBACK_NUDGES})"
+                        );
+                    }
+                    history.push(StepResult {
+                        step,
+                        action,
+                        output: "SYSTEM: Your response was plain text without a valid action. \
+                                 If you are not done, respond with your next action as a JSON \
+                                 object or a ```lua block. If you are done, use \
+                                 {\"action\": \"answer\", \"text\": \"...\"}."
+                            .to_string(),
+                        success: false,
+                        finding: None,
+                    });
+                    continue;
+                }
+
                 log.emit(Event::AgentAction {
                     task_id: task_id.to_string(),
                     step,
@@ -1034,8 +1121,9 @@ mod tests {
     fn parse_answer_action() {
         let input = r#"{"action": "answer", "text": "The answer is 42."}"#;
         match parse_action(input) {
-            Action::Answer { text } => {
+            Action::Answer { text, fallback } => {
                 assert_eq!(text, "The answer is 42.");
+                assert!(!fallback, "explicit answer should not be fallback");
             }
             other => panic!("expected Answer, got {other:?}"),
         }
@@ -1045,7 +1133,10 @@ mod tests {
     fn parse_with_surrounding_text() {
         let input = r#"Here is my action: {"action": "answer", "text": "done"} hope that helps"#;
         match parse_action(input) {
-            Action::Answer { text } => assert_eq!(text, "done"),
+            Action::Answer { text, fallback } => {
+                assert_eq!(text, "done");
+                assert!(!fallback, "explicit answer should not be fallback");
+            }
             other => panic!("expected Answer, got {other:?}"),
         }
     }
@@ -1054,7 +1145,10 @@ mod tests {
     fn parse_malformed_defaults_to_answer() {
         let input = "I don't know what to do";
         match parse_action(input) {
-            Action::Answer { text } => assert_eq!(text, "I don't know what to do"),
+            Action::Answer { text, fallback } => {
+                assert_eq!(text, "I don't know what to do");
+                assert!(fallback, "malformed input should be fallback");
+            }
             other => panic!("expected Answer, got {other:?}"),
         }
     }
@@ -1093,5 +1187,35 @@ mod tests {
     fn parse_empty_lua_block_falls_through() {
         let input = "```lua\n\n```\n{\"action\": \"answer\", \"text\": \"done\"}";
         assert!(matches!(parse_action(input), Action::Answer { .. }));
+    }
+
+    #[test]
+    fn looks_incomplete_trailing_colon() {
+        assert!(looks_incomplete("Sure, here are the results:"));
+    }
+
+    #[test]
+    fn looks_incomplete_trailing_ellipsis() {
+        assert!(looks_incomplete("Let me check that for you..."));
+    }
+
+    #[test]
+    fn looks_incomplete_trailing_dash() {
+        assert!(looks_incomplete("I'll verify each item —"));
+    }
+
+    #[test]
+    fn looks_incomplete_intent_phrase() {
+        assert!(looks_incomplete("Sure, I will check this for you"));
+        assert!(looks_incomplete("Let me fetch the latest data"));
+        assert!(looks_incomplete("I'll look into that now"));
+        assert!(looks_incomplete("I'm going to verify those results"));
+    }
+
+    #[test]
+    fn looks_incomplete_false_for_real_answers() {
+        assert!(!looks_incomplete("The weather in Tokyo is 22°C and sunny."));
+        assert!(!looks_incomplete("Here are your results: done."));
+        assert!(!looks_incomplete("No data found for that query."));
     }
 }
