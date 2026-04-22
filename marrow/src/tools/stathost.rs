@@ -5,15 +5,13 @@ use serde_json::json;
 use crate::tool::{ExecuteResult, ParamDef, Tool, ToolContext};
 use crate::toolbox::ToolMeta;
 
-const BASE_URL: &str = "https://static.nsg.cc";
-
 pub struct StathostTool;
 
 impl Tool for StathostTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "stathost".to_string(),
-            description: "Manage files on StatHost storage — list bucket contents, upload files, and delete files"
+            description: "Manage files on a StatHost-compatible storage service — list bucket contents, upload files, and delete files"
                 .to_string(),
             provides: vec!["stathost".to_string()],
             validated: true,
@@ -23,6 +21,7 @@ impl Tool for StathostTool {
     fn params(&self) -> Vec<ParamDef> {
         vec![
             ParamDef::required("ACTION"),
+            ParamDef::required("BASE_URL"),
             ParamDef::required("TOKEN"),
             ParamDef::required("BUCKET"),
             ParamDef::optional("LOCAL_FILE"),
@@ -48,6 +47,10 @@ impl Tool for StathostTool {
                     );
                 }
             };
+            let base_url = match params.get("BASE_URL") {
+                Some(url) if !url.is_empty() => sanitize_base_url(url),
+                _ => return Ok(json!({"error": "missing required parameter: BASE_URL"})),
+            };
             let token = match params.get("TOKEN") {
                 Some(t) if !t.is_empty() => t,
                 _ => return Ok(json!({"error": "missing required parameter: TOKEN"})),
@@ -58,7 +61,7 @@ impl Tool for StathostTool {
             };
 
             match action {
-                "list" => list_bucket(&ctx, token, bucket).await,
+                "list" => list_bucket(&ctx, base_url, token, bucket).await,
                 "upload" => {
                     let local_file = match params.get("LOCAL_FILE") {
                         Some(f) if !f.is_empty() => f.as_str(),
@@ -68,14 +71,14 @@ impl Tool for StathostTool {
                         Some(p) if !p.is_empty() => sanitize_remote_path(p),
                         _ => return Ok(json!({"error": "upload requires REMOTE_PATH parameter"})),
                     };
-                    upload_file(&ctx, token, bucket, local_file, remote_path).await
+                    upload_file(&ctx, base_url, token, bucket, local_file, remote_path).await
                 }
                 "delete" => {
                     let remote_path = match params.get("REMOTE_PATH") {
                         Some(p) if !p.is_empty() => sanitize_remote_path(p),
                         _ => return Ok(json!({"error": "delete requires REMOTE_PATH parameter"})),
                     };
-                    delete_file(&ctx, token, bucket, remote_path).await
+                    delete_file(&ctx, base_url, token, bucket, remote_path).await
                 }
                 other => Ok(
                     json!({"error": format!("unknown action: {other}. Use: list, upload, delete")}),
@@ -87,10 +90,11 @@ impl Tool for StathostTool {
 
 async fn list_bucket(
     ctx: &ToolContext,
+    base_url: &str,
     token: &str,
     bucket: &str,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/{}/_meta/list", BASE_URL, bucket);
+    let url = format!("{base_url}/{bucket}/_meta/list");
 
     let resp = match ctx.client.get(&url).bearer_auth(token).send().await {
         Ok(r) => r,
@@ -113,6 +117,7 @@ async fn list_bucket(
 
 async fn upload_file(
     ctx: &ToolContext,
+    base_url: &str,
     token: &str,
     bucket: &str,
     local_file: &str,
@@ -125,7 +130,7 @@ async fn upload_file(
         }
     };
 
-    let url = format!("{}/{}/{}", BASE_URL, bucket, remote_path);
+    let url = format!("{base_url}/{bucket}/{remote_path}");
 
     let resp = match ctx
         .client
@@ -155,11 +160,12 @@ async fn upload_file(
 
 async fn delete_file(
     ctx: &ToolContext,
+    base_url: &str,
     token: &str,
     bucket: &str,
     remote_path: &str,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/{}/{}", BASE_URL, bucket, remote_path);
+    let url = format!("{base_url}/{bucket}/{remote_path}");
 
     let resp = match ctx.client.delete(&url).bearer_auth(token).send().await {
         Ok(r) => r,
@@ -184,6 +190,43 @@ fn sanitize_bucket(bucket: &str) -> &str {
     bucket.trim_matches('/')
 }
 
+fn sanitize_base_url(base_url: &str) -> &str {
+    base_url.trim_end_matches('/')
+}
+
 fn sanitize_remote_path(remote_path: &str) -> &str {
     remote_path.trim_start_matches('/')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_base_url_removes_trailing_slashes() {
+        assert_eq!(
+            sanitize_base_url("https://example.com"),
+            "https://example.com"
+        );
+        assert_eq!(
+            sanitize_base_url("https://example.com/"),
+            "https://example.com"
+        );
+        assert_eq!(
+            sanitize_base_url("https://example.com///"),
+            "https://example.com"
+        );
+    }
+
+    #[test]
+    fn sanitize_bucket_removes_outer_slashes() {
+        assert_eq!(sanitize_bucket("bucket"), "bucket");
+        assert_eq!(sanitize_bucket("/bucket/"), "bucket");
+    }
+
+    #[test]
+    fn sanitize_remote_path_removes_leading_slashes() {
+        assert_eq!(sanitize_remote_path("path/file.txt"), "path/file.txt");
+        assert_eq!(sanitize_remote_path("/path/file.txt"), "path/file.txt");
+    }
 }
