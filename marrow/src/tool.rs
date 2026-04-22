@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use reqwest::Client;
 
+use crate::memory::MemoryStore;
 use crate::schedule::ScheduleStore;
 use crate::secrets::Secrets;
 use crate::toolbox::{ToolMeta, Toolbox};
@@ -50,6 +51,7 @@ pub struct ToolContext {
     pub secrets: Arc<Secrets>,
     pub task_description: String,
     pub schedule_store: Option<Arc<ScheduleStore>>,
+    pub memory_store: Option<Arc<MemoryStore>>,
     pub frontend_context: Option<FrontendContext>,
 }
 
@@ -212,6 +214,7 @@ pub async fn execute_builtin(
         secrets,
         task_description: task_description.to_string(),
         schedule_store: None,
+        memory_store: None,
         frontend_context: None,
     };
     let params = params.cloned().unwrap_or_default();
@@ -354,6 +357,7 @@ mod tests {
             secrets: Arc::new(Secrets::default()),
             task_description: "test".to_string(),
             schedule_store: None,
+            memory_store: None,
             frontend_context: None,
         };
         let mut params = HashMap::new();

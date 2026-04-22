@@ -175,10 +175,10 @@ pub fn build_agent_prompt(
     } else {
         let facts = memories
             .iter()
-            .map(|m| format!("- {}", m.fact))
+            .map(|m| format!("- [{}] {}", m.id, m.fact))
             .collect::<Vec<_>>()
             .join("\n");
-        format!("Known facts:\n{facts}\n\n")
+        format!("Known facts (use the ID in brackets to update or delete):\n{facts}\n\n")
     };
 
     let history_section = if history.is_empty() {
@@ -525,6 +525,7 @@ pub async fn run_loop(
     mut incoming: Option<&mut IncomingRx>,
     formatting_hint: Option<&str>,
     schedule_store: Option<Arc<crate::schedule::ScheduleStore>>,
+    memory_store: Option<Arc<crate::memory::MemoryStore>>,
     frontend_context: Option<FrontendContext>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let emit = |update: ProgressUpdate| {
@@ -538,6 +539,7 @@ pub async fn run_loop(
         secrets: Arc::new(secrets.cloned().unwrap_or_default()),
         task_description: task.to_string(),
         schedule_store,
+        memory_store,
         frontend_context,
     };
 

@@ -190,6 +190,7 @@ impl Runtime {
             incoming,
             formatting_hint,
             Some(self.schedule_store.clone()),
+            Some(self.memory_store.clone()),
             frontend_context,
         )
         .await?;

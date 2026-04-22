@@ -337,6 +337,7 @@ mod tests {
             secrets: Arc::new(Secrets::default()),
             task_description: "test".to_string(),
             schedule_store: None,
+            memory_store: None,
             frontend_context: None,
         };
         let tool = SlTransitTool;

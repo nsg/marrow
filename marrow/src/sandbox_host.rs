@@ -132,6 +132,7 @@ async fn run_tool_inner(
             secrets: Arc::new(secrets_obj),
             task_description: task_description.to_string(),
             schedule_store: None,
+            memory_store: None,
             frontend_context: None,
         };
         return tool.execute(resolved, ctx).await;
