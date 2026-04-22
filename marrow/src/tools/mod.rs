@@ -1,6 +1,7 @@
 mod caldav;
 mod http_fetch;
 mod memory_delete;
+mod memory_search;
 mod memory_update;
 mod rss;
 mod schedule;
@@ -22,4 +23,5 @@ pub fn register_all(registry: &mut ToolRegistry) {
     registry.register(schedule::RemoveScheduleTool);
     registry.register(memory_update::MemoryUpdateTool);
     registry.register(memory_delete::MemoryDeleteTool);
+    registry.register(memory_search::MemorySearchTool);
 }

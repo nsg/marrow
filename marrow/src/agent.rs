@@ -184,7 +184,9 @@ pub fn build_agent_prompt(
             .map(|m| format!("- [{}] {}", m.id, m.fact))
             .collect::<Vec<_>>()
             .join("\n");
-        format!("Known facts (use the ID in brackets to update or delete):\n{facts}\n\n")
+        format!(
+            "Working memory (bracketed UUID is the ID param for memory_update / memory_delete / memory_search):\n{facts}\n\n"
+        )
     };
 
     let history_section = if history.is_empty() {
