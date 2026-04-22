@@ -43,6 +43,13 @@ api_base = "https://ollama.com"
 # log = "events.jsonl"
 # verbose = false
 
+# --- Scheduler ---
+# Background heartbeat that runs scheduled tasks.
+# [scheduler]
+# schedules = "schedules"    # path to schedules directory
+# enabled = true              # enable/disable the heartbeat loop
+# tick_seconds = 60           # how often to check for due schedules (seconds)
+
 # --- Local Ollama (omit api_base to use localhost:11434) ---
 # [roles.default]
 # provider = "ollama"

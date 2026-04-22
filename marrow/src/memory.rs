@@ -30,7 +30,7 @@ impl Memory {
     }
 }
 
-fn now_iso() -> String {
+pub fn now_iso() -> String {
     let dur = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap();

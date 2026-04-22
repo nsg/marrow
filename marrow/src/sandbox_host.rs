@@ -131,6 +131,8 @@ async fn run_tool_inner(
             client: Arc::new(client.clone()),
             secrets: Arc::new(secrets_obj),
             task_description: task_description.to_string(),
+            schedule_store: None,
+            frontend_context: None,
         };
         return tool.execute(resolved, ctx).await;
     }

@@ -61,6 +61,22 @@ pub enum Event {
         success: bool,
         output: String,
     },
+    ScheduleCreated {
+        schedule_id: String,
+        description: String,
+        repeat: String,
+    },
+    ScheduleDeleted {
+        schedule_id: String,
+    },
+    ScheduleTriggered {
+        schedule_id: String,
+        description: String,
+    },
+    ScheduleCompleted {
+        schedule_id: String,
+        status: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -208,6 +224,33 @@ impl EventLog {
             }
             Event::JanitorRegenerate { tool, attempt } if self.verbose => {
                 eprintln!("[janitor] regenerating '{tool}' (attempt {attempt})");
+            }
+            // Schedule events — always shown
+            Event::ScheduleTriggered { description, .. } => {
+                eprintln!("[heartbeat] triggered: \"{description}\"");
+            }
+            Event::ScheduleCompleted {
+                schedule_id,
+                status,
+            } if status == "failed" => {
+                eprintln!("[heartbeat] schedule {schedule_id} failed");
+            }
+            // Schedule events — verbose only
+            Event::ScheduleCreated {
+                description,
+                repeat,
+                ..
+            } if self.verbose => {
+                eprintln!("[heartbeat] created schedule: \"{description}\" ({repeat})");
+            }
+            Event::ScheduleDeleted { schedule_id } if self.verbose => {
+                eprintln!("[heartbeat] deleted schedule {schedule_id}");
+            }
+            Event::ScheduleCompleted {
+                schedule_id,
+                status,
+            } if self.verbose => {
+                eprintln!("[heartbeat] schedule {schedule_id}: {status}");
             }
             _ => {}
         }

@@ -26,11 +26,37 @@ pub struct DiscordConfig {
     pub verbose: bool,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct SchedulerConfig {
+    #[serde(default)]
+    pub schedules: Option<String>,
+    #[serde(default = "default_scheduler_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub tick_seconds: Option<u64>,
+}
+
+fn default_scheduler_enabled() -> bool {
+    true
+}
+
+impl SchedulerConfig {
+    pub fn schedules_path(&self) -> &str {
+        self.schedules.as_deref().unwrap_or("schedules")
+    }
+
+    pub fn tick(&self) -> u64 {
+        self.tick_seconds.unwrap_or(60)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RouterConfig {
     pub roles: HashMap<String, RoleConfig>,
     #[serde(default)]
     pub discord: Option<DiscordConfig>,
+    #[serde(default)]
+    pub scheduler: Option<SchedulerConfig>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -336,6 +336,8 @@ mod tests {
             client: Arc::new(reqwest::Client::new()),
             secrets: Arc::new(Secrets::default()),
             task_description: "test".to_string(),
+            schedule_store: None,
+            frontend_context: None,
         };
         let tool = SlTransitTool;
 

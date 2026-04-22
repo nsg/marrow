@@ -1,11 +1,14 @@
 use clap::Parser;
+use marrow::heartbeat;
 use marrow::memory::MemoryStore;
 use marrow::router::RouterConfig;
 use marrow::runtime::{Runtime, RuntimeOptions};
+use marrow::schedule::ScheduleStore;
 use marrow::session::{ChatSession, Message};
 use marrow::tool::ToolRegistry;
 use marrow::toolbox::Toolbox;
 use std::io::{self, Write};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 #[derive(Parser)]
@@ -48,6 +51,22 @@ struct Cli {
     /// List all stored memories and exit
     #[arg(long)]
     list_memories: bool,
+
+    /// List all schedules and exit
+    #[arg(long)]
+    list_schedules: bool,
+
+    /// Run a single heartbeat pass (execute due schedules) and exit
+    #[arg(long)]
+    run_schedules: bool,
+
+    /// Run as a long-lived daemon with the heartbeat scheduler active
+    #[arg(long)]
+    daemon: bool,
+
+    /// Path to the schedules directory
+    #[arg(long, default_value = "schedules")]
+    schedules: String,
 }
 
 #[tokio::main]
@@ -88,7 +107,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Ok(());
     }
 
+    if cli.list_schedules {
+        let store = ScheduleStore::new(&cli.schedules);
+        match store.list() {
+            Ok(schedules) if schedules.is_empty() => println!("(no schedules)"),
+            Ok(schedules) => {
+                for s in &schedules {
+                    let status = if s.enabled { "enabled" } else { "disabled" };
+                    let last = s.last_run.as_deref().unwrap_or("never");
+                    println!(
+                        "{} [{}] {} — {} (last run: {})",
+                        s.id,
+                        status,
+                        s.repeat.display(),
+                        s.description,
+                        last
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     let config = RouterConfig::from_file(&cli.config)?;
+    let spawn_janitor = cli.daemon;
     let runtime = Runtime::from_config(
         &config,
         RuntimeOptions {
@@ -97,11 +143,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             log_path: cli.log.clone(),
             verbose: cli.verbose,
             secrets_path: "secrets.toml".to_string(),
-            spawn_janitor: false,
+            spawn_janitor,
+            schedule_path: cli.schedules.clone(),
         },
     )
     .await?;
     let verbose = cli.verbose;
+
+    if cli.run_schedules {
+        eprintln!("[marrow] running heartbeat pass...");
+        let (tx, _rx) = mpsc::unbounded_channel::<heartbeat::ScheduleResult>();
+        let count =
+            heartbeat::run_once(&runtime, runtime.schedule_store(), runtime.log(), &tx).await;
+        eprintln!("[marrow] heartbeat done — {count} schedule(s) executed");
+        if verbose {
+            runtime.metrics().display();
+        }
+        return Ok(());
+    }
+
+    if cli.daemon {
+        eprintln!("[marrow] starting daemon mode...");
+        let runtime = Arc::new(runtime);
+        let hb_runtime = runtime.clone();
+        let hb_store = runtime.schedule_store().clone();
+        let hb_log = runtime.log().clone();
+        let tick = config.scheduler.as_ref().map(|s| s.tick()).unwrap_or(60);
+
+        let (schedule_tx, mut schedule_rx) = mpsc::unbounded_channel::<heartbeat::ScheduleResult>();
+
+        // Result receiver — prints to stdout
+        tokio::spawn(async move {
+            while let Some(result) = schedule_rx.recv().await {
+                let status = if result.success { "ok" } else { "err" };
+                println!(
+                    "[schedule:{status}] {} — {}",
+                    result.description, result.answer
+                );
+            }
+        });
+
+        // Heartbeat loop
+        tokio::spawn(async move {
+            heartbeat::run(hb_runtime, hb_store, hb_log, schedule_tx, tick).await;
+        });
+
+        eprintln!("[marrow] heartbeat active (tick: {tick}s). Press Ctrl+C to stop.");
+        tokio::signal::ctrl_c().await?;
+        eprintln!("[marrow] shutting down.");
+        if verbose {
+            runtime.metrics().display();
+        }
+        return Ok(());
+    }
 
     if cli.janitor {
         eprintln!("[marrow] running janitor pass...");
@@ -121,7 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
 
         match runtime
-            .run_task(&prompt, "cli", &[], Some(&progress_tx), None, None)
+            .run_task(&prompt, "cli", &[], Some(&progress_tx), None, None, None)
             .await
         {
             Ok(output) => {
@@ -171,7 +265,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             let conversation = session.build_messages(None);
             match runtime
-                .run_task(input, "cli", &conversation, Some(&progress_tx), None, None)
+                .run_task(
+                    input,
+                    "cli",
+                    &conversation,
+                    Some(&progress_tx),
+                    None,
+                    None,
+                    None,
+                )
                 .await
             {
                 Ok(text) => {

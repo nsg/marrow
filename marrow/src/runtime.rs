@@ -14,9 +14,10 @@ use crate::memory_writer;
 use crate::metrics::Metrics;
 use crate::model::ModelBackend;
 use crate::router::{ModelRouter, RouterConfig};
+use crate::schedule::ScheduleStore;
 use crate::secrets::Secrets;
 use crate::session::Message;
-use crate::tool::ToolRegistry;
+use crate::tool::{FrontendContext, ToolRegistry};
 use crate::toolbox::Toolbox;
 
 pub struct RuntimeOptions {
@@ -26,12 +27,14 @@ pub struct RuntimeOptions {
     pub verbose: bool,
     pub secrets_path: String,
     pub spawn_janitor: bool,
+    pub schedule_path: String,
 }
 
 pub struct Runtime {
     router: Arc<ModelRouter>,
     registry: Arc<ToolRegistry>,
     memory_store: Arc<MemoryStore>,
+    schedule_store: Arc<ScheduleStore>,
     client: Arc<Client>,
     log: Arc<EventLog>,
     secrets: Arc<Secrets>,
@@ -68,6 +71,7 @@ impl Runtime {
         crate::tools::register_all(&mut registry);
         let registry = Arc::new(registry);
         let memory_store = Arc::new(MemoryStore::new(&options.memory_path));
+        let schedule_store = Arc::new(ScheduleStore::new(&options.schedule_path));
         let log =
             Arc::new(EventLog::new(Some(PathBuf::from(&options.log_path)), options.verbose).await?);
         let secrets = Arc::new(Secrets::load_or_empty(&options.secrets_path));
@@ -94,6 +98,7 @@ impl Runtime {
             router,
             registry,
             memory_store,
+            schedule_store,
             client,
             log,
             secrets,
@@ -109,6 +114,14 @@ impl Runtime {
 
     pub fn metrics(&self) -> &Metrics {
         self.metrics.as_ref()
+    }
+
+    pub fn schedule_store(&self) -> &Arc<ScheduleStore> {
+        &self.schedule_store
+    }
+
+    pub fn log(&self) -> &Arc<EventLog> {
+        &self.log
     }
 
     /// Run a single janitor pass: review unvalidated tools and clean up the toolbox.
@@ -127,6 +140,7 @@ impl Runtime {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_task(
         &self,
         description: &str,
@@ -135,6 +149,7 @@ impl Runtime {
         progress: Option<&ProgressTx>,
         incoming: Option<&mut IncomingRx>,
         formatting_hint: Option<&str>,
+        frontend_context: Option<FrontendContext>,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let task_id = uuid::Uuid::new_v4().to_string();
 
@@ -174,6 +189,8 @@ impl Runtime {
             conversation,
             incoming,
             formatting_hint,
+            Some(self.schedule_store.clone()),
+            frontend_context,
         )
         .await?;
 

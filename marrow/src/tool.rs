@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use reqwest::Client;
 
+use crate::schedule::ScheduleStore;
 use crate::secrets::Secrets;
 use crate::toolbox::{ToolMeta, Toolbox};
 
@@ -37,11 +38,19 @@ impl ParamDef {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FrontendContext {
+    pub frontend: String,
+    pub channel_id: Option<u64>,
+}
+
 #[derive(Clone)]
 pub struct ToolContext {
     pub client: Arc<Client>,
     pub secrets: Arc<Secrets>,
     pub task_description: String,
+    pub schedule_store: Option<Arc<ScheduleStore>>,
+    pub frontend_context: Option<FrontendContext>,
 }
 
 pub trait Tool: Send + Sync {
@@ -202,6 +211,8 @@ pub async fn execute_builtin(
         client,
         secrets,
         task_description: task_description.to_string(),
+        schedule_store: None,
+        frontend_context: None,
     };
     let params = params.cloned().unwrap_or_default();
     tool.execute(params, ctx).await
@@ -342,6 +353,8 @@ mod tests {
             client: Arc::new(Client::new()),
             secrets: Arc::new(Secrets::default()),
             task_description: "test".to_string(),
+            schedule_store: None,
+            frontend_context: None,
         };
         let mut params = HashMap::new();
         params.insert("input".to_string(), "hello".to_string());

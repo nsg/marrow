@@ -12,9 +12,11 @@ use serenity::prelude::*;
 use tokio::sync::{RwLock, mpsc};
 
 use marrow::agent::IncomingRx;
+use marrow::heartbeat;
 use marrow::router::RouterConfig;
 use marrow::runtime::{Runtime, RuntimeOptions};
 use marrow::session::{ChatSession, Message};
+use marrow::tool::FrontendContext;
 
 // ---------------------------------------------------------------------------
 // Shared state stored in serenity's TypeMap
@@ -172,6 +174,7 @@ impl EventHandler for Handler {
             &progress_tx,
             &conversation,
             &mut incoming_rx,
+            msg.channel_id.get(),
         )
         .await
         {
@@ -229,6 +232,7 @@ async fn run_task(
     progress: &mpsc::UnboundedSender<String>,
     conversation: &[Message],
     incoming: &mut IncomingRx,
+    channel_id: u64,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     runtime
         .run_task(
@@ -238,6 +242,10 @@ async fn run_task(
             Some(progress),
             Some(incoming),
             Some(DISCORD_FORMATTING_HINT),
+            Some(FrontendContext {
+                frontend: "discord".to_string(),
+                channel_id: Some(channel_id),
+            }),
         )
         .await
 }
@@ -335,6 +343,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .unwrap_or_else(|| "events.jsonl".to_string())
     });
     let verbose = cli.verbose || discord.verbose;
+    let scheduler_config = config.scheduler.as_ref();
+    let schedule_path = scheduler_config
+        .map(|s| s.schedules_path().to_string())
+        .unwrap_or_else(|| "schedules".to_string());
+    let tick_seconds = scheduler_config.map(|s| s.tick()).unwrap_or(60);
+    let scheduler_enabled = scheduler_config.is_none_or(|s| s.enabled);
+
     let runtime = Arc::new(
         Runtime::from_config(
             &config,
@@ -345,6 +360,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 verbose,
                 secrets_path: "secrets.toml".to_string(),
                 spawn_janitor: true,
+                schedule_path,
             },
         )
         .await?,
@@ -360,6 +376,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .await?;
 
     let channels = Arc::new(discord.channels.clone());
+
+    // Spawn heartbeat scheduler (delivers results to Discord channels)
+    if scheduler_enabled {
+        let hb_runtime = runtime.clone();
+        let hb_store = runtime.schedule_store().clone();
+        let hb_log = runtime.log().clone();
+        let http_for_schedule = discord_client.http.clone();
+        let (schedule_tx, mut schedule_rx) = mpsc::unbounded_channel::<heartbeat::ScheduleResult>();
+
+        // Result receiver — posts scheduled task answers to Discord
+        tokio::spawn(async move {
+            while let Some(result) = schedule_rx.recv().await {
+                if let Some(cid) = result.channel_id {
+                    let channel = ChannelId::new(cid);
+                    for chunk in split_message(&result.answer, 2000) {
+                        let _ = channel.say(&http_for_schedule, chunk).await;
+                    }
+                }
+            }
+        });
+
+        // Heartbeat loop
+        tokio::spawn(async move {
+            heartbeat::run(hb_runtime, hb_store, hb_log, schedule_tx, tick_seconds).await;
+        });
+    }
 
     // Store shared state
     {

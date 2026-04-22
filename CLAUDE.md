@@ -49,9 +49,13 @@ intelligence index, and tool calling benchmarks.
 - Structured JSONL event logging with `--verbose` progressive detail
 - Ollama and OpenAI-compatible backends
 - Discord gateway (serenity) — responds to @mentions, DMs, and configured channels
+- **Heartbeat scheduler** — background loop (60s tick) that fires agent tasks on a schedule.
+  Agent-managed via built-in tools (`schedule_task`, `list_schedules`, `remove_schedule`).
+  Supports daily, every-N-hours, weekly, and one-shot schedules with timezone offsets.
+  Schedules stored as JSON files in `schedules/` (same pattern as memory).
+  CLI: `--list-schedules`, `--run-schedules`, `--daemon`. Discord: auto-posts results to channels.
 
 ### What's not built yet
-- **Background/scheduled tasks** — no scheduler, triggers, or cron. Currently prompt-driven only
 - **Long-term memory** — vector-backed store for deeper patterns. Ollama Cloud doesn't
   support embeddings yet, so deferred. Working memory covers short-term facts
 

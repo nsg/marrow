@@ -10,7 +10,7 @@ use crate::memory::Memory;
 use crate::model::ModelBackend;
 use crate::secrets::Secrets;
 use crate::session::Message;
-use crate::tool::{ToolContext, ToolRegistry};
+use crate::tool::{FrontendContext, ToolContext, ToolRegistry};
 
 /// Sender for progress updates from the agent loop.
 /// Each message is a human-readable status string.
@@ -489,6 +489,8 @@ pub async fn run_loop(
     conversation: &[Message],
     mut incoming: Option<&mut IncomingRx>,
     formatting_hint: Option<&str>,
+    schedule_store: Option<Arc<crate::schedule::ScheduleStore>>,
+    frontend_context: Option<FrontendContext>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let emit = |msg: String| {
         if let Some(tx) = progress {
@@ -500,6 +502,8 @@ pub async fn run_loop(
         client: client.clone(),
         secrets: Arc::new(secrets.cloned().unwrap_or_default()),
         task_description: task.to_string(),
+        schedule_store,
+        frontend_context,
     };
 
     let mut history: Vec<StepResult> = Vec::new();
