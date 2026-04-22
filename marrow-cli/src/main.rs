@@ -64,6 +64,10 @@ struct Cli {
     #[arg(long)]
     daemon: bool,
 
+    /// Check for updates and apply if available
+    #[arg(long)]
+    update: bool,
+
     /// Path to the schedules directory
     #[arg(long, default_value = "schedules")]
     schedules: String,
@@ -131,6 +135,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
         return Ok(());
+    }
+
+    if cli.update {
+        match marrow::update::check_and_update().await {
+            Ok(true) => {
+                eprintln!("[marrow] restart to use the new version");
+                return Ok(());
+            }
+            Ok(false) => return Ok(()),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 
     let config = RouterConfig::from_file(&cli.config)?;

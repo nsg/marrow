@@ -13,6 +13,8 @@ quick-xml = "0.37"
 tokio = { version = "1.50.0", features = ["full"] }
 toml = "1.1.0"
 uuid = { version = "1.23.0", features = ["v4", "serde"] }
+flate2 = "1.1.9"
+tar = "0.4.45"
 
 [dev-dependencies]
 tempfile = "3.27.0"

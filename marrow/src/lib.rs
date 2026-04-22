@@ -19,4 +19,5 @@ pub mod session;
 pub mod tool;
 pub mod toolbox;
 pub mod tools;
+pub mod update;
 pub mod xml;
