@@ -192,6 +192,7 @@ impl Runtime {
             Some(self.schedule_store.clone()),
             Some(self.memory_store.clone()),
             frontend_context,
+            frontend,
         )
         .await?;
 

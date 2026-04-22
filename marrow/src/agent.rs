@@ -61,7 +61,7 @@ const AGENT_PROMPT_TEMPLATE: &str = r#"You are an agent that completes tasks ste
 Available tools:
 {tools}
 
-{memories}{conversation}Current date/time: {datetime}
+{memories}{conversation}{execution_context}Current date/time: {datetime}
 Task: {task}
 
 CRITICAL: You have NO shell access. No curl, no bash, no command line. You can ONLY interact through the actions below.
@@ -169,6 +169,7 @@ pub fn build_agent_prompt(
     history: &[StepResult],
     secret_descriptions: &[(&str, &str)],
     conversation: &[Message],
+    frontend: &str,
 ) -> String {
     let tools_section = if tools_section.is_empty() {
         "(none available — create one if needed)"
@@ -285,6 +286,30 @@ pub fn build_agent_prompt(
         format!("Conversation so far:\n{lines}\n\n")
     };
 
+    let execution_context = match frontend {
+        "scheduler" => concat!(
+            "Execution context: This is a SCHEDULED run (no human in the loop).\n",
+            "- There is no conversation history — you are starting fresh.\n",
+            "- You cannot ask follow-up questions — no one will see them until the run is complete.\n",
+            "- Your answer will be delivered to the frontend that created this schedule.\n",
+            "- Save any important findings to working memory so future runs can build on them.\n\n",
+        )
+        .to_string(),
+        "cli" => concat!(
+            "Execution context: CLI run.\n",
+            "- The user may be a human or an automated agent.\n",
+            "- Your answer goes to stdout.\n\n",
+        )
+        .to_string(),
+        "discord" => concat!(
+            "Execution context: Discord conversation.\n",
+            "- The user is a human chatting via Discord.\n",
+            "- You can expect follow-up messages in the conversation history.\n\n",
+        )
+        .to_string(),
+        other => format!("Execution context: {other}\n\n"),
+    };
+
     let datetime = chrono::Local::now()
         .format("%Y-%m-%d %H:%M (%A)")
         .to_string();
@@ -296,6 +321,7 @@ pub fn build_agent_prompt(
             &format!("{memories_section}{secrets_section}"),
         )
         .replace("{conversation}", &conversation_section)
+        .replace("{execution_context}", &execution_context)
         .replace("{datetime}", &datetime)
         .replace("{task}", task)
         .replace("{history}", &history_section)
@@ -580,6 +606,7 @@ pub async fn run_loop(
     schedule_store: Option<Arc<crate::schedule::ScheduleStore>>,
     memory_store: Option<Arc<crate::memory::MemoryStore>>,
     frontend_context: Option<FrontendContext>,
+    frontend: &str,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let emit = |update: ProgressUpdate| {
         if let Some(tx) = progress {
@@ -634,6 +661,7 @@ pub async fn run_loop(
             &history,
             &secret_descs,
             conversation,
+            frontend,
         );
         let response = backend.complete(prompt).await?;
 

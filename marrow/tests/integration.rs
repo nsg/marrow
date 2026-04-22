@@ -156,6 +156,7 @@ async fn agent_loop_call_tool_then_answer() {
         None,
         None,
         None,
+        "test",
     )
     .await
     .unwrap();
@@ -204,6 +205,7 @@ async fn agent_loop_save_tool_then_call_then_answer() {
         None,
         None,
         None,
+        "test",
     )
     .await
     .unwrap();
@@ -242,6 +244,7 @@ async fn agent_loop_direct_answer() {
         None,
         None,
         None,
+        "test",
     )
     .await
     .unwrap();
@@ -285,6 +288,7 @@ async fn agent_loop_tool_failure_recovery() {
         None,
         None,
         None,
+        "test",
     )
     .await
     .unwrap();
