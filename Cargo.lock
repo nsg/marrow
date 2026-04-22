@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "marrow"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "mlua",
@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "marrow",
@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-discord"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "marrow",
