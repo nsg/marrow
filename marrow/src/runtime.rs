@@ -203,38 +203,51 @@ impl Runtime {
             })
             .await;
 
-        match memory_writer::process_interaction(
-            description,
-            &answer,
-            self.memory_store.as_ref(),
-            fast_backend,
-        )
-        .await
-        {
-            Ok(result) => {
-                if !result.saved.is_empty() {
-                    if let Some(tx) = progress {
-                        let _ = tx.send(ProgressUpdate::MemoryNew);
-                    }
-                    for fact in &result.saved {
-                        eprintln!("[marrow] remembered: {fact}");
-                    }
-                }
+        // Run memory writer in the background — don't block the user response.
+        let mem_store = self.memory_store.clone();
+        let mem_router = self.router.clone();
+        let mem_description = description.to_string();
+        let mem_answer = answer.clone();
+        let mem_progress = progress.cloned();
+        tokio::spawn(async move {
+            let fast = mem_router
+                .backend("fast")
+                .or_else(|_| mem_router.backend("default"));
+            let Ok(fast) = fast else { return };
 
-                if !result.updated.is_empty()
-                    && let Some(tx) = progress
-                {
-                    let _ = tx.send(ProgressUpdate::MemoryUpdated);
-                }
+            match memory_writer::process_interaction(
+                &mem_description,
+                &mem_answer,
+                mem_store.as_ref(),
+                fast,
+            )
+            .await
+            {
+                Ok(result) => {
+                    if !result.saved.is_empty() {
+                        if let Some(ref tx) = mem_progress {
+                            let _ = tx.send(ProgressUpdate::MemoryNew);
+                        }
+                        for fact in &result.saved {
+                            eprintln!("[marrow] remembered: {fact}");
+                        }
+                    }
 
-                if result.deleted > 0
-                    && let Some(tx) = progress
-                {
-                    let _ = tx.send(ProgressUpdate::MemoryCleared);
+                    if !result.updated.is_empty()
+                        && let Some(ref tx) = mem_progress
+                    {
+                        let _ = tx.send(ProgressUpdate::MemoryUpdated);
+                    }
+
+                    if result.deleted > 0
+                        && let Some(ref tx) = mem_progress
+                    {
+                        let _ = tx.send(ProgressUpdate::MemoryCleared);
+                    }
                 }
+                Err(e) => eprintln!("[marrow] memory writer error: {e}"),
             }
-            Err(e) => eprintln!("[marrow] memory writer error: {e}"),
-        }
+        });
 
         Ok(answer)
     }
