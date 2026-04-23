@@ -706,6 +706,11 @@ pub async fn run_once(
         Err(e) => eprintln!("[janitor] memory cleanup error: {e}"),
     }
 
+    match crate::memory_documents::generate_documents(store, backend, log).await {
+        Ok(_) => {}
+        Err(e) => eprintln!("[janitor] document generation error: {e}"),
+    }
+
     Ok(processed)
 }
 
@@ -719,6 +724,7 @@ pub async fn run(
     let mut idle_cycles: u32 = 0;
     let mut cleanup_backed_off = false;
     let mut memory_cleanup_backed_off = false;
+    let mut documents_backed_off = false;
 
     loop {
         let unvalidated = match toolbox.list_unvalidated() {
@@ -750,6 +756,14 @@ pub async fn run(
                 }
             }
 
+            // Generate/update living documents (~100s after idle)
+            if !documents_backed_off && idle_cycles == 20 {
+                match crate::memory_documents::generate_documents(store, backend, log).await {
+                    Ok(_) => documents_backed_off = true,
+                    Err(e) => eprintln!("[janitor] document generation error: {e}"),
+                }
+            }
+
             sleep(Duration::from_secs(5)).await;
             continue;
         }
@@ -757,6 +771,7 @@ pub async fn run(
         idle_cycles = 0;
         cleanup_backed_off = false;
         memory_cleanup_backed_off = false;
+        documents_backed_off = false;
         for tool in &unvalidated {
             if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log, builtins).await {
                 eprintln!("[janitor] error processing '{}': {e}", tool.name);

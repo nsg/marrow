@@ -9,6 +9,7 @@ use crate::agent::{IncomingRx, ProgressTx, ProgressUpdate};
 use crate::events::{Event, EventLog};
 use crate::janitor;
 use crate::memory::{Memory, MemoryStore};
+use crate::memory_documents;
 use crate::memory_provider;
 use crate::memory_writer;
 use crate::metrics::Metrics;
@@ -176,6 +177,7 @@ impl Runtime {
             .or_else(|_| self.router.backend("fast"))?;
         let memories =
             load_relevant_memories(description, self.memory_store.as_ref(), fast_backend).await;
+        let documents = memory_documents::list_documents(self.memory_store.dir());
 
         let answer = agent::run_loop(
             description,
@@ -186,6 +188,7 @@ impl Runtime {
             self.registry.as_ref(),
             self.client.clone(),
             &memories,
+            &documents,
             self.log.as_ref(),
             Some(self.secrets.as_ref()),
             progress,

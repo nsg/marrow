@@ -55,6 +55,10 @@ pub enum Event {
         updated: u32,
         deleted: u32,
     },
+    DocumentsUpdated {
+        documents: u32,
+        promoted: u32,
+    },
     AgentAction {
         task_id: String,
         step: u32,
@@ -197,6 +201,12 @@ impl EventLog {
             }
             Event::MemoryCleanupResult { updated, deleted } => {
                 eprintln!("[janitor] memory cleanup: {updated} updated, {deleted} deleted");
+            }
+            Event::DocumentsUpdated {
+                documents,
+                promoted,
+            } => {
+                eprintln!("[janitor] updated {documents} document(s), promoted {promoted} fact(s)");
             }
             // Verbose only
             Event::TaskCreated {

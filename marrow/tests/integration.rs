@@ -146,6 +146,7 @@ async fn agent_loop_call_tool_then_answer() {
         &registry,
         client,
         &[],
+        &[],
         &log,
         None,
         None,
@@ -195,6 +196,7 @@ async fn agent_loop_save_tool_then_call_then_answer() {
         &registry,
         client,
         &[],
+        &[],
         &log,
         None,
         None,
@@ -233,6 +235,7 @@ async fn agent_loop_direct_answer() {
         &fast_backend,
         &registry,
         client,
+        &[],
         &[],
         &log,
         None,
@@ -276,6 +279,7 @@ async fn agent_loop_tool_failure_recovery() {
         &fast_backend,
         &registry,
         client,
+        &[],
         &[],
         &log,
         None,
@@ -717,6 +721,37 @@ async fn janitor_cleanup_memories_resolves_conflict() {
     let remaining = store.list().unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, new_id);
+}
+
+#[tokio::test]
+async fn janitor_generate_documents_promotes_facts() {
+    let dir = temp_dir("marrow_docs");
+    let store = MemoryStore::new(dir.path());
+    let log = noop_log().await;
+
+    let fact = Memory::new("User name is Alice", MemorySource::Auto);
+    let fact_id = fact.id;
+    store.save(&fact).unwrap();
+
+    let response = format!(
+        "```document:profile.md\n# Profile\n- Name: Alice\n```\n```json\n{{\"promoted\": [\"{fact_id}\"]}}\n```"
+    );
+    let backend = MockBackend::new(vec![&response]);
+
+    let (docs_updated, facts_promoted) =
+        marrow::memory_documents::generate_documents(&store, &backend, &log)
+            .await
+            .unwrap();
+    assert_eq!(docs_updated, 1);
+    assert_eq!(facts_promoted, 1);
+
+    // Verify document was written
+    let doc = std::fs::read_to_string(dir.path().join("profile.md")).unwrap();
+    assert!(doc.contains("Alice"));
+
+    // Verify fact was deleted
+    let remaining = store.list().unwrap();
+    assert!(remaining.is_empty());
 }
 
 // ---------------------------------------------------------------------------
