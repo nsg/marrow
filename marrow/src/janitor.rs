@@ -1,10 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::time::Duration;
 
 use tokio::time::sleep;
 
 use crate::events::{Event, EventLog};
+use crate::memory::{Memory, MemoryStore};
 use crate::model::ModelBackend;
 use crate::toolbox::{ToolMeta, Toolbox};
 
@@ -224,7 +225,7 @@ fn parse_codegen_response(
     ))
 }
 
-fn extract_block(response: &str, tag: &str) -> Option<String> {
+pub(crate) fn extract_block(response: &str, tag: &str) -> Option<String> {
     let start_marker = format!("```{tag}");
     let start = response.find(&start_marker)?;
     let content_start = start + start_marker.len();
@@ -471,7 +472,7 @@ pub async fn cleanup_toolbox(
     Ok(changed)
 }
 
-fn extract_json_block(response: &str) -> String {
+pub(crate) fn extract_json_block(response: &str) -> String {
     // Try ```json block first
     if let Some(start) = response.find("```json") {
         let rest = &response[start + 7..];
@@ -488,6 +489,194 @@ fn extract_json_block(response: &str) -> String {
     "{}".to_string()
 }
 
+// ---------------------------------------------------------------------------
+// Memory conflict resolution
+// ---------------------------------------------------------------------------
+
+const STOP_WORDS: &[&str] = &[
+    "user", "is", "has", "the", "a", "an", "in", "on", "at", "to", "for", "of", "with", "by",
+    "from", "as", "or", "and", "not", "no", "that", "this", "its", "it", "was", "are", "be",
+    "been", "being", "have", "had", "do", "does", "did", "will", "would", "could", "should", "may",
+    "might", "can", "shall", "their", "they", "them", "we", "our", "you", "your", "my", "his",
+    "her", "he", "she", "but", "if", "then", "than", "so", "such", "very", "too", "also", "just",
+    "about", "more", "some", "any", "all", "each", "every", "both", "few", "most", "other", "into",
+    "over", "after", "before", "between", "under", "again", "there", "here", "when", "where",
+    "how", "what", "which", "who", "whom", "why", "own", "same", "only", "use", "uses", "used",
+    "using", "like", "set", "get", "one", "two",
+];
+
+fn extract_significant_words(text: &str) -> HashSet<String> {
+    let stop: HashSet<&str> = STOP_WORDS.iter().copied().collect();
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 3 && !stop.contains(w))
+        .map(String::from)
+        .collect()
+}
+
+fn cluster_memories(memories: &[Memory]) -> Vec<Vec<&Memory>> {
+    if memories.is_empty() {
+        return vec![];
+    }
+
+    // Build word -> memory indices map
+    let mut word_map: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, mem) in memories.iter().enumerate() {
+        for word in extract_significant_words(&mem.fact) {
+            word_map.entry(word).or_default().push(i);
+        }
+    }
+
+    // Union-find
+    let n = memories.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+
+    fn union(parent: &mut [usize], a: usize, b: usize) {
+        let ra = find(parent, a);
+        let rb = find(parent, b);
+        if ra != rb {
+            parent[rb] = ra;
+        }
+    }
+
+    // Merge indices that share words
+    for indices in word_map.values() {
+        for window in indices.windows(2) {
+            union(&mut parent, window[0], window[1]);
+        }
+    }
+
+    // Collect clusters
+    let mut clusters: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..n {
+        let root = find(&mut parent, i);
+        clusters.entry(root).or_default().push(i);
+    }
+
+    // Return only clusters with 2+ members
+    clusters
+        .into_values()
+        .filter(|c| c.len() >= 2)
+        .map(|c| c.into_iter().map(|i| &memories[i]).collect())
+        .collect()
+}
+
+const MEMORY_CLEANUP_PROMPT: &str = r#"You are a memory janitor. Review the following cluster of related memory facts.
+These facts may contain duplicates, contradictions, or outdated information.
+
+Facts:
+{facts}
+
+Decide what to do with each fact:
+- **keep**: fact is accurate and not redundant — keep as-is
+- **update**: fact is partially correct but needs rewording (e.g. merge two near-duplicates into one clearer statement)
+- **delete**: fact is redundant (covered by another fact), contradicted by a newer fact, or no longer accurate
+
+Return a JSON object (inside a ```json block) with exactly these fields:
+- "keep": array of UUIDs to keep unchanged
+- "update": object mapping UUID -> new fact text (the updated wording)
+- "delete": array of UUIDs to remove
+
+Every UUID from the input must appear in exactly one of keep, update, or delete.
+Prefer keeping the most recent or most specific version of conflicting facts.
+When two facts say the same thing differently, keep the better-worded one and delete the other."#;
+
+pub async fn cleanup_memories(
+    store: &MemoryStore,
+    backend: &dyn ModelBackend,
+    log: &EventLog,
+) -> Result<(u32, u32), Box<dyn Error + Send + Sync>> {
+    let memories = store.list()?;
+    if memories.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let clusters = cluster_memories(&memories);
+    if clusters.is_empty() {
+        return Ok((0, 0));
+    }
+
+    log.emit(Event::MemoryCleanupStarted {
+        clusters: clusters.len() as u32,
+    })
+    .await;
+
+    let mut total_updated: u32 = 0;
+    let mut total_deleted: u32 = 0;
+
+    for cluster in &clusters {
+        let facts = cluster
+            .iter()
+            .map(|m| format!("- [{}] {}", m.id, m.fact))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = MEMORY_CLEANUP_PROMPT.replace("{facts}", &facts);
+        let response = match backend.complete(prompt).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[janitor] memory cleanup model error: {e}");
+                continue;
+            }
+        };
+
+        let json_str = extract_json_block(&response);
+        let parsed: serde_json::Value = match serde_json::from_str(&json_str) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[janitor] memory cleanup parse error: {e}");
+                continue;
+            }
+        };
+
+        // Apply updates
+        if let Some(updates) = parsed.get("update").and_then(|v| v.as_object()) {
+            for (uuid_str, new_fact) in updates {
+                if let (Ok(uuid), Some(fact_text)) =
+                    (uuid_str.parse::<uuid::Uuid>(), new_fact.as_str())
+                {
+                    if let Err(e) = store.update(uuid, fact_text.to_string()) {
+                        eprintln!("[janitor] memory update error: {e}");
+                    } else {
+                        total_updated += 1;
+                    }
+                }
+            }
+        }
+
+        // Apply deletes
+        if let Some(deletes) = parsed.get("delete").and_then(|v| v.as_array()) {
+            for uuid_val in deletes {
+                if let Some(uuid_str) = uuid_val.as_str()
+                    && let Ok(uuid) = uuid_str.parse::<uuid::Uuid>()
+                {
+                    if let Err(e) = store.delete(uuid) {
+                        eprintln!("[janitor] memory delete error: {e}");
+                    } else {
+                        total_deleted += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    log.emit(Event::MemoryCleanupResult {
+        updated: total_updated,
+        deleted: total_deleted,
+    })
+    .await;
+
+    Ok((total_updated, total_deleted))
+}
+
 /// Run a single janitor pass: review all unvalidated tools, then run cleanup.
 /// Returns the number of tools processed.
 pub async fn run_once(
@@ -495,6 +684,7 @@ pub async fn run_once(
     backend: &dyn ModelBackend,
     log: &EventLog,
     builtins: &[BuiltinInfo],
+    store: &MemoryStore,
 ) -> Result<u32, Box<dyn Error + Send + Sync>> {
     let unvalidated = toolbox.list_unvalidated()?;
     let mut processed = 0;
@@ -511,6 +701,11 @@ pub async fn run_once(
         Err(e) => eprintln!("[janitor] toolbox cleanup error: {e}"),
     }
 
+    match cleanup_memories(store, backend, log).await {
+        Ok(_) => {}
+        Err(e) => eprintln!("[janitor] memory cleanup error: {e}"),
+    }
+
     Ok(processed)
 }
 
@@ -519,9 +714,11 @@ pub async fn run(
     backend: &dyn ModelBackend,
     log: &EventLog,
     builtins: &[BuiltinInfo],
+    store: &MemoryStore,
 ) {
     let mut idle_cycles: u32 = 0;
     let mut cleanup_backed_off = false;
+    let mut memory_cleanup_backed_off = false;
 
     loop {
         let unvalidated = match toolbox.list_unvalidated() {
@@ -545,12 +742,21 @@ pub async fn run(
                 }
             }
 
+            // Clean up redundant/conflicting memories (~75s after idle)
+            if !memory_cleanup_backed_off && idle_cycles == 15 {
+                match cleanup_memories(store, backend, log).await {
+                    Ok((_, _)) => memory_cleanup_backed_off = true,
+                    Err(e) => eprintln!("[janitor] memory cleanup error: {e}"),
+                }
+            }
+
             sleep(Duration::from_secs(5)).await;
             continue;
         }
 
         idle_cycles = 0;
         cleanup_backed_off = false;
+        memory_cleanup_backed_off = false;
         for tool in &unvalidated {
             if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log, builtins).await {
                 eprintln!("[janitor] error processing '{}': {e}", tool.name);
@@ -623,5 +829,57 @@ FAIL
     #[test]
     fn extract_block_missing() {
         assert!(extract_block("no blocks", "lua").is_none());
+    }
+
+    #[test]
+    fn test_extract_significant_words() {
+        let words = extract_significant_words("The user is running Nextcloud on port 8443");
+        assert!(words.contains("nextcloud"));
+        assert!(words.contains("running"));
+        assert!(words.contains("port"));
+        assert!(words.contains("8443"));
+        // Stop words and short words filtered out
+        assert!(!words.contains("the"));
+        assert!(!words.contains("user"));
+        assert!(!words.contains("is"));
+        assert!(!words.contains("on"));
+    }
+
+    #[test]
+    fn test_cluster_memories_groups_related() {
+        let mems = vec![
+            Memory::new(
+                "Nextcloud runs on port 8443",
+                crate::memory::MemorySource::Auto,
+            ),
+            Memory::new(
+                "Blog uses WordPress at blog.example.com",
+                crate::memory::MemorySource::Auto,
+            ),
+            Memory::new(
+                "Nextcloud storage limit is 50GB",
+                crate::memory::MemorySource::Auto,
+            ),
+            Memory::new(
+                "Blog theme is flavor-flavor",
+                crate::memory::MemorySource::Auto,
+            ),
+        ];
+        let clusters = cluster_memories(&mems);
+        assert_eq!(clusters.len(), 2);
+        // Each cluster should have 2 members
+        for c in &clusters {
+            assert_eq!(c.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_cluster_memories_no_overlap() {
+        let mems = vec![
+            Memory::new("alpha bravo charlie", crate::memory::MemorySource::Auto),
+            Memory::new("delta foxtrot golf", crate::memory::MemorySource::Auto),
+        ];
+        let clusters = cluster_memories(&mems);
+        assert!(clusters.is_empty());
     }
 }

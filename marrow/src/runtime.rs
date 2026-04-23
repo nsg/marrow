@@ -83,12 +83,14 @@ impl Runtime {
             let janitor_toolbox = Toolbox::new(&options.toolbox_path);
             let janitor_log = log.clone();
             let janitor_builtins = registry.builtin_info();
+            let janitor_memory = MemoryStore::new(&options.memory_path);
             tokio::spawn(async move {
                 janitor::run(
                     &janitor_toolbox,
                     janitor_backend.as_ref(),
                     &janitor_log,
                     &janitor_builtins,
+                    &janitor_memory,
                 )
                 .await;
             });
@@ -136,6 +138,7 @@ impl Runtime {
             code_backend,
             self.log.as_ref(),
             &builtins,
+            self.memory_store.as_ref(),
         )
         .await
     }

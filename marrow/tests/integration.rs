@@ -683,6 +683,42 @@ async fn janitor_deletes_after_max_failures() {
     assert!(toolbox.list_tools().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn janitor_cleanup_memories_resolves_conflict() {
+    let dir = temp_dir("marrow_mem");
+    let store = MemoryStore::new(dir.path());
+    let log = noop_log().await;
+
+    let old_fact = Memory::new("Email is old@example.com", MemorySource::Auto);
+    let new_fact = Memory::new("Email is new@example.com", MemorySource::Auto);
+    let old_id = old_fact.id;
+    let new_id = new_fact.id;
+    store.save(&old_fact).unwrap();
+    store.save(&new_fact).unwrap();
+
+    // Mock backend returns: keep the new one, delete the old one
+    let response = format!(
+        r#"```json
+{{
+    "keep": ["{new_id}"],
+    "update": {{}},
+    "delete": ["{old_id}"]
+}}
+```"#
+    );
+    let backend = MockBackend::new(vec![&response]);
+
+    let (updated, deleted) = marrow::janitor::cleanup_memories(&store, &backend, &log)
+        .await
+        .unwrap();
+    assert_eq!(updated, 0);
+    assert_eq!(deleted, 1);
+
+    let remaining = store.list().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, new_id);
+}
+
 // ---------------------------------------------------------------------------
 // Event log tests
 // ---------------------------------------------------------------------------

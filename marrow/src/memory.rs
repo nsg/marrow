@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -94,6 +94,10 @@ pub struct MemoryStore {
 impl MemoryStore {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     pub fn ensure_dir(&self) -> Result<(), Box<dyn Error + Send + Sync>> {

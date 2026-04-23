@@ -48,6 +48,13 @@ pub enum Event {
         tool: String,
         reason: String,
     },
+    MemoryCleanupStarted {
+        clusters: u32,
+    },
+    MemoryCleanupResult {
+        updated: u32,
+        deleted: u32,
+    },
     AgentAction {
         task_id: String,
         step: u32,
@@ -184,6 +191,12 @@ impl EventLog {
                 ..
             } => {
                 eprintln!("[agent] step {step}: tool '{tool}' failed");
+            }
+            Event::MemoryCleanupStarted { clusters } => {
+                eprintln!("[janitor] reviewing {clusters} memory cluster(s)");
+            }
+            Event::MemoryCleanupResult { updated, deleted } => {
+                eprintln!("[janitor] memory cleanup: {updated} updated, {deleted} deleted");
             }
             // Verbose only
             Event::TaskCreated {
