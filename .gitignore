@@ -6,3 +6,6 @@ secrets.toml
 events.jsonl
 memory/
 toolbox/
+.playwright-mcp/
+ext/
+skills/
