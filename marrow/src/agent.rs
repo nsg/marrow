@@ -56,13 +56,9 @@ pub type IncomingRx = mpsc::UnboundedReceiver<String>;
 
 const MAX_AGENT_STEPS: u32 = 25;
 
-const AGENT_PROMPT_TEMPLATE: &str = r#"You are an agent that completes tasks step by step. Each turn you perform ONE action.
-
-Available tools:
-{tools}
-
-{memories}{conversation}{execution_context}Current date/time: {datetime}
-Task: {task}
+/// Static system prompt — identical across all steps and tasks.
+/// Placed in the system message so API providers can cache it.
+const AGENT_SYSTEM_PROMPT: &str = r#"You are an agent that completes tasks step by step. Each turn you perform ONE action.
 
 CRITICAL: You have NO shell access. No curl, no bash, no command line. You can ONLY interact through the actions below.
 
@@ -119,7 +115,14 @@ Rules:
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
 - The answer action text should be a natural language response, NOT a JSON action. It is sent directly to the user — include all relevant details from your findings.
 - CRITICAL: Every response MUST be either a JSON action or a ```lua block. Plain text without an action will be treated as your final answer and sent to the user immediately. Do NOT output bare text as a thinking or planning step — if you are not ready to answer, use a JSON action or ```lua block.
-- If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling.
+- If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling."#;
+
+/// Dynamic user prompt — changes every step with tools, memories, history, etc.
+const AGENT_USER_PROMPT_TEMPLATE: &str = r#"Available tools:
+{tools}
+
+{memories}{conversation}{execution_context}Current date/time: {datetime}
+Task: {task}
 
 {history}Your action:"#;
 
@@ -170,7 +173,7 @@ pub fn build_agent_prompt(
     secret_descriptions: &[(&str, &str)],
     conversation: &[Message],
     frontend: &str,
-) -> String {
+) -> Vec<Message> {
     let tools_section = if tools_section.is_empty() {
         "(none available — create one if needed)"
     } else {
@@ -314,7 +317,7 @@ pub fn build_agent_prompt(
         .format("%Y-%m-%d %H:%M (%A)")
         .to_string();
 
-    AGENT_PROMPT_TEMPLATE
+    let user_content = AGENT_USER_PROMPT_TEMPLATE
         .replace("{tools}", tools_section)
         .replace(
             "{memories}",
@@ -324,7 +327,12 @@ pub fn build_agent_prompt(
         .replace("{execution_context}", &execution_context)
         .replace("{datetime}", &datetime)
         .replace("{task}", task)
-        .replace("{history}", &history_section)
+        .replace("{history}", &history_section);
+
+    vec![
+        Message::system(AGENT_SYSTEM_PROMPT),
+        Message::user(user_content),
+    ]
 }
 
 pub fn parse_action(response: &str) -> Action {
@@ -618,7 +626,7 @@ pub async fn run_loop(
         }
 
         let secret_descs = secrets.map(|s| s.descriptions()).unwrap_or_default();
-        let prompt = build_agent_prompt(
+        let messages = build_agent_prompt(
             task,
             &tools_section,
             memories,
@@ -627,7 +635,7 @@ pub async fn run_loop(
             conversation,
             frontend,
         );
-        let response = backend.complete(prompt).await?;
+        let response = backend.complete_chat(messages).await?;
 
         if log.is_verbose() {
             eprintln!("[agent] step {step}: raw model response:\n{response}");
