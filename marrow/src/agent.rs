@@ -102,7 +102,7 @@ IMPORTANT: save_tool must be its own action — do NOT combine it with a ```lua 
 To remove a broken tool from the toolbox:
 {{"action": "remove_tool", "name": "tool_name"}}
 
-To give your final answer:
+To give your final answer (this text is shown directly to the user — make it complete and well-formatted):
 {{"action": "answer", "text": "your complete answer to the user"}}
 
 Rules:
@@ -117,7 +117,7 @@ Rules:
 - Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
 - When saving tools, prefer generic names and use PARAMS for inputs (e.g. PARAMS["LOCATION"] instead of hardcoded "Stockholm"). This makes tools reusable for different inputs.
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
-- The answer action text should be a natural language response, NOT a JSON action.
+- The answer action text should be a natural language response, NOT a JSON action. It is sent directly to the user — include all relevant details from your findings.
 - CRITICAL: Every response MUST be either a JSON action or a ```lua block. Plain text without an action will be treated as your final answer and sent to the user immediately. Do NOT output bare text as a thinking or planning step — if you are not ready to answer, use a JSON action or ```lua block.
 - If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling.
 
@@ -1022,6 +1022,14 @@ pub async fn run_loop(
                     detail: String::new(),
                 })
                 .await;
+
+                // Use the agent's own answer text directly when available.
+                // Fall back to format_answer only for empty answers (e.g.
+                // model said "answer" but left text blank).
+                if !text.trim().is_empty() {
+                    return Ok(text.clone());
+                }
+
                 if !history.is_empty() {
                     emit(ProgressUpdate::Thinking);
                 }

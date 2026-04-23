@@ -129,13 +129,12 @@ async fn agent_loop_call_tool_then_answer() {
     let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
 
     // Step 1: agent calls greeter tool
-    // Step 2: agent says answer
-    // Step 3: answer_backend formulates final response
+    // Step 2: agent answers directly with collected data
     let agent_backend = MockBackend::new(vec![
         r#"{"action": "call_tool", "tool": "greeter", "params": {}}"#,
-        r#"{"action": "answer", "text": ""}"#,
+        r#"{"action": "answer", "text": "The greeting is: hello world"}"#,
     ]);
-    let answer_backend = MockBackend::new(vec!["The greeting is: hello world"]);
+    let answer_backend = MockBackend::new(vec![]);
     let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
@@ -181,10 +180,10 @@ async fn agent_loop_save_tool_then_call_then_answer() {
         "```lua\nreturn { echo = \"hi\" }\n```",
         r#"{"action": "save_tool", "name": "echo_tool", "description": "Echoes a message"}"#,
         r#"{"action": "call_tool", "tool": "echo_tool", "params": {"MSG": "hi"}}"#,
-        r#"{"action": "answer", "text": ""}"#,
+        r#"{"action": "answer", "text": "Echo says: hi"}"#,
     ]);
 
-    let answer_backend = MockBackend::new(vec!["Echo says: hi"]);
+    let answer_backend = MockBackend::new(vec![]);
     let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
@@ -222,8 +221,8 @@ async fn agent_loop_direct_answer() {
 
     let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
 
-    let agent_backend = MockBackend::new(vec![r#"{"action": "answer", "text": ""}"#]);
-    let answer_backend = MockBackend::new(vec!["2 + 2 = 4"]);
+    let agent_backend = MockBackend::new(vec![r#"{"action": "answer", "text": "2 + 2 = 4"}"#]);
+    let answer_backend = MockBackend::new(vec![]);
     let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
@@ -261,13 +260,12 @@ async fn agent_loop_tool_failure_recovery() {
     let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
 
     // Step 1: agent tries nonexistent tool → gets error
-    // Step 2: agent says answer
-    // Step 3: answer_backend formulates response
+    // Step 2: agent answers directly
     let agent_backend = MockBackend::new(vec![
         r#"{"action": "call_tool", "tool": "missing_tool", "params": {}}"#,
-        r#"{"action": "answer", "text": ""}"#,
+        r#"{"action": "answer", "text": "The tool was not available, so I could not complete the request."}"#,
     ]);
-    let answer_backend = MockBackend::new(vec!["Tool was not available, but I can tell you..."]);
+    let answer_backend = MockBackend::new(vec![]);
     let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
@@ -294,6 +292,7 @@ async fn agent_loop_tool_failure_recovery() {
     .unwrap();
 
     assert!(result.contains("not available"));
+    assert!(result.contains("could not complete"));
 }
 
 // ---------------------------------------------------------------------------
