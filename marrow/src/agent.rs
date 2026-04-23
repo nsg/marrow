@@ -423,8 +423,13 @@ pub fn parse_action(response: &str) -> Action {
 fn looks_incomplete(text: &str) -> bool {
     let trimmed = text.trim();
 
+    // Backend-injected truncation marker (token limit hit)
+    if trimmed.ends_with("[response truncated by token limit]") {
+        return true;
+    }
+
     // Trailing punctuation that signals "I was about to list/continue"
-    if trimmed.ends_with(':') || trimmed.ends_with("...") || trimmed.ends_with('—') {
+    if trimmed.ends_with(':') || trimmed.ends_with("...") || trimmed.ends_with('\u{2014}') {
         return true;
     }
 
@@ -626,8 +631,8 @@ pub async fn run_loop(
     let mut history: Vec<StepResult> = Vec::new();
     let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
     let mut last_successful_code: Option<String> = None; // tracked for save_tool action
-    let mut fallback_nudges: u32 = 0;
-    const MAX_FALLBACK_NUDGES: u32 = 2;
+    let mut incomplete_nudges: u32 = 0;
+    const MAX_INCOMPLETE_NUDGES: u32 = 2;
 
     for step in 1..=MAX_AGENT_STEPS {
         // Drain any user messages that arrived since the last step
@@ -965,29 +970,45 @@ pub async fn run_loop(
             Action::UserMessage { .. } => unreachable!(),
 
             Action::Answer { text, fallback } => {
-                // If this is a fallback answer (no explicit action parsed) and
-                // the model was mid-work, it likely intended to continue.
-                // Nudge it back into the loop instead of accepting a
-                // half-finished response.
-                if *fallback
-                    && !history.is_empty()
-                    && fallback_nudges < MAX_FALLBACK_NUDGES
-                    && looks_incomplete(text)
+                // Detect mid-thought answers and nudge the model to continue.
+                // For fallback answers (no parseable action): use the full
+                //   heuristic — intent phrases, trailing punctuation, etc.
+                // For explicit answer actions: only override on strong trailing
+                //   signals (:  ...  —) since the model deliberately chose to
+                //   answer.  This catches the common pattern where the model
+                //   narrates "Let me try X:" inside an answer action.
+                let is_incomplete = if *fallback {
+                    looks_incomplete(text)
+                } else {
+                    let t = text.trim();
+                    t.ends_with(':') || t.ends_with("...") || t.ends_with('\u{2014}')
+                };
+
+                if is_incomplete && !history.is_empty() && incomplete_nudges < MAX_INCOMPLETE_NUDGES
                 {
-                    fallback_nudges += 1;
+                    incomplete_nudges += 1;
+                    let kind = if *fallback { "fallback" } else { "explicit" };
                     if log.is_verbose() {
                         eprintln!(
-                            "[agent] step {step}: fallback answer looks incomplete, nudging model (attempt {fallback_nudges}/{MAX_FALLBACK_NUDGES})"
+                            "[agent] step {step}: {kind} answer looks incomplete, nudging model (attempt {incomplete_nudges}/{MAX_INCOMPLETE_NUDGES})"
                         );
                     }
+                    let nudge_msg = if *fallback {
+                        "SYSTEM: Your response was plain text without a valid action. \
+                         If you are not done, respond with your next action as a JSON \
+                         object or a ```lua block. If you are done, use \
+                         {\"action\": \"answer\", \"text\": \"...\"}."
+                    } else {
+                        "SYSTEM: Your answer text ends mid-thought — it looks like you \
+                         were about to take further action. If you still have work to \
+                         do, respond with your next action as a JSON object or ```lua \
+                         block. If you are truly done, resubmit your answer without \
+                         trailing narration."
+                    };
                     history.push(StepResult {
                         step,
                         action,
-                        output: "SYSTEM: Your response was plain text without a valid action. \
-                                 If you are not done, respond with your next action as a JSON \
-                                 object or a ```lua block. If you are done, use \
-                                 {\"action\": \"answer\", \"text\": \"...\"}."
-                            .to_string(),
+                        output: nudge_msg.to_string(),
                         success: false,
                         finding: None,
                     });

@@ -39,6 +39,8 @@ struct ChatResponse {
 #[derive(Debug, Deserialize)]
 struct Choice {
     message: ResponseMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,12 +131,19 @@ impl OpenAIBackend {
             metrics.record(&self.role, duration, prompt_tokens, completion_tokens);
         }
 
-        let content = chat_resp
+        let choice = chat_resp
             .choices
             .into_iter()
             .next()
-            .map(|c| c.message.content)
             .ok_or("no choices in response")?;
+
+        let mut content = choice.message.content;
+
+        // If the API truncated the response due to token limits, append a
+        // marker so the agent loop's incomplete-answer detection can catch it.
+        if choice.finish_reason.as_deref() == Some("length") {
+            content.push_str("\n\n[response truncated by token limit]");
+        }
 
         Ok(content)
     }
