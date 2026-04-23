@@ -501,60 +501,19 @@ fn extract_error_reason(output: &str) -> String {
     }
 }
 
-/// Extract a one-line finding from a successful step output.
-/// Uses template-based extraction from JSON — no model call needed.
-fn extract_finding(output: &str) -> Option<String> {
-    let val: serde_json::Value = serde_json::from_str(output).ok()?;
+/// Produce a finding for the working context.
+///
+/// Small outputs (≤ 800 chars) are used verbatim — the agent can read raw
+/// JSON just fine and it preserves more information than any summary.
+/// Large outputs are summarized by the fast model.
+const FINDING_INLINE_LIMIT: usize = 800;
 
-    // Handle array wrapping (inline Lua returns arrays)
-    let obj = if let Some(arr) = val.as_array() {
-        arr.first()?.as_object()?
-    } else {
-        val.as_object()?
-    };
-
-    // Skip if it contains an error
-    if obj.contains_key("error") {
-        return None;
+async fn make_finding(output: &str, fast_backend: &dyn ModelBackend) -> Option<String> {
+    if output.len() <= FINDING_INLINE_LIMIT {
+        return Some(output.to_string());
     }
 
-    // Build a summary from numeric/string fields (skip large nested data)
-    let mut parts = Vec::new();
-    for (key, value) in obj {
-        match value {
-            serde_json::Value::Number(n) => {
-                parts.push(format!("{key}={n}"));
-            }
-            serde_json::Value::String(s) if s.len() <= 80 => {
-                parts.push(format!("{key}=\"{}\"", s));
-            }
-            serde_json::Value::String(s) => {
-                parts.push(format!("{key}=({} chars)", s.len()));
-            }
-            serde_json::Value::Bool(b) => {
-                parts.push(format!("{key}={b}"));
-            }
-            serde_json::Value::Array(arr) => {
-                parts.push(format!("{key}=[{} items]", arr.len()));
-            }
-            serde_json::Value::Object(map) => {
-                parts.push(format!("{key}={{{} fields}}", map.len()));
-            }
-            serde_json::Value::Null => {}
-        }
-    }
-
-    if parts.is_empty() {
-        return None;
-    }
-
-    Some(parts.join(", "))
-}
-
-/// Use the fast model to summarize a complex/large output into a one-line finding.
-/// Called only when extract_finding returns something too long or when the output
-/// is large enough to warrant model-based summarization.
-async fn summarize_finding(output: &str, fast_backend: &dyn ModelBackend) -> Option<String> {
+    // Large output — ask the fast model for a one-line summary
     let truncated = if output.len() > 2000 {
         &output[..2000]
     } else {
@@ -811,12 +770,7 @@ pub async fn run_loop(
                     };
 
                 let finding = if step_success {
-                    let template = extract_finding(&output);
-                    match template {
-                        Some(ref s) if s.len() <= 150 => template,
-                        _ if output.len() > 500 => summarize_finding(&output, fast_backend).await,
-                        other => other,
-                    }
+                    make_finding(&output, fast_backend).await
                 } else {
                     None
                 };
@@ -885,12 +839,7 @@ pub async fn run_loop(
                 emit(ProgressUpdate::CodeRunEnd);
 
                 let finding = if step_success {
-                    let template = extract_finding(&output);
-                    match template {
-                        Some(ref s) if s.len() <= 150 => template,
-                        _ if output.len() > 500 => summarize_finding(&output, fast_backend).await,
-                        other => other,
-                    }
+                    make_finding(&output, fast_backend).await
                 } else {
                     None
                 };
