@@ -404,6 +404,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 secrets_path: "secrets.toml".to_string(),
                 spawn_janitor: true,
                 schedule_path,
+                skills_path: "skills".to_string(),
             },
         )
         .await?,

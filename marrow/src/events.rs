@@ -59,6 +59,9 @@ pub enum Event {
         documents: u32,
         promoted: u32,
     },
+    SkillsGenerated {
+        count: u32,
+    },
     AgentAction {
         task_id: String,
         step: u32,
@@ -207,6 +210,9 @@ impl EventLog {
                 promoted,
             } => {
                 eprintln!("[janitor] updated {documents} document(s), promoted {promoted} fact(s)");
+            }
+            Event::SkillsGenerated { count } => {
+                eprintln!("[janitor] generated {count} skill(s)");
             }
             // Verbose only
             Event::TaskCreated {

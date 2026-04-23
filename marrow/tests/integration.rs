@@ -9,6 +9,7 @@ use marrow::memory_provider;
 use marrow::memory_writer;
 use marrow::model::{CompletionResult, ModelBackend};
 use marrow::session::{ChatSession, Message};
+use marrow::skills::SkillStore;
 use marrow::tool::ToolRegistry;
 use marrow::toolbox::{ToolMeta, Toolbox};
 use reqwest::Client;
@@ -147,6 +148,7 @@ async fn agent_loop_call_tool_then_answer() {
         client,
         &[],
         &[],
+        &[],
         &log,
         None,
         None,
@@ -197,6 +199,7 @@ async fn agent_loop_save_tool_then_call_then_answer() {
         client,
         &[],
         &[],
+        &[],
         &log,
         None,
         None,
@@ -235,6 +238,7 @@ async fn agent_loop_direct_answer() {
         &fast_backend,
         &registry,
         client,
+        &[],
         &[],
         &[],
         &log,
@@ -279,6 +283,7 @@ async fn agent_loop_tool_failure_recovery() {
         &fast_backend,
         &registry,
         client,
+        &[],
         &[],
         &[],
         &log,
@@ -752,6 +757,35 @@ async fn janitor_generate_documents_promotes_facts() {
     // Verify fact was deleted
     let remaining = store.list().unwrap();
     assert!(remaining.is_empty());
+}
+
+#[tokio::test]
+async fn janitor_generate_skills_creates_file() {
+    let mem_dir = temp_dir("marrow_mem");
+    let skill_dir = temp_dir("marrow_skills");
+    let log = noop_log().await;
+    let skill_store = SkillStore::new(skill_dir.path());
+
+    // Create a living document so skill generation has context
+    std::fs::write(
+        mem_dir.path().join("profile.md"),
+        "# Profile\n- Name: Alice\n- Uses Nextcloud",
+    )
+    .unwrap();
+
+    let response =
+        "```skill:check-calendar.md\n# Check Calendar\n1. Use nextcloud_events tool\n```";
+    let backend = MockBackend::new(vec![response]);
+
+    let count = marrow::skills::generate_skills(&skill_store, mem_dir.path(), &[], &backend, &log)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+
+    let skills = skill_store.list().unwrap();
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].0, "check-calendar.md");
+    assert!(skills[0].1.contains("Check Calendar"));
 }
 
 // ---------------------------------------------------------------------------

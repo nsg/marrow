@@ -171,6 +171,7 @@ pub fn build_agent_prompt(
     tools_section: &str,
     memories: &[Memory],
     documents: &[(String, String)],
+    skills: &[(String, String)],
     history: &[StepResult],
     secret_descriptions: &[(&str, &str)],
     conversation: &[Message],
@@ -190,6 +191,16 @@ pub fn build_agent_prompt(
             .map(|(name, content)| format!("### {name}\n{content}"))
             .collect();
         format!("Knowledge base:\n{}\n\n", doc_parts.join("\n\n"))
+    };
+
+    let skills_section = if skills.is_empty() {
+        String::new()
+    } else {
+        let skill_parts: Vec<String> = skills
+            .iter()
+            .map(|(name, content)| format!("### {name}\n{content}"))
+            .collect();
+        format!("Relevant skills:\n{}\n\n", skill_parts.join("\n\n"))
     };
 
     let memories_section = if memories.is_empty() {
@@ -333,7 +344,7 @@ pub fn build_agent_prompt(
         .replace("{tools}", tools_section)
         .replace(
             "{memories}",
-            &format!("{documents_section}{memories_section}{secrets_section}"),
+            &format!("{documents_section}{skills_section}{memories_section}{secrets_section}"),
         )
         .replace("{conversation}", &conversation_section)
         .replace("{execution_context}", &execution_context)
@@ -582,6 +593,7 @@ pub async fn run_loop(
     client: Arc<Client>,
     memories: &[Memory],
     documents: &[(String, String)],
+    skills: &[(String, String)],
     log: &EventLog,
     secrets: Option<&Secrets>,
     progress: Option<&ProgressTx>,
@@ -644,6 +656,7 @@ pub async fn run_loop(
             &tools_section,
             memories,
             documents,
+            skills,
             &history,
             &secret_descs,
             conversation,
@@ -1008,6 +1021,7 @@ pub async fn run_loop(
                     task,
                     memories,
                     documents,
+                    skills,
                     &history,
                     answer_backend,
                     conversation,
@@ -1034,6 +1048,7 @@ pub async fn run_loop(
         task,
         memories,
         documents,
+        skills,
         &history,
         answer_backend,
         conversation,
@@ -1048,6 +1063,7 @@ async fn format_answer(
     task: &str,
     memories: &[Memory],
     documents: &[(String, String)],
+    skills: &[(String, String)],
     history: &[StepResult],
     answer_backend: &dyn ModelBackend,
     conversation: &[Message],
@@ -1093,6 +1109,9 @@ async fn format_answer(
         for (name, content) in documents {
             context.push_str(&format!("\n{name}:\n{content}\n"));
         }
+        for (name, content) in skills {
+            context.push_str(&format!("\nSkill — {name}:\n{content}\n"));
+        }
         if !memories.is_empty() {
             let facts = memories
                 .iter()
@@ -1123,6 +1142,9 @@ async fn format_answer(
         format!("{system_context}{conversation_section}Task: {task}\n\nCollected data:\n{data}\n");
     for (name, content) in documents {
         context.push_str(&format!("\n{name}:\n{content}\n"));
+    }
+    for (name, content) in skills {
+        context.push_str(&format!("\nSkill — {name}:\n{content}\n"));
     }
     if !memories.is_empty() {
         let facts = memories

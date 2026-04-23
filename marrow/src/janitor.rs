@@ -679,12 +679,15 @@ pub async fn cleanup_memories(
 
 /// Run a single janitor pass: review all unvalidated tools, then run cleanup.
 /// Returns the number of tools processed.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_once(
     toolbox: &Toolbox,
     backend: &dyn ModelBackend,
     log: &EventLog,
     builtins: &[BuiltinInfo],
     store: &MemoryStore,
+    skill_store: &crate::skills::SkillStore,
+    tools: &[crate::tool::ToolInfo],
 ) -> Result<u32, Box<dyn Error + Send + Sync>> {
     let unvalidated = toolbox.list_unvalidated()?;
     let mut processed = 0;
@@ -711,20 +714,29 @@ pub async fn run_once(
         Err(e) => eprintln!("[janitor] document generation error: {e}"),
     }
 
+    match crate::skills::generate_skills(skill_store, store.dir(), tools, backend, log).await {
+        Ok(_) => {}
+        Err(e) => eprintln!("[janitor] skill generation error: {e}"),
+    }
+
     Ok(processed)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     toolbox: &Toolbox,
     backend: &dyn ModelBackend,
     log: &EventLog,
     builtins: &[BuiltinInfo],
     store: &MemoryStore,
+    skill_store: &crate::skills::SkillStore,
+    tools: &[crate::tool::ToolInfo],
 ) {
     let mut idle_cycles: u32 = 0;
     let mut cleanup_backed_off = false;
     let mut memory_cleanup_backed_off = false;
     let mut documents_backed_off = false;
+    let mut skills_backed_off = false;
 
     loop {
         let unvalidated = match toolbox.list_unvalidated() {
@@ -764,6 +776,16 @@ pub async fn run(
                 }
             }
 
+            // Generate/update skills (~125s after idle)
+            if !skills_backed_off && idle_cycles == 25 {
+                match crate::skills::generate_skills(skill_store, store.dir(), tools, backend, log)
+                    .await
+                {
+                    Ok(_) => skills_backed_off = true,
+                    Err(e) => eprintln!("[janitor] skill generation error: {e}"),
+                }
+            }
+
             sleep(Duration::from_secs(5)).await;
             continue;
         }
@@ -772,6 +794,7 @@ pub async fn run(
         cleanup_backed_off = false;
         memory_cleanup_backed_off = false;
         documents_backed_off = false;
+        skills_backed_off = false;
         for tool in &unvalidated {
             if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log, builtins).await {
                 eprintln!("[janitor] error processing '{}': {e}", tool.name);

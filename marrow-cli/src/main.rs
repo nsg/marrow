@@ -72,6 +72,10 @@ struct Cli {
     /// Path to the schedules directory
     #[arg(long, default_value = "schedules")]
     schedules: String,
+
+    /// Path to the skills directory
+    #[arg(long, default_value = "skills")]
+    skills: String,
 }
 
 #[tokio::main]
@@ -164,6 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             secrets_path: "secrets.toml".to_string(),
             spawn_janitor,
             schedule_path: cli.schedules.clone(),
+            skills_path: cli.skills.clone(),
         },
     )
     .await?;

@@ -18,6 +18,7 @@ use crate::router::{ModelRouter, RouterConfig};
 use crate::schedule::ScheduleStore;
 use crate::secrets::Secrets;
 use crate::session::Message;
+use crate::skills::{self, SkillStore};
 use crate::tool::{FrontendContext, ToolRegistry};
 use crate::toolbox::Toolbox;
 
@@ -29,6 +30,7 @@ pub struct RuntimeOptions {
     pub secrets_path: String,
     pub spawn_janitor: bool,
     pub schedule_path: String,
+    pub skills_path: String,
 }
 
 pub struct Runtime {
@@ -36,6 +38,7 @@ pub struct Runtime {
     registry: Arc<ToolRegistry>,
     memory_store: Arc<MemoryStore>,
     schedule_store: Arc<ScheduleStore>,
+    skill_store: Arc<SkillStore>,
     client: Arc<Client>,
     log: Arc<EventLog>,
     secrets: Arc<Secrets>,
@@ -73,6 +76,7 @@ impl Runtime {
         let registry = Arc::new(registry);
         let memory_store = Arc::new(MemoryStore::new(&options.memory_path));
         let schedule_store = Arc::new(ScheduleStore::new(&options.schedule_path));
+        let skill_store = Arc::new(SkillStore::new(&options.skills_path));
         let log =
             Arc::new(EventLog::new(Some(PathBuf::from(&options.log_path)), options.verbose).await?);
         let secrets = Arc::new(Secrets::load_or_empty(&options.secrets_path));
@@ -85,6 +89,8 @@ impl Runtime {
             let janitor_log = log.clone();
             let janitor_builtins = registry.builtin_info();
             let janitor_memory = MemoryStore::new(&options.memory_path);
+            let janitor_skills = SkillStore::new(&options.skills_path);
+            let janitor_tools = registry.list_all();
             tokio::spawn(async move {
                 janitor::run(
                     &janitor_toolbox,
@@ -92,6 +98,8 @@ impl Runtime {
                     &janitor_log,
                     &janitor_builtins,
                     &janitor_memory,
+                    &janitor_skills,
+                    &janitor_tools,
                 )
                 .await;
             });
@@ -102,6 +110,7 @@ impl Runtime {
             registry,
             memory_store,
             schedule_store,
+            skill_store,
             client,
             log,
             secrets,
@@ -134,12 +143,15 @@ impl Runtime {
             .backend("code")
             .or_else(|_| self.router.backend("default"))?;
         let builtins = self.registry.builtin_info();
+        let tools = self.registry.list_all();
         janitor::run_once(
             self.registry.toolbox(),
             code_backend,
             self.log.as_ref(),
             &builtins,
             self.memory_store.as_ref(),
+            self.skill_store.as_ref(),
+            &tools,
         )
         .await
     }
@@ -178,6 +190,8 @@ impl Runtime {
         let memories =
             load_relevant_memories(description, self.memory_store.as_ref(), fast_backend).await;
         let documents = memory_documents::list_documents(self.memory_store.dir());
+        let selected_skills =
+            skills::select_skills(description, self.skill_store.as_ref()).unwrap_or_default();
 
         let answer = agent::run_loop(
             description,
@@ -189,6 +203,7 @@ impl Runtime {
             self.client.clone(),
             &memories,
             &documents,
+            &selected_skills,
             self.log.as_ref(),
             Some(self.secrets.as_ref()),
             progress,
