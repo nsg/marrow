@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::time::sleep;
@@ -736,6 +737,7 @@ pub async fn run(
     knowledge_dir: &Path,
     skill_store: &crate::skills::SkillStore,
     tools: &[crate::tool::ToolInfo],
+    memory_changed: &AtomicBool,
 ) {
     let mut idle_cycles: u32 = 0;
     let mut cleanup_backed_off = false;
@@ -755,6 +757,14 @@ pub async fn run(
 
         if unvalidated.is_empty() {
             idle_cycles += 1;
+
+            // Reset memory-related tasks when new memories arrive
+            if memory_changed.swap(false, Ordering::Relaxed) {
+                memory_cleanup_backed_off = false;
+                documents_backed_off = false;
+                skills_backed_off = false;
+                idle_cycles = idle_cycles.min(10);
+            }
 
             // Clean up redundant/site-specific tools (~50s after idle)
             if !cleanup_backed_off && idle_cycles == 10 {

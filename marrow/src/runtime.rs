@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use reqwest::Client;
@@ -53,6 +54,7 @@ pub struct Runtime {
     log: Arc<EventLog>,
     secrets: Arc<Secrets>,
     metrics: Arc<Metrics>,
+    memory_changed: Arc<AtomicBool>,
 }
 
 async fn load_relevant_memories(
@@ -91,6 +93,7 @@ impl Runtime {
         let log =
             Arc::new(EventLog::new(Some(PathBuf::from(&options.log_path)), options.verbose).await?);
         let secrets = Arc::new(Secrets::load_or_empty(&options.secrets_path));
+        let memory_changed = Arc::new(AtomicBool::new(false));
 
         // One-time migration: move living documents from memory/ to knowledge/
         let memory_path_buf = PathBuf::from(&options.memory_path);
@@ -125,6 +128,7 @@ impl Runtime {
             let janitor_knowledge = knowledge_dir.clone();
             let janitor_skills = SkillStore::new(&options.skills_path);
             let janitor_tools = registry.list_all();
+            let janitor_memory_changed = memory_changed.clone();
             tokio::spawn(async move {
                 janitor::run(
                     &janitor_toolbox,
@@ -135,6 +139,7 @@ impl Runtime {
                     &janitor_knowledge,
                     &janitor_skills,
                     &janitor_tools,
+                    &janitor_memory_changed,
                 )
                 .await;
             });
@@ -151,6 +156,7 @@ impl Runtime {
             log,
             secrets,
             metrics,
+            memory_changed,
         })
     }
 
@@ -279,6 +285,7 @@ impl Runtime {
         let mem_description = description.to_string();
         let mem_answer = loop_result.answer.clone();
         let mem_progress = progress.cloned();
+        let mem_changed = self.memory_changed.clone();
         tokio::spawn(async move {
             let fast = mem_router
                 .backend("fast")
@@ -313,6 +320,11 @@ impl Runtime {
                         && let Some(ref tx) = mem_progress
                     {
                         let _ = tx.send(ProgressUpdate::MemoryCleared);
+                    }
+
+                    if !result.saved.is_empty() || !result.updated.is_empty() || result.deleted > 0
+                    {
+                        mem_changed.store(true, Ordering::Relaxed);
                     }
                 }
                 Err(e) => eprintln!("[marrow] memory writer error: {e}"),
