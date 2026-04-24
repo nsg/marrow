@@ -144,7 +144,7 @@ async fn execute_schedule(
         .await;
 
     let (answer, success) = match result {
-        Ok(answer) => (answer, true),
+        Ok(result) => (result.answer, true),
         Err(e) => (format!("Error: {e}"), false),
     };
 

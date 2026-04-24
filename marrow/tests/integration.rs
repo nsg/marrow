@@ -163,7 +163,7 @@ async fn agent_loop_call_tool_then_answer() {
     .await
     .unwrap();
 
-    assert!(result.contains("hello world"));
+    assert!(result.answer.contains("hello world"));
 }
 
 #[tokio::test]
@@ -214,7 +214,7 @@ async fn agent_loop_save_tool_then_call_then_answer() {
     .await
     .unwrap();
 
-    assert!(result.contains("Echo says"));
+    assert!(result.answer.contains("Echo says"));
     assert!(toolbox.load_meta("echo_tool").is_ok());
 }
 
@@ -255,7 +255,7 @@ async fn agent_loop_direct_answer() {
     .await
     .unwrap();
 
-    assert_eq!(result, "2 + 2 = 4");
+    assert_eq!(result.answer, "2 + 2 = 4");
 }
 
 #[tokio::test]
@@ -300,8 +300,8 @@ async fn agent_loop_tool_failure_recovery() {
     .await
     .unwrap();
 
-    assert!(result.contains("not available"));
-    assert!(result.contains("could not complete"));
+    assert!(result.answer.contains("not available"));
+    assert!(result.answer.contains("could not complete"));
 }
 
 // ---------------------------------------------------------------------------

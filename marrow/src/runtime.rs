@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use reqwest::Client;
 
@@ -12,7 +13,7 @@ use crate::memory::{Memory, MemoryStore};
 use crate::memory_documents;
 use crate::memory_provider;
 use crate::memory_writer;
-use crate::metrics::Metrics;
+use crate::metrics::{Metrics, TASK_METRICS, TaskMetrics};
 use crate::model::ModelBackend;
 use crate::router::{ModelRouter, RouterConfig};
 use crate::schedule::ScheduleStore;
@@ -21,6 +22,13 @@ use crate::session::Message;
 use crate::skills::{self, SkillStore};
 use crate::tool::{FrontendContext, ToolRegistry};
 use crate::toolbox::Toolbox;
+
+/// Result of a single task execution, including the answer and performance metrics.
+#[derive(Debug, Clone)]
+pub struct TaskResult {
+    pub answer: String,
+    pub metrics: TaskMetrics,
+}
 
 pub struct RuntimeOptions {
     pub toolbox_path: String,
@@ -190,7 +198,11 @@ impl Runtime {
         incoming: Option<&mut IncomingRx>,
         formatting_hint: Option<&str>,
         frontend_context: Option<FrontendContext>,
-    ) -> Result<String, Box<dyn Error + Send + Sync>> {
+    ) -> Result<TaskResult, Box<dyn Error + Send + Sync>> {
+        let task_start = Instant::now();
+        let task_metrics = Arc::new(Metrics::new());
+        let task_metrics_ref = task_metrics.clone();
+
         let task_id = uuid::Uuid::new_v4().to_string();
 
         self.log
@@ -217,29 +229,35 @@ impl Runtime {
         let selected_skills =
             skills::select_skills(description, self.skill_store.as_ref()).unwrap_or_default();
 
-        let answer = agent::run_loop(
-            description,
-            &task_id,
-            agent_backend,
-            answer_backend,
-            fast_backend,
-            self.registry.as_ref(),
-            self.client.clone(),
-            &memories,
-            &documents,
-            &selected_skills,
-            self.log.as_ref(),
-            Some(self.secrets.as_ref()),
-            progress,
-            conversation,
-            incoming,
-            formatting_hint,
-            Some(self.schedule_store.clone()),
-            Some(self.memory_store.clone()),
-            frontend_context,
-            frontend,
-        )
-        .await?;
+        // Run the agent loop inside a TASK_METRICS scope so backend model
+        // calls automatically record into the per-task metrics instance.
+        let loop_result = TASK_METRICS
+            .scope(task_metrics, async {
+                agent::run_loop(
+                    description,
+                    &task_id,
+                    agent_backend,
+                    answer_backend,
+                    fast_backend,
+                    self.registry.as_ref(),
+                    self.client.clone(),
+                    &memories,
+                    &documents,
+                    &selected_skills,
+                    self.log.as_ref(),
+                    Some(self.secrets.as_ref()),
+                    progress,
+                    conversation,
+                    incoming,
+                    formatting_hint,
+                    Some(self.schedule_store.clone()),
+                    Some(self.memory_store.clone()),
+                    frontend_context,
+                    frontend,
+                )
+                .await
+            })
+            .await?;
 
         self.log
             .emit(Event::TaskExecuted {
@@ -249,10 +267,12 @@ impl Runtime {
             .await;
 
         // Run memory writer in the background — don't block the user response.
+        // This runs outside the TASK_METRICS scope so its model calls don't
+        // count toward the task's metrics.
         let mem_store = self.memory_store.clone();
         let mem_router = self.router.clone();
         let mem_description = description.to_string();
-        let mem_answer = answer.clone();
+        let mem_answer = loop_result.answer.clone();
         let mem_progress = progress.cloned();
         tokio::spawn(async move {
             let fast = mem_router
@@ -294,7 +314,16 @@ impl Runtime {
             }
         });
 
-        Ok(answer)
+        Ok(TaskResult {
+            answer: loop_result.answer,
+            metrics: TaskMetrics {
+                wall_time: task_start.elapsed(),
+                steps: loop_result.steps,
+                tool_calls: loop_result.tool_calls,
+                code_runs: loop_result.code_runs,
+                model_roles: task_metrics_ref.summary(),
+            },
+        })
     }
 }
 

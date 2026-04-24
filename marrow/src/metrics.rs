@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::fmt;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Default)]
@@ -15,12 +16,19 @@ pub struct Metrics {
     roles: Mutex<HashMap<String, RoleMetrics>>,
 }
 
+tokio::task_local! {
+    /// Per-task metrics instance set by `runtime::run_task()`.
+    /// Backends automatically record into this via `Metrics::record()`.
+    pub static TASK_METRICS: Arc<Metrics>;
+}
+
 impl Metrics {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn record(
+    /// Record metrics to this instance only (no task-local propagation).
+    fn record_local(
         &self,
         role: &str,
         duration: Duration,
@@ -33,6 +41,21 @@ impl Metrics {
         entry.total_duration += duration;
         entry.prompt_tokens += prompt_tokens;
         entry.completion_tokens += completion_tokens;
+    }
+
+    /// Record metrics to this instance and propagate to the per-task
+    /// task-local (if one is set).
+    pub fn record(
+        &self,
+        role: &str,
+        duration: Duration,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+    ) {
+        self.record_local(role, duration, prompt_tokens, completion_tokens);
+        let _ = TASK_METRICS.try_with(|m| {
+            m.record_local(role, duration, prompt_tokens, completion_tokens);
+        });
     }
 
     pub fn summary(&self) -> Vec<(String, RoleMetrics)> {
@@ -73,5 +96,101 @@ impl Metrics {
             "[total] {total_calls} calls, {total_secs:.1}s, {total_prompt} prompt tokens, {total_completion} completion tokens"
         );
         eprintln!("---");
+    }
+}
+
+/// Per-task performance metrics collected during a single agent run.
+#[derive(Debug, Clone, Default)]
+pub struct TaskMetrics {
+    /// Wall-clock time from task start to answer.
+    pub wall_time: Duration,
+    /// Number of agent loop iterations completed.
+    pub steps: u32,
+    /// Number of tool calls executed.
+    pub tool_calls: u32,
+    /// Number of inline code runs executed.
+    pub code_runs: u32,
+    /// Per-role model call statistics (timing + tokens).
+    pub model_roles: Vec<(String, RoleMetrics)>,
+}
+
+impl TaskMetrics {
+    /// Compact one-line summary suitable for Discord subtext or log output.
+    pub fn one_line(&self) -> String {
+        let mut parts = Vec::new();
+        parts.push(format!("{:.1}s", self.wall_time.as_secs_f64()));
+        parts.push(format!(
+            "{} {}",
+            self.steps,
+            if self.steps == 1 { "step" } else { "steps" }
+        ));
+
+        if self.tool_calls > 0 {
+            parts.push(format!(
+                "{} {}",
+                self.tool_calls,
+                if self.tool_calls == 1 {
+                    "tool"
+                } else {
+                    "tools"
+                }
+            ));
+        }
+        if self.code_runs > 0 {
+            parts.push(format!("{} code", self.code_runs));
+        }
+
+        let mut total_tokens = 0u64;
+        for (role, m) in &self.model_roles {
+            parts.push(format!(
+                "{role} {}x{:.1}s",
+                m.calls,
+                m.total_duration.as_secs_f64()
+            ));
+            total_tokens += m.prompt_tokens + m.completion_tokens;
+        }
+
+        if total_tokens > 0 {
+            parts.push(format_tokens(total_tokens));
+        }
+
+        parts.join(" · ")
+    }
+
+    /// Verbose multi-line display for CLI stderr.
+    pub fn display(&self) {
+        eprintln!("\n--- Task Metrics ---");
+        eprintln!("Wall time: {:.1}s", self.wall_time.as_secs_f64());
+        eprintln!(
+            "Steps: {}, Tool calls: {}, Code runs: {}",
+            self.steps, self.tool_calls, self.code_runs
+        );
+        for (role, m) in &self.model_roles {
+            eprintln!(
+                "[{role}] {} calls, {:.1}s, {} prompt / {} completion tokens",
+                m.calls,
+                m.total_duration.as_secs_f64(),
+                m.prompt_tokens,
+                m.completion_tokens
+            );
+        }
+        eprintln!("---");
+    }
+}
+
+impl fmt::Display for TaskMetrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.one_line())
+    }
+}
+
+/// Format a token count compactly (e.g. 1234 → "1.2k tokens").
+fn format_tokens(count: u64) -> String {
+    if count >= 1_000_000 {
+        format!("{:.1}M tokens", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}k tokens", count as f64 / 1_000.0)
+    } else {
+        format!("{count} tokens")
     }
 }

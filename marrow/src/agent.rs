@@ -12,6 +12,15 @@ use crate::secrets::Secrets;
 use crate::session::Message;
 use crate::tool::{FrontendContext, ToolContext, ToolRegistry};
 
+/// Result of a single agent loop run, returned to the runtime layer.
+#[derive(Debug, Clone)]
+pub struct LoopResult {
+    pub answer: String,
+    pub steps: u32,
+    pub tool_calls: u32,
+    pub code_runs: u32,
+}
+
 /// Structured progress updates from the agent loop.
 /// Discord renders these as emoji reactions; CLI prints via `Display`.
 #[derive(Debug, Clone)]
@@ -605,6 +614,18 @@ fn extract_lua_block(text: &str) -> Option<String> {
     }
 }
 
+fn loop_stats(history: &[StepResult]) -> (u32, u32) {
+    let tool_calls = history
+        .iter()
+        .filter(|s| matches!(s.action, Action::CallTool { .. }))
+        .count() as u32;
+    let code_runs = history
+        .iter()
+        .filter(|s| matches!(s.action, Action::RunCode { .. }))
+        .count() as u32;
+    (tool_calls, code_runs)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_loop(
     task: &str,
@@ -627,7 +648,7 @@ pub async fn run_loop(
     memory_store: Option<Arc<crate::memory::MemoryStore>>,
     frontend_context: Option<FrontendContext>,
     frontend: &str,
-) -> Result<String, Box<dyn Error + Send + Sync>> {
+) -> Result<LoopResult, Box<dyn Error + Send + Sync>> {
     let emit = |update: ProgressUpdate| {
         if let Some(tx) = progress {
             let _ = tx.send(update);
@@ -1066,7 +1087,13 @@ pub async fn run_loop(
                 // Fall back to format_answer only for empty answers (e.g.
                 // model said "answer" but left text blank).
                 if !text.trim().is_empty() {
-                    return Ok(text.clone());
+                    let (tool_calls, code_runs) = loop_stats(&history);
+                    return Ok(LoopResult {
+                        answer: text.clone(),
+                        steps: step,
+                        tool_calls,
+                        code_runs,
+                    });
                 }
 
                 if !history.is_empty() {
@@ -1083,8 +1110,14 @@ pub async fn run_loop(
                     registry,
                     formatting_hint,
                 )
-                .await;
-                return answer;
+                .await?;
+                let (tool_calls, code_runs) = loop_stats(&history);
+                return Ok(LoopResult {
+                    answer,
+                    steps: step,
+                    tool_calls,
+                    code_runs,
+                });
             }
         }
     }
@@ -1099,7 +1132,7 @@ pub async fn run_loop(
         success: false,
         finding: None,
     });
-    format_answer(
+    let answer = format_answer(
         task,
         memories,
         documents,
@@ -1110,7 +1143,14 @@ pub async fn run_loop(
         registry,
         formatting_hint,
     )
-    .await
+    .await?;
+    let (tool_calls, code_runs) = loop_stats(&history);
+    Ok(LoopResult {
+        answer,
+        steps: MAX_AGENT_STEPS,
+        tool_calls,
+        code_runs,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -249,10 +249,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .run_task(&prompt, "cli", &[], Some(&progress_tx), None, None, None)
             .await
         {
-            Ok(output) => {
+            Ok(result) => {
                 drop(progress_tx);
                 let _ = progress_handle.await;
-                println!("{output}");
+                println!("{}", result.answer);
+                if verbose {
+                    result.metrics.display();
+                }
             }
             Err(e) => {
                 drop(progress_tx);
@@ -307,13 +310,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 )
                 .await
             {
-                Ok(text) => {
+                Ok(result) => {
                     drop(progress_tx);
                     let _ = progress_handle.await;
-                    println!("\n{text}\n");
+                    println!("\n{}\n", result.answer);
+                    if verbose {
+                        result.metrics.display();
+                    }
 
                     session.append(Message::user(input));
-                    session.append(Message::assistant(&text));
+                    session.append(Message::assistant(&result.answer));
 
                     if session.needs_summarization()
                         && let Err(e) = session.summarize(fast_backend).await
