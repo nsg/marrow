@@ -58,6 +58,7 @@ pub enum Event {
     DocumentsUpdated {
         documents: u32,
         promoted: u32,
+        deleted: u32,
     },
     SkillsGenerated {
         count: u32,
@@ -208,8 +209,11 @@ impl EventLog {
             Event::DocumentsUpdated {
                 documents,
                 promoted,
+                deleted,
             } => {
-                eprintln!("[janitor] updated {documents} document(s), promoted {promoted} fact(s)");
+                eprintln!(
+                    "[janitor] updated {documents} document(s), promoted {promoted} fact(s), removed {deleted} document(s)"
+                );
             }
             Event::SkillsGenerated { count } => {
                 eprintln!("[janitor] generated {count} skill(s)");

@@ -94,16 +94,21 @@ impl Runtime {
 
         // One-time migration: move living documents from memory/ to knowledge/
         let memory_path_buf = PathBuf::from(&options.memory_path);
-        if !knowledge_dir.exists() {
+        if !knowledge_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&memory_path_buf)
+        {
             let mut migrated = false;
-            for (name, _) in memory_documents::DOCUMENT_FILES {
-                let src = memory_path_buf.join(name);
-                if src.exists() {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "md")
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
                     if !migrated {
                         std::fs::create_dir_all(&knowledge_dir)?;
                         migrated = true;
                     }
-                    std::fs::rename(&src, knowledge_dir.join(name))?;
+                    let name = name.to_string();
+                    std::fs::rename(&path, knowledge_dir.join(&name))?;
                     eprintln!("[marrow] migrated {name} from memory/ to knowledge/");
                 }
             }
