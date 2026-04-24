@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::path::Path;
 use std::time::Duration;
 
 use tokio::time::sleep;
@@ -686,6 +687,7 @@ pub async fn run_once(
     log: &EventLog,
     builtins: &[BuiltinInfo],
     store: &MemoryStore,
+    knowledge_dir: &Path,
     skill_store: &crate::skills::SkillStore,
     tools: &[crate::tool::ToolInfo],
 ) -> Result<u32, Box<dyn Error + Send + Sync>> {
@@ -709,12 +711,14 @@ pub async fn run_once(
         Err(e) => eprintln!("[janitor] memory cleanup error: {e}"),
     }
 
-    match crate::memory_documents::generate_documents(store, backend, log).await {
+    match crate::memory_documents::generate_documents(store, knowledge_dir, backend, log).await {
         Ok(_) => {}
         Err(e) => eprintln!("[janitor] document generation error: {e}"),
     }
 
-    match crate::skills::generate_skills(skill_store, store, tools, backend, log).await {
+    match crate::skills::generate_skills(skill_store, store, knowledge_dir, tools, backend, log)
+        .await
+    {
         Ok(_) => {}
         Err(e) => eprintln!("[janitor] skill generation error: {e}"),
     }
@@ -729,6 +733,7 @@ pub async fn run(
     log: &EventLog,
     builtins: &[BuiltinInfo],
     store: &MemoryStore,
+    knowledge_dir: &Path,
     skill_store: &crate::skills::SkillStore,
     tools: &[crate::tool::ToolInfo],
 ) {
@@ -770,7 +775,14 @@ pub async fn run(
 
             // Generate/update living documents (~100s after idle)
             if !documents_backed_off && idle_cycles == 20 {
-                match crate::memory_documents::generate_documents(store, backend, log).await {
+                match crate::memory_documents::generate_documents(
+                    store,
+                    knowledge_dir,
+                    backend,
+                    log,
+                )
+                .await
+                {
                     Ok(_) => documents_backed_off = true,
                     Err(e) => eprintln!("[janitor] document generation error: {e}"),
                 }
@@ -778,7 +790,15 @@ pub async fn run(
 
             // Generate/update skills (~125s after idle)
             if !skills_backed_off && idle_cycles == 25 {
-                match crate::skills::generate_skills(skill_store, store, tools, backend, log).await
+                match crate::skills::generate_skills(
+                    skill_store,
+                    store,
+                    knowledge_dir,
+                    tools,
+                    backend,
+                    log,
+                )
+                .await
                 {
                     Ok(_) => skills_backed_off = true,
                     Err(e) => eprintln!("[janitor] skill generation error: {e}"),

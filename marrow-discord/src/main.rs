@@ -391,6 +391,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .unwrap_or_else(|| "events.jsonl".to_string())
     });
     let verbose = cli.verbose || discord.verbose;
+    let knowledge_path = std::path::Path::new(&memory_path)
+        .parent()
+        .unwrap_or(std::path::Path::new(""))
+        .join("knowledge")
+        .to_string_lossy()
+        .into_owned();
     let scheduler_config = config.scheduler.as_ref();
     let schedule_path = scheduler_config
         .map(|s| s.schedules_path().to_string())
@@ -404,6 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             RuntimeOptions {
                 toolbox_path,
                 memory_path,
+                knowledge_path,
                 log_path,
                 verbose,
                 secrets_path: "secrets.toml".to_string(),

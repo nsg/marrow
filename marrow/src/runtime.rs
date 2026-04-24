@@ -25,6 +25,7 @@ use crate::toolbox::Toolbox;
 pub struct RuntimeOptions {
     pub toolbox_path: String,
     pub memory_path: String,
+    pub knowledge_path: String,
     pub log_path: String,
     pub verbose: bool,
     pub secrets_path: String,
@@ -37,6 +38,7 @@ pub struct Runtime {
     router: Arc<ModelRouter>,
     registry: Arc<ToolRegistry>,
     memory_store: Arc<MemoryStore>,
+    knowledge_dir: PathBuf,
     schedule_store: Arc<ScheduleStore>,
     skill_store: Arc<SkillStore>,
     client: Arc<Client>,
@@ -75,11 +77,29 @@ impl Runtime {
         crate::tools::register_all(&mut registry);
         let registry = Arc::new(registry);
         let memory_store = Arc::new(MemoryStore::new(&options.memory_path));
+        let knowledge_dir = PathBuf::from(&options.knowledge_path);
         let schedule_store = Arc::new(ScheduleStore::new(&options.schedule_path));
         let skill_store = Arc::new(SkillStore::new(&options.skills_path));
         let log =
             Arc::new(EventLog::new(Some(PathBuf::from(&options.log_path)), options.verbose).await?);
         let secrets = Arc::new(Secrets::load_or_empty(&options.secrets_path));
+
+        // One-time migration: move living documents from memory/ to knowledge/
+        let memory_path_buf = PathBuf::from(&options.memory_path);
+        if !knowledge_dir.exists() {
+            let mut migrated = false;
+            for (name, _) in memory_documents::DOCUMENT_FILES {
+                let src = memory_path_buf.join(name);
+                if src.exists() {
+                    if !migrated {
+                        std::fs::create_dir_all(&knowledge_dir)?;
+                        migrated = true;
+                    }
+                    std::fs::rename(&src, knowledge_dir.join(name))?;
+                    eprintln!("[marrow] migrated {name} from memory/ to knowledge/");
+                }
+            }
+        }
 
         if options.spawn_janitor {
             let janitor_backend = config
@@ -89,6 +109,7 @@ impl Runtime {
             let janitor_log = log.clone();
             let janitor_builtins = registry.builtin_info();
             let janitor_memory = MemoryStore::new(&options.memory_path);
+            let janitor_knowledge = knowledge_dir.clone();
             let janitor_skills = SkillStore::new(&options.skills_path);
             let janitor_tools = registry.list_all();
             tokio::spawn(async move {
@@ -98,6 +119,7 @@ impl Runtime {
                     &janitor_log,
                     &janitor_builtins,
                     &janitor_memory,
+                    &janitor_knowledge,
                     &janitor_skills,
                     &janitor_tools,
                 )
@@ -109,6 +131,7 @@ impl Runtime {
             router,
             registry,
             memory_store,
+            knowledge_dir,
             schedule_store,
             skill_store,
             client,
@@ -150,6 +173,7 @@ impl Runtime {
             self.log.as_ref(),
             &builtins,
             self.memory_store.as_ref(),
+            &self.knowledge_dir,
             self.skill_store.as_ref(),
             &tools,
         )
@@ -189,7 +213,7 @@ impl Runtime {
             .or_else(|_| self.router.backend("fast"))?;
         let memories =
             load_relevant_memories(description, self.memory_store.as_ref(), fast_backend).await;
-        let documents = memory_documents::list_documents(self.memory_store.dir());
+        let documents = memory_documents::list_documents(&self.knowledge_dir);
         let selected_skills =
             skills::select_skills(description, self.skill_store.as_ref()).unwrap_or_default();
 

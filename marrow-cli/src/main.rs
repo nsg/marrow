@@ -158,11 +158,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let config = RouterConfig::from_file(&cli.config)?;
     let spawn_janitor = cli.daemon;
+    let knowledge_path = std::path::Path::new(&cli.memory)
+        .parent()
+        .unwrap_or(std::path::Path::new(""))
+        .join("knowledge")
+        .to_string_lossy()
+        .into_owned();
     let runtime = Runtime::from_config(
         &config,
         RuntimeOptions {
             toolbox_path: cli.toolbox.clone(),
             memory_path: cli.memory.clone(),
+            knowledge_path,
             log_path: cli.log.clone(),
             verbose: cli.verbose,
             secrets_path: "secrets.toml".to_string(),

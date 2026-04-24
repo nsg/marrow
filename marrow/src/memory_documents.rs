@@ -67,6 +67,7 @@ pub fn list_documents(dir: &Path) -> Vec<(String, String)> {
 /// Returns (documents_updated, facts_promoted).
 pub async fn generate_documents(
     store: &MemoryStore,
+    knowledge_dir: &Path,
     backend: &dyn ModelBackend,
     log: &EventLog,
 ) -> Result<(u32, u32), Box<dyn Error + Send + Sync>> {
@@ -75,7 +76,7 @@ pub async fn generate_documents(
         return Ok((0, 0));
     }
 
-    let dir = store.dir();
+    let dir = knowledge_dir;
 
     // Build documents section
     let mut documents_section = String::new();
@@ -111,8 +112,7 @@ pub async fn generate_documents(
         if let Some(content) = extract_block(&response, &tag) {
             let trimmed = content.trim();
             if !trimmed.is_empty() {
-                // Ensure the memory directory exists for writing document files
-                store.ensure_dir()?;
+                std::fs::create_dir_all(dir)?;
                 std::fs::write(dir.join(name), trimmed)?;
                 docs_updated += 1;
             }

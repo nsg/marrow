@@ -192,11 +192,12 @@ pub fn parse_skill_blocks(response: &str) -> Vec<(String, String)> {
 pub async fn generate_skills(
     skill_store: &SkillStore,
     store: &MemoryStore,
+    knowledge_dir: &Path,
     tools: &[ToolInfo],
     backend: &dyn ModelBackend,
     log: &EventLog,
 ) -> Result<u32, Box<dyn Error + Send + Sync>> {
-    let documents = memory_documents::list_documents(store.dir());
+    let documents = memory_documents::list_documents(knowledge_dir);
     let facts = store.list().unwrap_or_default();
     if documents.is_empty() && facts.is_empty() {
         // No knowledge base yet — nothing to build skills from

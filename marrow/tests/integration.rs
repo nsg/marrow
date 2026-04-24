@@ -730,8 +730,9 @@ async fn janitor_cleanup_memories_resolves_conflict() {
 
 #[tokio::test]
 async fn janitor_generate_documents_promotes_facts() {
-    let dir = temp_dir("marrow_docs");
-    let store = MemoryStore::new(dir.path());
+    let mem_dir = temp_dir("marrow_docs");
+    let knowledge_dir = temp_dir("marrow_knowledge");
+    let store = MemoryStore::new(mem_dir.path());
     let log = noop_log().await;
 
     let fact = Memory::new("User name is Alice", MemorySource::Auto);
@@ -744,17 +745,17 @@ async fn janitor_generate_documents_promotes_facts() {
     let backend = MockBackend::new(vec![&response]);
 
     let (docs_updated, facts_promoted) =
-        marrow::memory_documents::generate_documents(&store, &backend, &log)
+        marrow::memory_documents::generate_documents(&store, knowledge_dir.path(), &backend, &log)
             .await
             .unwrap();
     assert_eq!(docs_updated, 1);
     assert_eq!(facts_promoted, 1);
 
-    // Verify document was written
-    let doc = std::fs::read_to_string(dir.path().join("profile.md")).unwrap();
+    // Verify document was written to knowledge dir
+    let doc = std::fs::read_to_string(knowledge_dir.path().join("profile.md")).unwrap();
     assert!(doc.contains("Alice"));
 
-    // Verify fact was deleted
+    // Verify fact was deleted from memory store
     let remaining = store.list().unwrap();
     assert!(remaining.is_empty());
 }
@@ -762,14 +763,15 @@ async fn janitor_generate_documents_promotes_facts() {
 #[tokio::test]
 async fn janitor_generate_skills_creates_file() {
     let mem_dir = temp_dir("marrow_mem");
+    let knowledge_dir = temp_dir("marrow_knowledge");
     let skill_dir = temp_dir("marrow_skills");
     let log = noop_log().await;
     let skill_store = SkillStore::new(skill_dir.path());
     let mem_store = MemoryStore::new(mem_dir.path());
 
-    // Create a living document so skill generation has context
+    // Create a living document in the knowledge dir
     std::fs::write(
-        mem_dir.path().join("profile.md"),
+        knowledge_dir.path().join("profile.md"),
         "# Profile\n- Name: Alice\n- Uses Nextcloud",
     )
     .unwrap();
@@ -778,9 +780,16 @@ async fn janitor_generate_skills_creates_file() {
         "```skill:check-calendar.md\n# Check Calendar\n1. Use nextcloud_events tool\n```";
     let backend = MockBackend::new(vec![response]);
 
-    let count = marrow::skills::generate_skills(&skill_store, &mem_store, &[], &backend, &log)
-        .await
-        .unwrap();
+    let count = marrow::skills::generate_skills(
+        &skill_store,
+        &mem_store,
+        knowledge_dir.path(),
+        &[],
+        &backend,
+        &log,
+    )
+    .await
+    .unwrap();
     assert_eq!(count, 1);
 
     let skills = skill_store.list().unwrap();
@@ -808,9 +817,17 @@ async fn janitor_generate_skills_from_facts_only() {
     let response = "```skill:deploy.md\n# Deploy\n1. SSH to deploy.example.com\n```";
     let backend = MockBackend::new(vec![response]);
 
-    let count = marrow::skills::generate_skills(&skill_store, &mem_store, &[], &backend, &log)
-        .await
-        .unwrap();
+    let knowledge_dir = temp_dir("marrow_knowledge");
+    let count = marrow::skills::generate_skills(
+        &skill_store,
+        &mem_store,
+        knowledge_dir.path(),
+        &[],
+        &backend,
+        &log,
+    )
+    .await
+    .unwrap();
     assert_eq!(count, 1);
 
     let skills = skill_store.list().unwrap();
