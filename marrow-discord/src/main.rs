@@ -173,6 +173,11 @@ impl EventHandler for Handler {
                     ProgressUpdate::MemoryCleared => {
                         let _ = user_msg.react(&http, reaction("♻️")).await;
                     }
+                    ProgressUpdate::Notification(text) => {
+                        for chunk in split_message(&text, 2000) {
+                            let _ = user_msg.channel_id.say(&http, chunk).await;
+                        }
+                    }
                 }
             }
             // Cleanup: remove temporary reactions (bot's own only)

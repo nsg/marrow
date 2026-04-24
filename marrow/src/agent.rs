@@ -29,6 +29,9 @@ pub enum ProgressUpdate {
     MemoryNew,     // 🧠
     MemoryUpdated, // 📝
     MemoryCleared, // ♻️
+
+    // Messages
+    Notification(String), // 💬 Intermediate message to user
 }
 
 impl std::fmt::Display for ProgressUpdate {
@@ -44,6 +47,7 @@ impl std::fmt::Display for ProgressUpdate {
             Self::MemoryNew => write!(f, "🧠 New memory"),
             Self::MemoryUpdated => write!(f, "📝 Memory updated"),
             Self::MemoryCleared => write!(f, "♻️ Memory cleaned"),
+            Self::Notification(msg) => write!(f, "💬 {msg}"),
         }
     }
 }
@@ -98,6 +102,9 @@ IMPORTANT: save_tool must be its own action — do NOT combine it with a ```lua 
 To remove a broken tool from the toolbox:
 {{"action": "remove_tool", "name": "tool_name"}}
 
+To send the user a progress update while you continue working (does NOT end the task):
+{{"action": "notify", "text": "status message"}}
+
 To give your final answer (this text is shown directly to the user — make it complete and well-formatted):
 {{"action": "answer", "text": "your complete answer to the user"}}
 
@@ -115,6 +122,7 @@ Rules:
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
 - The answer action text should be a natural language response, NOT a JSON action. It is sent directly to the user — include all relevant details from your findings.
 - CRITICAL: Every response MUST be either a JSON action or a ```lua block. Plain text without an action will be treated as your final answer and sent to the user immediately. Do NOT output bare text as a thinking or planning step — if you are not ready to answer, use a JSON action or ```lua block.
+- Use notify sparingly — only when the user would genuinely benefit from an intermediate update during a long multi-step task. Do NOT notify before every tool call.
 - If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling."#;
 
 /// Dynamic user prompt — changes every step with tools, memories, history, etc.
@@ -141,6 +149,9 @@ pub enum Action {
     },
     RemoveTool {
         name: String,
+    },
+    Notify {
+        text: String,
     },
     Answer {
         text: String,
@@ -427,6 +438,11 @@ pub fn parse_action(response: &str) -> Action {
                         return Action::RemoveTool { name };
                     }
                 }
+                "notify" => {
+                    if let Some(text) = raw.text.filter(|t| !t.trim().is_empty()) {
+                        return Action::Notify { text };
+                    }
+                }
                 "answer" => {
                     if let Some(text) = raw.text {
                         return Action::Answer {
@@ -500,6 +516,13 @@ fn format_action_short(action: &Action) -> String {
         Action::RunCode { .. } => "Ran inline Lua".to_string(),
         Action::SaveTool { name, .. } => format!("Saved tool \"{name}\""),
         Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
+        Action::Notify { text } => {
+            if text.len() > 60 {
+                format!("Notified user: \"{}...\"", &text[..60])
+            } else {
+                format!("Notified user: \"{text}\"")
+            }
+        }
         Action::Answer { fallback, .. } => {
             if *fallback {
                 "Answered (fallback — no action parsed)".to_string()
@@ -697,6 +720,14 @@ pub async fn run_loop(
                 }
                 Action::RemoveTool { name } => {
                     eprintln!("[agent] step {step}: parsed remove_tool \"{name}\"");
+                }
+                Action::Notify { text } => {
+                    let preview = if text.len() > 200 {
+                        format!("{}...", &text[..200])
+                    } else {
+                        text.clone()
+                    };
+                    eprintln!("[agent] step {step}: parsed notify — {preview}");
                 }
                 Action::Answer { text, fallback } => {
                     let preview = if text.len() > 200 {
@@ -947,6 +978,30 @@ pub async fn run_loop(
                     action,
                     output,
                     success: step_success,
+                    finding: None,
+                });
+            }
+
+            Action::Notify { text } => {
+                log.emit(Event::AgentAction {
+                    task_id: task_id.to_string(),
+                    step,
+                    action_type: "notify".to_string(),
+                    detail: if text.len() > 80 {
+                        format!("{}...", &text[..80])
+                    } else {
+                        text.clone()
+                    },
+                })
+                .await;
+
+                emit(ProgressUpdate::Notification(text.clone()));
+
+                history.push(StepResult {
+                    step,
+                    action,
+                    output: "Notification sent.".to_string(),
+                    success: true,
                     finding: None,
                 });
             }
@@ -1279,5 +1334,38 @@ mod tests {
         assert!(!looks_incomplete("The weather in Tokyo is 22°C and sunny."));
         assert!(!looks_incomplete("Here are your results: done."));
         assert!(!looks_incomplete("No data found for that query."));
+    }
+
+    #[test]
+    fn parse_notify_action() {
+        let input = r#"{"action": "notify", "text": "Working on it..."}"#;
+        match parse_action(input) {
+            Action::Notify { text } => {
+                assert_eq!(text, "Working on it...");
+            }
+            other => panic!("expected Notify, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_notify_without_text() {
+        let input = r#"{"action": "notify"}"#;
+        match parse_action(input) {
+            Action::Answer { fallback, .. } => {
+                assert!(fallback, "missing text should fall through to fallback");
+            }
+            other => panic!("expected fallback Answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_notify_empty_text() {
+        let input = r#"{"action": "notify", "text": ""}"#;
+        match parse_action(input) {
+            Action::Answer { fallback, .. } => {
+                assert!(fallback, "empty text should fall through to fallback");
+            }
+            other => panic!("expected fallback Answer, got {other:?}"),
+        }
     }
 }
