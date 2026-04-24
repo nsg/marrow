@@ -142,7 +142,9 @@ mod tests {
             async move {
                 let n = c.fetch_add(1, Ordering::SeqCst);
                 if n < 2 {
-                    Err(format!("openai returned 500 Internal Server Error: overloaded").into())
+                    Err("openai returned 500 Internal Server Error: overloaded"
+                        .to_string()
+                        .into())
                 } else {
                     Ok::<_, Box<dyn Error + Send + Sync>>("ok".to_string())
                 }
