@@ -25,6 +25,7 @@ impl Tool for StathostTool {
             ParamDef::required("TOKEN"),
             ParamDef::required("BUCKET"),
             ParamDef::optional("LOCAL_FILE"),
+            ParamDef::optional("CONTENT"),
             ParamDef::optional("REMOTE_PATH"),
         ]
     }
@@ -63,15 +64,15 @@ impl Tool for StathostTool {
             match action {
                 "list" => list_bucket(&ctx, base_url, token, bucket).await,
                 "upload" => {
-                    let local_file = match params.get("LOCAL_FILE") {
-                        Some(f) if !f.is_empty() => f.as_str(),
-                        _ => return Ok(json!({"error": "upload requires LOCAL_FILE parameter"})),
-                    };
                     let remote_path = match params.get("REMOTE_PATH") {
                         Some(p) if !p.is_empty() => sanitize_remote_path(p),
                         _ => return Ok(json!({"error": "upload requires REMOTE_PATH parameter"})),
                     };
-                    upload_file(&ctx, base_url, token, bucket, local_file, remote_path).await
+                    let upload = match resolve_upload_source(&params).await {
+                        Ok(upload) => upload,
+                        Err(error) => return Ok(json!({"error": error})),
+                    };
+                    upload_file(&ctx, base_url, token, bucket, upload, remote_path).await
                 }
                 "delete" => {
                     let remote_path = match params.get("REMOTE_PATH") {
@@ -120,23 +121,16 @@ async fn upload_file(
     base_url: &str,
     token: &str,
     bucket: &str,
-    local_file: &str,
+    upload: UploadSource,
     remote_path: &str,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    let file_bytes = match tokio::fs::read(local_file).await {
-        Ok(b) => b,
-        Err(e) => {
-            return Ok(json!({"error": format!("failed to read file {local_file}: {e}")}));
-        }
-    };
-
     let url = format!("{base_url}/{bucket}/{remote_path}");
 
     let resp = match ctx
         .client
         .put(&url)
         .bearer_auth(token)
-        .body(file_bytes)
+        .body(upload.bytes)
         .send()
         .await
     {
@@ -198,9 +192,35 @@ fn sanitize_remote_path(remote_path: &str) -> &str {
     remote_path.trim_start_matches('/')
 }
 
+#[derive(Debug)]
+struct UploadSource {
+    bytes: Vec<u8>,
+}
+
+async fn resolve_upload_source(params: &HashMap<String, String>) -> Result<UploadSource, String> {
+    if let Some(content) = params.get("CONTENT") {
+        return Ok(UploadSource {
+            bytes: content.as_bytes().to_vec(),
+        });
+    }
+
+    let local_file = match params.get("LOCAL_FILE") {
+        Some(f) if !f.is_empty() => f,
+        _ => return Err("upload requires CONTENT or LOCAL_FILE parameter".to_string()),
+    };
+
+    let file_bytes = tokio::fs::read(local_file)
+        .await
+        .map_err(|e| format!("failed to read file {local_file}: {e}"))?;
+
+    Ok(UploadSource { bytes: file_bytes })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn sanitize_base_url_removes_trailing_slashes() {
@@ -228,5 +248,75 @@ mod tests {
     fn sanitize_remote_path_removes_leading_slashes() {
         assert_eq!(sanitize_remote_path("path/file.txt"), "path/file.txt");
         assert_eq!(sanitize_remote_path("/path/file.txt"), "path/file.txt");
+    }
+
+    #[tokio::test]
+    async fn resolve_upload_source_prefers_content_argument() {
+        let mut params = HashMap::new();
+        params.insert("CONTENT".to_string(), "hello world".to_string());
+
+        let upload = resolve_upload_source(&params).await.unwrap();
+
+        assert_eq!(upload.bytes, b"hello world");
+    }
+
+    #[tokio::test]
+    async fn resolve_upload_source_allows_empty_content() {
+        let mut params = HashMap::new();
+        params.insert("CONTENT".to_string(), String::new());
+        params.insert(
+            "LOCAL_FILE".to_string(),
+            "/tmp/should-not-be-used-when-content-is-present".to_string(),
+        );
+
+        let upload = resolve_upload_source(&params).await.unwrap();
+
+        assert!(upload.bytes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resolve_upload_source_reads_local_file() {
+        let path = std::env::temp_dir().join(format!(
+            "marrow-stathost-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, b"test").unwrap();
+
+        let mut params = HashMap::new();
+        params.insert("LOCAL_FILE".to_string(), path.to_str().unwrap().to_string());
+
+        let upload = resolve_upload_source(&params).await.unwrap();
+        assert_eq!(upload.bytes, b"test");
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolve_upload_source_rejects_missing_inputs() {
+        let params = HashMap::new();
+
+        assert_eq!(
+            resolve_upload_source(&params).await.unwrap_err(),
+            "upload requires CONTENT or LOCAL_FILE parameter"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_upload_source_reports_missing_file() {
+        let missing = format!(
+            "/tmp/marrow-stathost-missing-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let mut params = HashMap::new();
+        params.insert("LOCAL_FILE".to_string(), missing.clone());
+
+        let error = resolve_upload_source(&params).await.unwrap_err();
+        assert!(error.starts_with(&format!("failed to read file {missing}: ")));
     }
 }
