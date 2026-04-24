@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::metrics::Metrics;
 use crate::model::{CompletionResult, ModelBackend};
+use crate::retry::{RetryConfig, is_retryable_error, retry_with_backoff};
 use crate::session::Message;
 
 #[derive(Debug, Serialize)]
@@ -85,23 +86,28 @@ impl OllamaBackend {
             stream: false,
         };
 
-        let mut req = self.client.post(&url).json(&body);
-
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
-        }
+        let config = RetryConfig::default();
 
         let start = Instant::now();
-        let resp = req.send().await?;
+        let resp_text = retry_with_backoff(&config, is_retryable_error, || {
+            let mut req = self.client.post(&url).json(&body);
+            if let Some(key) = &self.api_key {
+                req = req.bearer_auth(key);
+            }
+            async move {
+                let resp = req.send().await?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(format!("ollama returned {status}: {text}").into());
+                }
+                resp.text().await.map_err(|e| e.into())
+            }
+        })
+        .await?;
         let duration = start.elapsed();
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("ollama returned {status}: {text}").into());
-        }
-
-        let chat_resp: ChatResponse = resp.json().await?;
+        let chat_resp: ChatResponse = serde_json::from_str(&resp_text)?;
 
         if let Some(ref metrics) = self.metrics {
             metrics.record(

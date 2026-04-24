@@ -10,6 +10,7 @@ pub mod memory_provider;
 pub mod memory_writer;
 pub mod metrics;
 pub mod model;
+pub mod retry;
 pub mod router;
 pub mod runtime;
 pub mod sandbox;
