@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4.6.0", features = ["derive"] }
 marrow = { path = "../marrow" }
-serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "rustls_backend"] }
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "native_tls_backend"] }
 reqwest = { version = "0.13.2", features = ["json"] }
 serde_json = "1.0.149"
 tokio = { version = "1.50.0", features = ["full"] }
