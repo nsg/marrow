@@ -2,6 +2,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use crate::events::{Event, EventLog};
+use crate::memory::MemoryStore;
 use crate::memory_documents;
 use crate::model::ModelBackend;
 use crate::tool::ToolInfo;
@@ -118,6 +119,10 @@ const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for a workflow a
 
 {documents}
 
+## Individual memory facts
+
+{facts}
+
 ## Available tools
 
 {tools}
@@ -128,7 +133,7 @@ const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for a workflow a
 
 ## Instructions
 
-Create markdown skill files that combine knowledge from the documents with tool references into step-by-step procedural guides. Each skill should help the agent accomplish a specific category of task.
+Create markdown skill files that combine knowledge from the documents and individual facts with tool references into step-by-step procedural guides. Each skill should help the agent accomplish a specific category of task.
 
 Good skills:
 - "Check calendar" — combines calendar service URL + authentication details + the right tool to call
@@ -143,6 +148,7 @@ Output each skill as a fenced block:
 
 Rules:
 - Only create skills when there's enough knowledge AND relevant tools to make them useful
+- Individual facts may contain specific details worth embedding in skills
 - Skill filenames should be short, descriptive, kebab-case (e.g. check-calendar.md)
 - Include specific parameter values the agent should use (URLs, service names, etc.)
 - Reference tools by name so the agent knows what to call
@@ -185,22 +191,37 @@ pub fn parse_skill_blocks(response: &str) -> Vec<(String, String)> {
 /// Returns the number of skills created/updated.
 pub async fn generate_skills(
     skill_store: &SkillStore,
-    memory_dir: &Path,
+    store: &MemoryStore,
     tools: &[ToolInfo],
     backend: &dyn ModelBackend,
     log: &EventLog,
 ) -> Result<u32, Box<dyn Error + Send + Sync>> {
-    let documents = memory_documents::list_documents(memory_dir);
-    if documents.is_empty() {
+    let documents = memory_documents::list_documents(store.dir());
+    let facts = store.list().unwrap_or_default();
+    if documents.is_empty() && facts.is_empty() {
         // No knowledge base yet — nothing to build skills from
         return Ok(0);
     }
 
-    let documents_section = documents
-        .iter()
-        .map(|(name, content)| format!("### {name}\n{content}"))
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let documents_section = if documents.is_empty() {
+        "(no living documents yet)".to_string()
+    } else {
+        documents
+            .iter()
+            .map(|(name, content)| format!("### {name}\n{content}"))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
+
+    let facts_section = if facts.is_empty() {
+        "(no individual facts)".to_string()
+    } else {
+        facts
+            .iter()
+            .map(|m| format!("- {}", m.fact))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
 
     let tools_section = if tools.is_empty() {
         "(no tools available)".to_string()
@@ -225,6 +246,7 @@ pub async fn generate_skills(
 
     let prompt = SKILL_GENERATION_PROMPT
         .replace("{documents}", &documents_section)
+        .replace("{facts}", &facts_section)
         .replace("{tools}", &tools_section)
         .replace("{existing_skills}", &existing_section);
 

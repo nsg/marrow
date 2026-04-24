@@ -765,6 +765,7 @@ async fn janitor_generate_skills_creates_file() {
     let skill_dir = temp_dir("marrow_skills");
     let log = noop_log().await;
     let skill_store = SkillStore::new(skill_dir.path());
+    let mem_store = MemoryStore::new(mem_dir.path());
 
     // Create a living document so skill generation has context
     std::fs::write(
@@ -777,7 +778,7 @@ async fn janitor_generate_skills_creates_file() {
         "```skill:check-calendar.md\n# Check Calendar\n1. Use nextcloud_events tool\n```";
     let backend = MockBackend::new(vec![response]);
 
-    let count = marrow::skills::generate_skills(&skill_store, mem_dir.path(), &[], &backend, &log)
+    let count = marrow::skills::generate_skills(&skill_store, &mem_store, &[], &backend, &log)
         .await
         .unwrap();
     assert_eq!(count, 1);
@@ -786,6 +787,36 @@ async fn janitor_generate_skills_creates_file() {
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].0, "check-calendar.md");
     assert!(skills[0].1.contains("Check Calendar"));
+}
+
+#[tokio::test]
+async fn janitor_generate_skills_from_facts_only() {
+    let mem_dir = temp_dir("marrow_mem");
+    let skill_dir = temp_dir("marrow_skills");
+    let log = noop_log().await;
+    let skill_store = SkillStore::new(skill_dir.path());
+    let mem_store = MemoryStore::new(mem_dir.path());
+
+    // Save a fact without any living documents
+    mem_store
+        .save(&Memory::new(
+            "Deploy target is deploy.example.com via SSH",
+            MemorySource::User,
+        ))
+        .unwrap();
+
+    let response = "```skill:deploy.md\n# Deploy\n1. SSH to deploy.example.com\n```";
+    let backend = MockBackend::new(vec![response]);
+
+    let count = marrow::skills::generate_skills(&skill_store, &mem_store, &[], &backend, &log)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+
+    let skills = skill_store.list().unwrap();
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].0, "deploy.md");
+    assert!(skills[0].1.contains("Deploy"));
 }
 
 // ---------------------------------------------------------------------------
