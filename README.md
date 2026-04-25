@@ -1,186 +1,78 @@
 <div align="center">
   <img src="docs/logo.svg" alt="Marrow broken bone logo" width="250">
   <h1>Marrow</h1>
-  <p>A lean, open source agent framework for personal and small business workflow automation.</p>
+  <p>A lean, open source agent framework for personal workflow automation.</p>
 </div>
 
 ## About
 
-Marrow is a model-agnostic agent framework with a two-tier tool system: reliable built-in Rust tools for core workflows, plus runtime-generated Lua tools for on-the-fly integration. Self-heals when things break, keeps everything observable. No black boxes.
+Marrow is my take on a simple agent. It starts off quite bare with only a basic understanding of the world. It has a few built-in tools, but most will be written by itself during its lifetime. It learns from your conversation, building up a searchable memory of facts and a set of skills it can reuse.
 
-It understands intent through conversation, assembles lean per-task context, and acts — using built-in tools or generating sandboxed Lua connectors on the fly for any service it needs to reach. Connect it to Discord, run it from the terminal, or build your own frontend on the library.
+Marrow is built as three components: the library that contains most of the core logic, the CLI that you can use for one-off queries, scripting, or for agents to try Marrow out, and the Discord binary that is a Discord bot.
 
-## Features
+**PROJECT STATUS**: My personal playground, not ready for other people to use but if you like to try it out ... feel free. Expect a lot of breaking changes.
 
-- **Two-tier tool system** — built-in Rust tools for reliable core workflows, plus runtime-generated Lua tools for on-the-fly integration. Both unified behind `ToolRegistry` — the agent sees one list
-- **Adaptive agent loop** — the planner can answer directly, run inline Lua, reuse an existing tool (built-in or Lua), or generate a new one when needed
-- **Self-healing janitor** — background process reviews generated Lua tools, catches issues (hardcoded values, missing error handling, description mismatches), regenerates fixes, and escalates when it can't repair
-- **Tool composition** — tools call other tools via `run_tool()` in Lua, keeping composition logic in testable code with recursion depth capped at 5. Lua tools can call built-in tools and vice versa
-- **Working memory** — learns facts from interactions, recalls relevant context per task, avoids duplicates
-- **Conversation history** — interactive sessions maintain message history with automatic summarization
-- **Model routing** — role-based config maps runtime work to models (`default`, `fast`, `code`, with optional `agent` override), all via TOML
-- **Full transparency** — structured JSONL event log with progressive detail (`--verbose` for full stream)
-- **Multiple frontends** — the core is a library; the CLI and Discord bot are thin wrappers
+## Background
 
-## Architecture
+It started with [OpenClaw](https://github.com/openclaw/openclaw). I installed it and started to play with it a little and it was really fun and powerful. I liked the general concept but I felt that the entire thing was hard for me to grasp, and understand how it fit together. When it broke itself and I had no idea how to fix it, I started to tinker with a solution of my own.
 
-Marrow is a Cargo workspace with three crates:
+## Agent Loop
 
-```
-marrow/            Pure library — agent loop, sandbox, tool registry, memory, routing
-marrow-cli/        CLI binary (installed as `marrow`) — REPL and single-prompt mode
-marrow-discord/    Discord gateway bridge — responds to mentions and DMs
-```
+Here is a basic overview of the agent loop that is triggered when a message is sent in. Relevant memories and skills are pulled into context. The agent has access to built-in tools and tools created by previous agent loops written in Lua. The agent always has the option to write and run inline Lua code to execute logic. If the result is reusable, it may save it for future loops.
 
-The agent loop:
+![Agent Loop](docs/agent-loop.excalidraw.png)
 
-```
-User Input
-  → Runtime setup (router, tool registry, memory, event log, secrets, janitor)
-  → Memory Retrieval (select relevant facts)
-  → Agent Loop
-    → Call a built-in tool, or
-    → Reuse an existing Lua tool, or
-    → Run inline Lua in the sandbox, or
-    → Generate a new Lua tool and save it to the toolbox
-  → Answer formatting
-  → Response
-  → Memory Writer (auto-save new facts)
-```
+The message is simply the message you wrote, in Discord or at the CLI. If you have created a schedule, the message is whatever is written in the schedule's description. The message is sent into the loop that may look like this:
 
-| Component | Description |
-|---|---|
-| **Runtime** | Shared app setup used by the CLI and Discord frontends |
-| **Agent Loop** | Model plans step-by-step actions: call a tool, run inline Lua, save a tool, or answer |
-| **Tool Registry** | Unified view of all tools — merges built-in Rust tools with Lua toolbox. Agent queries one list |
-| **Built-in Tools** | Rust implementations in `marrow/src/tools/` — reliable, no model generation needed. Ships with: `rss_feed` |
-| **Lua Sandbox** | Secure runtime — all I/O through controlled Rust host functions (`http_get`, `http_post`, `json_parse`, `json_encode`, `log`, `run_tool`, `secret`) |
-| **Toolbox** | Directory of generated Lua scripts with TOML metadata |
-| **Janitor** | Async reviewer — validates Lua tools, regenerates on failure, escalates after 3 attempts |
-| **Working Memory** | JSON files (one fact per file), model-selected per task, auto-saved post-interaction |
-| **Session History** | Per-session message history with automatic summarization at threshold |
-| **Event Log** | JSONL append-only log of all runtime events |
-| **Model Router** | Role-based dispatch (fast/code/default) to Ollama and OpenAI-compatible backends |
+![Agent Loop](docs/agent-loop2.excalidraw.png)
 
-## Quick Start
+It can create long chains of model calls like this. There is a cap of 25 calls, but hitting it is rare. If the model has everything it needs in context (typically from memory), it may respond directly (`Message -> Model -> Answer`). This is of course rare with tools like this. I try to guide the system to generate tools and skills to make the chain as short as possible.
 
-```sh
-cargo build --workspace
-cp config.example.toml config.toml   # then edit with your API keys
+There are two ways into the agent loop. One is a message initiated by the user. The other is a scheduled task created by an earlier agent loop. The only way to break the loop is with a message back to the user. If we hit 25 steps, an answer is forced.
 
-# Interactive mode
-cargo run -p marrow-cli
+### Memories
 
-# Single prompt
-cargo run -p marrow-cli -- -p "What is the weather in Tokyo?"
+Memories are facts. They can be manipulated via tools during the agent run, or via the post-process memory management logic, where a non-blocking background task asks the model "is there anything we should remember from this exchange?".
 
-# Verbose mode (full event stream)
-cargo run -p marrow-cli -- --verbose -p "What time is it?"
-```
+During the agent loop, relevant memories are retrieved from the database and injected into the context. The janitor process maintains memories.
+
+### Skills
+
+Skills are documents created from memories, like "this is how to read the user's calendar". Skills are managed by the janitor process. Relevant skills are retrieved and included in the context.
+
+### Tools
+
+We have a few built-in tools written in Rust. They work as building blocks for the agent to build more complex tools on, or to use directly. The agent can also write sandboxed tools in Lua (and optionally save them).
+
+## Janitor
+
+The janitor is a background process that does various maintenance tasks. It maintains agent-written Lua tools, the memory and skills. For tools, it reviews them, regenerates fixes, and removes the ones it can't repair. For memories, it decomposes large blobs into atomic facts, backfills embeddings for new facts, deduplicates and resolves conflicts, and regenerates skills as memories accumulate. Note that in plain CLI mode you need `--janitor` for a one-off pass, or `--daemon` to keep it running in the background. Marrow Discord runs it automatically.
+
+![Janitor](docs/janitor.excalidraw.png)
+
+## Schedules
+
+Schedules are recurring (or one-shot) prompts that re-enter the agent loop on their own. They are created by the agent itself when you ask it to "remind me at 8am every weekday" it sets one up. Each schedule has a description (the prompt that gets re-run), a repeat spec (`daily`, `every_n_hours`, `weekly`, or `once`), and remembers which frontend (and channel) created it so the answer goes back to the right place. There is an overlap protection so a schedule never runs twice in parallel. Note that in plain CLI mode you need `--run-schedules` for a one-off pass, or `--daemon` to keep the heartbeat running in the background. Marrow Discord runs it automatically.
+
+## CLI
+
+Run with `--prompt` for one-shot use, or without it to drop into an interactive REPL that keeps conversation history and auto-summarizes once it grows. `cargo run -p marrow-cli -- --help` for the full list of flags. stdout is the response, stderr is progress and diagnostics.
 
 ## Discord Bot
 
-Marrow connects to Discord as a bot that responds to @mentions and DMs. Setup takes about 5 minutes.
-
-### Create the bot
-
-1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**
-2. Name it (e.g. "Marrow") and click **Create**
-
-**Make the bot private** (optional but recommended for personal use):
-
-3. Go to **Installation** in the left sidebar
-4. Set the Install Link to **None** and save
-5. Go to **Bot** in the left sidebar and uncheck **Public Bot**
-
-   You have to disable the install link first — otherwise Discord blocks it with a confusing "Cannot have install fields on a private application" error. With Public Bot off, only you can add the bot to servers.
-
-**Enable intents and grab your token:**
-
-6. Still on the **Bot** page, scroll to **Privileged Gateway Intents** and turn on **Message Content Intent** — this is required, without it the bot receives empty messages. Leave the other two intents off (not needed)
-7. Click **Reset Token** and copy the token. Despite the name, this generates your first token — you only see it once, so save it now
-
-> Your bot token is a secret. Do not commit it to version control or share it in chat.
-
-### Invite the bot to your server
-
-1. Go to **OAuth2** in the left sidebar, then scroll to **OAuth2 URL Generator**
-2. Under **Scopes**, tick `bot`
-3. Under **Bot Permissions**, tick:
-   - **View Channels** (under General Permissions)
-   - **Send Messages** (under Text Permissions)
-   - **Read Message History** (under Text Permissions)
-
-   Do not tick Administrator — the bot only needs these three.
-
-4. Copy the generated URL at the bottom, open it in your browser, and pick the server to add the bot to
-
-### Configure and run
-
-Add the `[discord]` section to your `config.toml`:
-
-```toml
-[discord]
-token = "paste-your-bot-token-here"
-```
-
-By default the bot only responds when @mentioned or in DMs. To have it respond to every message in specific channels, add their channel IDs:
-
-```toml
-[discord]
-token = "paste-your-bot-token-here"
-channels = [1234567890123456789]
-```
-
-To get a channel ID, enable **Developer Mode** in Discord settings (App Settings > Advanced), then right-click a channel and click **Copy Channel ID**.
-
-Other optional fields (shown with defaults):
-
-```toml
-toolbox = "toolbox"
-memory = "memory"
-log = "events.jsonl"
-verbose = false
-```
-
-Start the bot:
-
-```sh
-cargo run -p marrow-discord
-```
-
-You should see `[marrow-discord] connected as Marrow` (or whatever you named it). The bot now responds when @mentioned in a channel or messaged directly via DM.
+Marrow runs as a Discord bot that responds to @mentions and DMs. See [DISCORD.md](DISCORD.md) for full setup instructions.
 
 ## Configuration
 
-All configuration lives in `config.toml`. Three primary roles control the runtime, and you can optionally add an `agent` role to override the planning model used by the agent loop:
+All configuration lives in `config.toml`. Copy [`config.example.toml`](config.example.toml) as a starting point — it documents every role and provider option inline.
 
 | Role | Used for |
 |---|---|
 | `default` | Chat and task execution (smartest model) |
-| `fast` | Memory retrieval, session summarization, and fast-path fallbacks |
+| `fast` | Session summarization and lightweight in-loop post-processing |
 | `code` | Lua tool generation and janitor reviews |
+| `embedding` | Vector memory retrieval |
 | `agent` | Optional override for the agent loop planner; falls back to `default` then `fast` if unset |
-
-```toml
-[roles.default]
-provider = "ollama"
-model = "glm-5:cloud"
-api_base = "https://ollama.com"
-api_key = "your-key-here"
-
-[roles.fast]
-provider = "ollama"
-model = "kimi-k2.5:cloud"
-api_base = "https://ollama.com"
-api_key = "your-key-here"
-
-[roles.code]
-provider = "ollama"
-model = "glm-5:cloud"
-api_base = "https://ollama.com"
-api_key = "your-key-here"
-```
 
 Supported providers:
 - **`ollama`** — Ollama Cloud or local. Omit `api_base` for local at `localhost:11434`. Omit `api_key` for local instances.
@@ -188,19 +80,7 @@ Supported providers:
 
 ## Secrets
 
-API keys and tokens for generated tools live in `secrets.toml`:
-
-```sh
-cp secrets.example.toml secrets.toml
-```
-
-```toml
-github_token = "ghp_..."
-slack_token = "xoxb-..."
-openweather_key = "abc123"
-```
-
-Tools access secrets via the `secret()` host function:
+Secrets should never be written to memory or skills, the correct place is `secrets.toml`. Copy [`secrets.example.toml`](secrets.example.toml) as a starting point. You need to manually add secrets. Each secret has a `value` and a `description` the model uses to know when to reach for it. Tools access secrets via the `secret()` host function like this:
 
 ```lua
 local token = secret("github_token")
@@ -208,21 +88,7 @@ local resp = http_get("https://api.github.com/user",
     { Authorization = "Bearer " .. token })
 ```
 
-The model sees secret **names** (not values) so it can generate tools that use them. `secrets.toml` is in `.gitignore` by default.
-
-## CLI Reference
-
-| Flag | Default | Description |
-|---|---|---|
-| `-c, --config` | `config.toml` | Path to config file |
-| `-p, --prompt` | — | Single prompt (non-interactive) |
-| `-t, --toolbox` | `toolbox` | Path to toolbox directory |
-| `-m, --memory` | `memory` | Path to memory directory |
-| `-v, --verbose` | off | Show full event stream |
-| `--log` | `events.jsonl` | Path to event log file |
-| `--list-tools` | — | List all tools (built-in and Lua) and exit |
-| `--list-memories` | — | List all stored memories and exit |
-| `--janitor` | — | Run a single janitor pass (review + cleanup) and exit |
+The model never sees the secret value, only the name and description. Please note that there are always theoretical ways for them to leak. For example if the model generated a tool that prints the secret, it will be added to the conversation history, and potentially picked up as a memory. At the moment there is no special logic to try to block this.
 
 ## License
 
