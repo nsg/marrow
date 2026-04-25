@@ -190,7 +190,6 @@ pub fn build_agent_prompt(
     task: &str,
     tools_section: &str,
     memories: &[Memory],
-    documents: &[(String, String)],
     skills: &[(String, String)],
     history: &[StepResult],
     secret_descriptions: &[(&str, &str)],
@@ -201,16 +200,6 @@ pub fn build_agent_prompt(
         "(none available — create one if needed)"
     } else {
         tools_section
-    };
-
-    let documents_section = if documents.is_empty() {
-        String::new()
-    } else {
-        let doc_parts: Vec<String> = documents
-            .iter()
-            .map(|(name, content)| format!("### {name}\n{content}"))
-            .collect();
-        format!("Knowledge base:\n{}\n\n", doc_parts.join("\n\n"))
     };
 
     let skills_section = if skills.is_empty() {
@@ -364,7 +353,7 @@ pub fn build_agent_prompt(
         .replace("{tools}", tools_section)
         .replace(
             "{memories}",
-            &format!("{documents_section}{skills_section}{memories_section}{secrets_section}"),
+            &format!("{skills_section}{memories_section}{secrets_section}"),
         )
         .replace("{conversation}", &conversation_section)
         .replace("{execution_context}", &execution_context)
@@ -636,7 +625,6 @@ pub async fn run_loop(
     registry: &ToolRegistry,
     client: Arc<Client>,
     memories: &[Memory],
-    documents: &[(String, String)],
     skills: &[(String, String)],
     log: &EventLog,
     secrets: Option<&Secrets>,
@@ -699,7 +687,6 @@ pub async fn run_loop(
             task,
             &tools_section,
             memories,
-            documents,
             skills,
             &history,
             &secret_descs,
@@ -1102,7 +1089,6 @@ pub async fn run_loop(
                 let answer = format_answer(
                     task,
                     memories,
-                    documents,
                     skills,
                     &history,
                     answer_backend,
@@ -1135,7 +1121,6 @@ pub async fn run_loop(
     let answer = format_answer(
         task,
         memories,
-        documents,
         skills,
         &history,
         answer_backend,
@@ -1157,7 +1142,6 @@ pub async fn run_loop(
 async fn format_answer(
     task: &str,
     memories: &[Memory],
-    documents: &[(String, String)],
     skills: &[(String, String)],
     history: &[StepResult],
     answer_backend: &dyn ModelBackend,
@@ -1201,9 +1185,6 @@ async fn format_answer(
     if history.is_empty() {
         // No tools were called — just answer directly
         let mut context = format!("{system_context}{conversation_section}Task: {task}\n");
-        for (name, content) in documents {
-            context.push_str(&format!("\n{name}:\n{content}\n"));
-        }
         for (name, content) in skills {
             context.push_str(&format!("\nSkill — {name}:\n{content}\n"));
         }
@@ -1235,9 +1216,6 @@ async fn format_answer(
 
     let mut context =
         format!("{system_context}{conversation_section}Task: {task}\n\nCollected data:\n{data}\n");
-    for (name, content) in documents {
-        context.push_str(&format!("\n{name}:\n{content}\n"));
-    }
     for (name, content) in skills {
         context.push_str(&format!("\nSkill — {name}:\n{content}\n"));
     }

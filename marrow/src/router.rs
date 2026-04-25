@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::backends::ollama::OllamaBackend;
-use crate::backends::openai::OpenAIBackend;
+use crate::backends::ollama::{OllamaBackend, OllamaEmbedBackend};
+use crate::backends::openai::{OpenAIBackend, OpenAIEmbedBackend};
 use crate::metrics::Metrics;
-use crate::model::ModelBackend;
+use crate::model::{EmbedBackend, ModelBackend};
 
 #[derive(Debug, Deserialize, Default)]
 pub struct DiscordConfig {
@@ -83,6 +83,45 @@ impl RouterConfig {
         self.build_backend_with_metrics(role, None)
     }
 
+    pub fn build_embed_backend(
+        &self,
+        role: &str,
+    ) -> Result<Box<dyn EmbedBackend>, Box<dyn Error + Send + Sync>> {
+        let role_config = self
+            .roles
+            .get(role)
+            .ok_or_else(|| format!("no config for role: {role}"))?;
+        match role_config.provider.as_str() {
+            "ollama" => {
+                let base_url = role_config
+                    .api_base
+                    .as_deref()
+                    .unwrap_or("http://localhost:11434");
+                let mut eb = OllamaEmbedBackend::from_env(base_url, &role_config.model);
+                if let Some(key) = &role_config.api_key {
+                    eb = eb.with_api_key(key);
+                }
+                Ok(Box::new(eb))
+            }
+            "openai" => {
+                let base_url = role_config
+                    .api_base
+                    .as_deref()
+                    .unwrap_or("https://api.openai.com/v1");
+                let api_key = role_config
+                    .api_key
+                    .as_deref()
+                    .ok_or_else(|| format!("openai provider for role '{role}' requires api_key"))?;
+                Ok(Box::new(OpenAIEmbedBackend::new(
+                    base_url,
+                    &role_config.model,
+                    api_key,
+                )))
+            }
+            other => Err(format!("unknown provider: {other}").into()),
+        }
+    }
+
     pub fn build_backend_with_metrics(
         &self,
         role: &str,
@@ -132,6 +171,7 @@ impl RouterConfig {
 
 pub struct ModelRouter {
     backends: HashMap<String, Box<dyn ModelBackend>>,
+    embed_backends: HashMap<String, Box<dyn EmbedBackend>>,
 }
 
 impl ModelRouter {
@@ -144,37 +184,37 @@ impl ModelRouter {
         metrics: Option<Arc<Metrics>>,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut backends: HashMap<String, Box<dyn ModelBackend>> = HashMap::new();
+        let mut embed_backends: HashMap<String, Box<dyn EmbedBackend>> = HashMap::new();
 
         for (role, role_config) in &config.roles {
+            let base_url_ollama = role_config
+                .api_base
+                .as_deref()
+                .unwrap_or("http://localhost:11434");
+            let base_url_openai = role_config
+                .api_base
+                .as_deref()
+                .unwrap_or("https://api.openai.com/v1");
+
             let backend: Box<dyn ModelBackend> = match role_config.provider.as_str() {
                 "ollama" => {
-                    let base_url = role_config
-                        .api_base
-                        .as_deref()
-                        .unwrap_or("http://localhost:11434");
-
-                    let mut backend =
-                        OllamaBackend::from_env(base_url, &role_config.model).with_role(role);
-
+                    let mut backend = OllamaBackend::from_env(base_url_ollama, &role_config.model)
+                        .with_role(role);
                     if let Some(key) = &role_config.api_key {
                         backend = backend.with_api_key(key);
                     }
                     if let Some(ref m) = metrics {
                         backend = backend.with_metrics(m.clone());
                     }
-
                     Box::new(backend)
                 }
                 "openai" => {
-                    let base_url = role_config
-                        .api_base
-                        .as_deref()
-                        .unwrap_or("https://api.openai.com/v1");
                     let api_key = role_config.api_key.as_deref().ok_or_else(|| {
                         format!("openai provider for role '{role}' requires api_key")
                     })?;
                     let mut backend =
-                        OpenAIBackend::new(base_url, &role_config.model, api_key).with_role(role);
+                        OpenAIBackend::new(base_url_openai, &role_config.model, api_key)
+                            .with_role(role);
                     if let Some(ref m) = metrics {
                         backend = backend.with_metrics(m.clone());
                     }
@@ -183,10 +223,36 @@ impl ModelRouter {
                 other => return Err(format!("unknown provider: {other}").into()),
             };
 
+            // Build embed backend for every role
+            let embed: Box<dyn EmbedBackend> = match role_config.provider.as_str() {
+                "ollama" => {
+                    let mut eb = OllamaEmbedBackend::from_env(base_url_ollama, &role_config.model);
+                    if let Some(key) = &role_config.api_key {
+                        eb = eb.with_api_key(key);
+                    }
+                    Box::new(eb)
+                }
+                "openai" => {
+                    let api_key = role_config.api_key.as_deref().ok_or_else(|| {
+                        format!("openai provider for role '{role}' requires api_key")
+                    })?;
+                    Box::new(OpenAIEmbedBackend::new(
+                        base_url_openai,
+                        &role_config.model,
+                        api_key,
+                    ))
+                }
+                _ => continue, // skip unknown for embed — model backend already errored above
+            };
+
             backends.insert(role.clone(), backend);
+            embed_backends.insert(role.clone(), embed);
         }
 
-        Ok(Self { backends })
+        Ok(Self {
+            backends,
+            embed_backends,
+        })
     }
 
     pub fn backend(&self, role: &str) -> Result<&dyn ModelBackend, Box<dyn Error + Send + Sync>> {
@@ -194,6 +260,18 @@ impl ModelRouter {
             .backends
             .get(role)
             .ok_or_else(|| format!("no backend configured for role: {role}"))?;
+
+        Ok(backend.as_ref())
+    }
+
+    pub fn embed_backend(
+        &self,
+        role: &str,
+    ) -> Result<&dyn EmbedBackend, Box<dyn Error + Send + Sync>> {
+        let backend = self
+            .embed_backends
+            .get(role)
+            .ok_or_else(|| format!("no embed backend configured for role: {role}"))?;
 
         Ok(backend.as_ref())
     }

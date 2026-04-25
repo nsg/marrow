@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use crate::memory::{Memory, MemoryStore};
-use crate::model::ModelBackend;
+use crate::model::{EmbedBackend, ModelBackend};
 
 const SELECTION_PROMPT_TEMPLATE: &str = r#"You are a memory retrieval system. Given a task description and a list of stored facts, decide which facts are relevant context for the task.
 
@@ -18,8 +18,29 @@ Your response (JSON array only):"#;
 pub async fn select_memories(
     task_description: &str,
     store: &MemoryStore,
-    backend: &dyn ModelBackend,
+    embed_backend: Option<&dyn EmbedBackend>,
+    fast_backend: &dyn ModelBackend,
 ) -> Result<Vec<Memory>, Box<dyn Error + Send + Sync>> {
+    // Primary path: vector similarity search
+    if let Some(embed) = embed_backend {
+        match embed.embed(vec![task_description.to_string()]).await {
+            Ok(embeddings) if !embeddings.is_empty() => {
+                let query_vec = &embeddings[0];
+                let results = store.nearest(query_vec, 10)?;
+                let memories: Vec<Memory> = results.into_iter().map(|(m, _)| m).collect();
+                if !memories.is_empty() {
+                    return Ok(memories);
+                }
+                // Fall through to model-driven selection if no embeddings in DB yet
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("[marrow] embedding search failed, falling back to model selection: {e}");
+            }
+        }
+    }
+
+    // Fallback: model-driven selection
     let all_memories = store.list()?;
     if all_memories.is_empty() {
         return Ok(Vec::new());
@@ -35,7 +56,7 @@ pub async fn select_memories(
         .replace("{facts}", &facts_list)
         .replace("{task}", task_description);
 
-    let response = backend.complete(prompt).await?;
+    let response = fast_backend.complete(prompt).await?;
     let selected_ids = parse_ids(&response);
 
     let selected: Vec<Memory> = all_memories

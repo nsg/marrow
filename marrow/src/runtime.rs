@@ -11,7 +11,6 @@ use crate::agent::{IncomingRx, ProgressTx, ProgressUpdate};
 use crate::events::{Event, EventLog};
 use crate::janitor;
 use crate::memory::{Memory, MemoryStore};
-use crate::memory_documents;
 use crate::memory_provider;
 use crate::memory_writer;
 use crate::metrics::{Metrics, TASK_METRICS, TaskMetrics};
@@ -34,7 +33,6 @@ pub struct TaskResult {
 pub struct RuntimeOptions {
     pub toolbox_path: String,
     pub memory_path: String,
-    pub knowledge_path: String,
     pub log_path: String,
     pub verbose: bool,
     pub secrets_path: String,
@@ -47,7 +45,6 @@ pub struct Runtime {
     router: Arc<ModelRouter>,
     registry: Arc<ToolRegistry>,
     memory_store: Arc<MemoryStore>,
-    knowledge_dir: PathBuf,
     schedule_store: Arc<ScheduleStore>,
     skill_store: Arc<SkillStore>,
     client: Arc<Client>,
@@ -60,9 +57,10 @@ pub struct Runtime {
 async fn load_relevant_memories(
     description: &str,
     store: &MemoryStore,
-    backend: &dyn ModelBackend,
+    embed_backend: Option<&dyn crate::model::EmbedBackend>,
+    fast_backend: &dyn ModelBackend,
 ) -> Vec<Memory> {
-    match memory_provider::select_memories(description, store, backend).await {
+    match memory_provider::select_memories(description, store, embed_backend, fast_backend).await {
         Ok(memories) => memories,
         Err(e) => {
             eprintln!("[marrow] memory retrieval error: {e}");
@@ -86,8 +84,7 @@ impl Runtime {
         let mut registry = ToolRegistry::new(toolbox, &options.toolbox_path);
         crate::tools::register_all(&mut registry);
         let registry = Arc::new(registry);
-        let memory_store = Arc::new(MemoryStore::new(&options.memory_path));
-        let knowledge_dir = PathBuf::from(&options.knowledge_path);
+        let memory_store = Arc::new(MemoryStore::new(&options.memory_path)?);
         let schedule_store = Arc::new(ScheduleStore::new(&options.schedule_path));
         let skill_store = Arc::new(SkillStore::new(&options.skills_path));
         let log =
@@ -95,26 +92,19 @@ impl Runtime {
         let secrets = Arc::new(Secrets::load_or_empty(&options.secrets_path));
         let memory_changed = Arc::new(AtomicBool::new(false));
 
-        // One-time migration: move living documents from memory/ to knowledge/
+        // One-time migrations
         let memory_path_buf = PathBuf::from(&options.memory_path);
-        if !knowledge_dir.exists()
-            && let Ok(entries) = std::fs::read_dir(&memory_path_buf)
+        if let Err(e) = crate::memory::migrate_json_to_sqlite(&memory_path_buf, &memory_store) {
+            eprintln!("[marrow] JSON memory migration error: {e}");
+        }
+        // Migrate knowledge documents back to memories (knowledge tier is removed)
+        let knowledge_dir = memory_path_buf
+            .parent()
+            .unwrap_or(std::path::Path::new(""))
+            .join("knowledge");
+        if let Err(e) = crate::memory::migrate_knowledge_to_memories(&knowledge_dir, &memory_store)
         {
-            let mut migrated = false;
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "md")
-                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
-                {
-                    if !migrated {
-                        std::fs::create_dir_all(&knowledge_dir)?;
-                        migrated = true;
-                    }
-                    let name = name.to_string();
-                    std::fs::rename(&path, knowledge_dir.join(&name))?;
-                    eprintln!("[marrow] migrated {name} from memory/ to knowledge/");
-                }
-            }
+            eprintln!("[marrow] knowledge migration error: {e}");
         }
 
         if options.spawn_janitor {
@@ -124,11 +114,19 @@ impl Runtime {
             let janitor_toolbox = Toolbox::new(&options.toolbox_path);
             let janitor_log = log.clone();
             let janitor_builtins = registry.builtin_info();
-            let janitor_memory = MemoryStore::new(&options.memory_path);
-            let janitor_knowledge = knowledge_dir.clone();
+            let janitor_memory = MemoryStore::new(&options.memory_path)?;
             let janitor_skills = SkillStore::new(&options.skills_path);
             let janitor_tools = registry.list_all();
             let janitor_memory_changed = memory_changed.clone();
+            let janitor_embed: Option<Box<dyn crate::model::EmbedBackend>> = router
+                .embed_backend("embedding")
+                .ok()
+                .map(|_| -> Box<dyn crate::model::EmbedBackend> {
+                    // Build a separate embed backend for the janitor task
+                    config
+                        .build_embed_backend("embedding")
+                        .expect("embedding backend already validated")
+                });
             tokio::spawn(async move {
                 janitor::run(
                     &janitor_toolbox,
@@ -136,10 +134,10 @@ impl Runtime {
                     &janitor_log,
                     &janitor_builtins,
                     &janitor_memory,
-                    &janitor_knowledge,
                     &janitor_skills,
                     &janitor_tools,
                     &janitor_memory_changed,
+                    janitor_embed.as_deref(),
                 )
                 .await;
             });
@@ -149,7 +147,6 @@ impl Runtime {
             router,
             registry,
             memory_store,
-            knowledge_dir,
             schedule_store,
             skill_store,
             client,
@@ -192,7 +189,6 @@ impl Runtime {
             self.log.as_ref(),
             &builtins,
             self.memory_store.as_ref(),
-            &self.knowledge_dir,
             self.skill_store.as_ref(),
             &tools,
         )
@@ -234,9 +230,14 @@ impl Runtime {
             .router
             .backend("default")
             .or_else(|_| self.router.backend("fast"))?;
-        let memories =
-            load_relevant_memories(description, self.memory_store.as_ref(), fast_backend).await;
-        let documents = memory_documents::list_documents(&self.knowledge_dir);
+        let embed_backend = self.router.embed_backend("embedding").ok();
+        let memories = load_relevant_memories(
+            description,
+            self.memory_store.as_ref(),
+            embed_backend,
+            fast_backend,
+        )
+        .await;
         let selected_skills =
             skills::select_skills(description, self.skill_store.as_ref()).unwrap_or_default();
 
@@ -253,7 +254,6 @@ impl Runtime {
                     self.registry.as_ref(),
                     self.client.clone(),
                     &memories,
-                    &documents,
                     &selected_skills,
                     self.log.as_ref(),
                     Some(self.secrets.as_ref()),
@@ -307,6 +307,23 @@ impl Runtime {
                         }
                         for fact in &result.saved {
                             eprintln!("[marrow] remembered: {fact}");
+                        }
+
+                        // Embed new facts if an embedding backend is available
+                        if let Ok(eb) = mem_router.embed_backend("embedding") {
+                            let texts: Vec<String> = result.saved.clone();
+                            if let Ok(embeddings) = eb.embed(texts).await {
+                                // Find the newly saved memories and set their embeddings
+                                if let Ok(all) = mem_store.list() {
+                                    let recent: Vec<_> = all
+                                        .iter()
+                                        .filter(|m| result.saved.contains(&m.fact))
+                                        .collect();
+                                    for (mem, emb) in recent.iter().zip(embeddings.iter()) {
+                                        let _ = mem_store.set_embedding(mem.id, emb);
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -408,13 +425,13 @@ mod tests {
     #[tokio::test]
     async fn load_relevant_memories_selects_matching_facts() {
         let dir = temp_dir("marrow_runtime_mem");
-        let store = MemoryStore::new(dir.path());
+        let store = MemoryStore::new(dir.path()).unwrap();
         let mem = Memory::new("user prefers dark mode", MemorySource::User);
         let id = mem.id;
         store.save(&mem).unwrap();
 
         let backend = MockBackend::new(vec![&format!(r#"["{id}"]"#)]);
-        let selected = load_relevant_memories("theme?", &store, &backend).await;
+        let selected = load_relevant_memories("theme?", &store, None, &backend).await;
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].fact, "user prefers dark mode");
@@ -423,13 +440,13 @@ mod tests {
     #[tokio::test]
     async fn load_relevant_memories_falls_back_to_all_on_error() {
         let dir = temp_dir("marrow_runtime_mem");
-        let store = MemoryStore::new(dir.path());
+        let store = MemoryStore::new(dir.path()).unwrap();
         let first = Memory::new("user prefers dark mode", MemorySource::User);
         let second = Memory::new("user works in UTC", MemorySource::User);
         store.save(&first).unwrap();
         store.save(&second).unwrap();
 
-        let selected = load_relevant_memories("theme?", &store, &FailingBackend).await;
+        let selected = load_relevant_memories("theme?", &store, None, &FailingBackend).await;
 
         assert_eq!(selected.len(), 2);
         let facts: Vec<&str> = selected.iter().map(|m| m.fact.as_str()).collect();

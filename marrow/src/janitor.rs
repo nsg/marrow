@@ -1,13 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::time::sleep;
 
 use crate::events::{Event, EventLog};
-use crate::memory::{Memory, MemoryStore};
+use crate::memory::{Memory, MemorySource, MemoryStore};
 use crate::model::ModelBackend;
 use crate::toolbox::{ToolMeta, Toolbox};
 
@@ -679,6 +678,136 @@ pub async fn cleanup_memories(
     Ok((total_updated, total_deleted))
 }
 
+const MAX_FACT_LENGTH: usize = 300;
+
+const DECOMPOSE_PROMPT: &str = r##"You are a memory decomposition system. The following stored fact is too large — it contains multiple pieces of information packed into one entry. Break it into individual, atomic facts.
+
+Large fact:
+{fact}
+
+Rules:
+- Each output fact must be a single, self-contained piece of information
+- Be lean: "Nextcloud hosted at nextcloud.example.com" not "The user's Nextcloud server is hosted at..."
+- Preserve ALL information — don't drop details
+- Drop markdown formatting, headers, and structure — output plain facts
+- Skip empty/meta lines (headers that just say "# Infrastructure" add nothing)
+
+Respond with ONLY a JSON array of strings:
+["fact one", "fact two", ...]"##;
+
+async fn decompose_large_memories(
+    store: &MemoryStore,
+    backend: &dyn ModelBackend,
+    log: &EventLog,
+) -> Result<(u32, u32), Box<dyn Error + Send + Sync>> {
+    let memories = store.list()?;
+    let large: Vec<&Memory> = memories
+        .iter()
+        .filter(|m| m.fact.len() > MAX_FACT_LENGTH)
+        .collect();
+
+    if large.is_empty() {
+        return Ok((0, 0));
+    }
+
+    log.emit(Event::MemoryCleanupStarted {
+        clusters: large.len() as u32,
+    })
+    .await;
+
+    let mut total_created = 0u32;
+    let mut total_deleted = 0u32;
+
+    for memory in &large {
+        let prompt = DECOMPOSE_PROMPT.replace("{fact}", &memory.fact);
+        let response = match backend.complete(prompt).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[janitor] decompose model error: {e}");
+                continue;
+            }
+        };
+
+        let facts = parse_fact_array(&response);
+        if facts.is_empty() {
+            continue;
+        }
+
+        // Save individual facts, then delete the blob
+        for fact_text in &facts {
+            let new_mem = Memory::new(fact_text, MemorySource::Auto);
+            if let Err(e) = store.save(&new_mem) {
+                eprintln!("[janitor] decompose save error: {e}");
+                continue;
+            }
+            total_created += 1;
+        }
+
+        if let Err(e) = store.delete(memory.id) {
+            eprintln!("[janitor] decompose delete error: {e}");
+        } else {
+            total_deleted += 1;
+        }
+
+        eprintln!(
+            "[janitor] decomposed 1 large fact into {} atomic facts",
+            facts.len()
+        );
+    }
+
+    if total_created > 0 || total_deleted > 0 {
+        log.emit(Event::MemoryCleanupResult {
+            updated: total_created,
+            deleted: total_deleted,
+        })
+        .await;
+    }
+
+    Ok((total_created, total_deleted))
+}
+
+fn parse_fact_array(response: &str) -> Vec<String> {
+    let trimmed = response.trim();
+
+    // Try to find JSON array in markdown fence first
+    let json_str = if let Some(start) = trimmed.find("```json") {
+        let content_start = start + 7;
+        let rest = &trimmed[content_start..];
+        let end = rest.find("```").unwrap_or(rest.len());
+        rest[..end].trim()
+    } else if let Some(start) = trimmed.find('[') {
+        let end = trimmed.rfind(']').unwrap_or(trimmed.len() - 1);
+        &trimmed[start..=end]
+    } else {
+        return Vec::new();
+    };
+
+    serde_json::from_str::<Vec<String>>(json_str).unwrap_or_default()
+}
+
+async fn backfill_embeddings(
+    store: &MemoryStore,
+    embed_backend: &dyn crate::model::EmbedBackend,
+) -> Result<u32, Box<dyn Error + Send + Sync>> {
+    let unembedded = store.unembedded()?;
+    if unembedded.is_empty() {
+        return Ok(0);
+    }
+
+    let mut count = 0u32;
+    // Batch in chunks of 50
+    for chunk in unembedded.chunks(50) {
+        let texts: Vec<String> = chunk.iter().map(|m| m.fact.clone()).collect();
+        let embeddings = embed_backend.embed(texts).await?;
+        for (memory, embedding) in chunk.iter().zip(embeddings.iter()) {
+            store.set_embedding(memory.id, embedding)?;
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
 /// Run a single janitor pass: review all unvalidated tools, then run cleanup.
 /// Returns the number of tools processed.
 #[allow(clippy::too_many_arguments)]
@@ -688,7 +817,6 @@ pub async fn run_once(
     log: &EventLog,
     builtins: &[BuiltinInfo],
     store: &MemoryStore,
-    knowledge_dir: &Path,
     skill_store: &crate::skills::SkillStore,
     tools: &[crate::tool::ToolInfo],
 ) -> Result<u32, Box<dyn Error + Send + Sync>> {
@@ -707,19 +835,17 @@ pub async fn run_once(
         Err(e) => eprintln!("[janitor] toolbox cleanup error: {e}"),
     }
 
+    match decompose_large_memories(store, backend, log).await {
+        Ok(_) => {}
+        Err(e) => eprintln!("[janitor] memory decompose error: {e}"),
+    }
+
     match cleanup_memories(store, backend, log).await {
         Ok(_) => {}
         Err(e) => eprintln!("[janitor] memory cleanup error: {e}"),
     }
 
-    match crate::memory_documents::generate_documents(store, knowledge_dir, backend, log).await {
-        Ok(_) => {}
-        Err(e) => eprintln!("[janitor] document generation error: {e}"),
-    }
-
-    match crate::skills::generate_skills(skill_store, store, knowledge_dir, tools, backend, log)
-        .await
-    {
+    match crate::skills::generate_skills(skill_store, store, tools, backend, log).await {
         Ok(_) => {}
         Err(e) => eprintln!("[janitor] skill generation error: {e}"),
     }
@@ -734,15 +860,16 @@ pub async fn run(
     log: &EventLog,
     builtins: &[BuiltinInfo],
     store: &MemoryStore,
-    knowledge_dir: &Path,
     skill_store: &crate::skills::SkillStore,
     tools: &[crate::tool::ToolInfo],
     memory_changed: &AtomicBool,
+    embed_backend: Option<&dyn crate::model::EmbedBackend>,
 ) {
     let mut idle_cycles: u32 = 0;
     let mut cleanup_backed_off = false;
+    let mut decompose_backed_off = false;
     let mut memory_cleanup_backed_off = false;
-    let mut documents_backed_off = false;
+    let mut embeddings_backed_off = false;
     let mut skills_backed_off = false;
 
     loop {
@@ -760,8 +887,9 @@ pub async fn run(
 
             // Reset memory-related tasks when new memories arrive
             if memory_changed.swap(false, Ordering::Relaxed) {
+                decompose_backed_off = false;
                 memory_cleanup_backed_off = false;
-                documents_backed_off = false;
+                embeddings_backed_off = false;
                 skills_backed_off = false;
                 idle_cycles = idle_cycles.min(10);
             }
@@ -775,6 +903,21 @@ pub async fn run(
                 }
             }
 
+            // Decompose large memory blobs into atomic facts (~60s after idle)
+            if !decompose_backed_off && idle_cycles == 12 {
+                match decompose_large_memories(store, backend, log).await {
+                    Ok((0, _)) => decompose_backed_off = true,
+                    Ok(_) => {
+                        // Don't back off — there may be more blobs, and new facts
+                        // need dedup in the cleanup pass
+                    }
+                    Err(e) => {
+                        eprintln!("[janitor] memory decompose error: {e}");
+                        decompose_backed_off = true;
+                    }
+                }
+            }
+
             // Clean up redundant/conflicting memories (~75s after idle)
             if !memory_cleanup_backed_off && idle_cycles == 15 {
                 match cleanup_memories(store, backend, log).await {
@@ -783,32 +926,25 @@ pub async fn run(
                 }
             }
 
-            // Generate/update living documents (~100s after idle)
-            if !documents_backed_off && idle_cycles == 20 {
-                match crate::memory_documents::generate_documents(
-                    store,
-                    knowledge_dir,
-                    backend,
-                    log,
-                )
-                .await
-                {
-                    Ok(_) => documents_backed_off = true,
-                    Err(e) => eprintln!("[janitor] document generation error: {e}"),
+            // Backfill embeddings for facts that don't have them yet (~100s after idle)
+            if !embeddings_backed_off && idle_cycles == 20 {
+                if let Some(eb) = embed_backend {
+                    match backfill_embeddings(store, eb).await {
+                        Ok(0) => embeddings_backed_off = true,
+                        Ok(n) => eprintln!("[janitor] embedded {n} fact(s)"),
+                        Err(e) => {
+                            eprintln!("[janitor] embedding backfill error: {e}");
+                            embeddings_backed_off = true;
+                        }
+                    }
+                } else {
+                    embeddings_backed_off = true;
                 }
             }
 
             // Generate/update skills (~125s after idle)
             if !skills_backed_off && idle_cycles == 25 {
-                match crate::skills::generate_skills(
-                    skill_store,
-                    store,
-                    knowledge_dir,
-                    tools,
-                    backend,
-                    log,
-                )
-                .await
+                match crate::skills::generate_skills(skill_store, store, tools, backend, log).await
                 {
                     Ok(_) => skills_backed_off = true,
                     Err(e) => eprintln!("[janitor] skill generation error: {e}"),
@@ -821,8 +957,9 @@ pub async fn run(
 
         idle_cycles = 0;
         cleanup_backed_off = false;
+        decompose_backed_off = false;
         memory_cleanup_backed_off = false;
-        documents_backed_off = false;
+        embeddings_backed_off = false;
         skills_backed_off = false;
         for tool in &unvalidated {
             if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log, builtins).await {

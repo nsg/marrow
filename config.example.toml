@@ -25,6 +25,14 @@ model = "glm-5:cloud"
 api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
+# Embedding role — used for vector memory retrieval
+# If omitted, Marrow falls back to model-driven memory selection (slower, uses fast role)
+[roles.embedding]
+provider = "ollama"
+model = "nomic-embed-text"
+api_base = "https://ollama.com"
+# api_key = "your-key-here"
+
 # Optional agent role — overrides the planner model used by the agent loop.
 # If omitted, Marrow falls back to roles.default, then roles.fast.
 # [roles.agent]
@@ -68,6 +76,18 @@ api_base = "https://ollama.com"
 # model = "gpt-4o-mini"
 # api_base = "https://api.openai.com/v1"
 # api_key = "sk-..."
+#
+# --- OpenAI embeddings ---
+# [roles.embedding]
+# provider = "openai"
+# model = "text-embedding-3-small"
+# api_base = "https://api.openai.com/v1"
+# api_key = "sk-..."
+#
+# --- Local Ollama embeddings (omit api_base for localhost:11434) ---
+# [roles.embedding]
+# provider = "ollama"
+# model = "nomic-embed-text"
 #
 # --- OpenRouter ---
 # [roles.default]

@@ -12,3 +12,10 @@ pub trait ModelBackend: Send + Sync {
 
     fn complete_chat(&self, messages: Vec<Message>) -> CompletionResult<'_>;
 }
+
+pub type EmbedResult<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>, Box<dyn Error + Send + Sync>>> + Send + 'a>>;
+
+pub trait EmbedBackend: Send + Sync {
+    fn embed(&self, texts: Vec<String>) -> EmbedResult<'_>;
+}

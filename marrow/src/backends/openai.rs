@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::metrics::Metrics;
-use crate::model::{CompletionResult, ModelBackend};
+use crate::model::{CompletionResult, EmbedBackend, EmbedResult, ModelBackend};
 use crate::retry::{RetryConfig, is_retryable_error, retry_with_backoff};
 use crate::session::Message;
 
@@ -166,5 +166,82 @@ impl ModelBackend for OpenAIBackend {
 
     fn complete_chat(&self, messages: Vec<Message>) -> CompletionResult<'_> {
         Box::pin(async move { self.send_chat(messages).await })
+    }
+}
+
+// -- Embedding backend --
+
+#[derive(Debug, Serialize)]
+struct EmbedApiRequest {
+    model: String,
+    input: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbedApiResponse {
+    data: Vec<EmbedApiData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbedApiData {
+    embedding: Vec<f32>,
+}
+
+pub struct OpenAIEmbedBackend {
+    client: Client,
+    base_url: String,
+    api_key: String,
+    model: String,
+}
+
+impl OpenAIEmbedBackend {
+    pub fn new(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            client: Client::new(),
+            base_url: base_url.into(),
+            api_key: api_key.into(),
+            model: model.into(),
+        }
+    }
+
+    async fn send_embed(
+        &self,
+        texts: Vec<String>,
+    ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!("{}/embeddings", self.base_url.trim_end_matches('/'));
+        let body = EmbedApiRequest {
+            model: self.model.clone(),
+            input: texts,
+        };
+        let config = RetryConfig::default();
+        let resp_text = retry_with_backoff(&config, is_retryable_error, || {
+            let req = self
+                .client
+                .post(&url)
+                .bearer_auth(&self.api_key)
+                .json(&body);
+            async move {
+                let resp = req.send().await?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(format!("openai embed returned {status}: {text}").into());
+                }
+                resp.text().await.map_err(|e| e.into())
+            }
+        })
+        .await?;
+        let embed_resp: EmbedApiResponse = serde_json::from_str(&resp_text)?;
+        Ok(embed_resp.data.into_iter().map(|d| d.embedding).collect())
+    }
+}
+
+impl EmbedBackend for OpenAIEmbedBackend {
+    fn embed(&self, texts: Vec<String>) -> EmbedResult<'_> {
+        Box::pin(async move { self.send_embed(texts).await })
     }
 }

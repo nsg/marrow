@@ -148,7 +148,6 @@ async fn agent_loop_call_tool_then_answer() {
         client,
         &[],
         &[],
-        &[],
         &log,
         None,
         None,
@@ -199,7 +198,6 @@ async fn agent_loop_save_tool_then_call_then_answer() {
         client,
         &[],
         &[],
-        &[],
         &log,
         None,
         None,
@@ -238,7 +236,6 @@ async fn agent_loop_direct_answer() {
         &fast_backend,
         &registry,
         client,
-        &[],
         &[],
         &[],
         &log,
@@ -283,7 +280,6 @@ async fn agent_loop_tool_failure_recovery() {
         &fast_backend,
         &registry,
         client,
-        &[],
         &[],
         &[],
         &log,
@@ -534,7 +530,7 @@ async fn run_tool_glue_composition() {
 #[tokio::test]
 async fn memory_store_save_load_list() {
     let dir = temp_dir("marrow_mem");
-    let store = MemoryStore::new(dir.path());
+    let store = MemoryStore::new(dir.path()).unwrap();
     let mem = Memory::new("user likes Rust", MemorySource::User);
     let id = mem.id;
     store.save(&mem).unwrap();
@@ -545,7 +541,7 @@ async fn memory_store_save_load_list() {
 #[tokio::test]
 async fn memory_store_update_and_delete() {
     let dir = temp_dir("marrow_mem");
-    let store = MemoryStore::new(dir.path());
+    let store = MemoryStore::new(dir.path()).unwrap();
     let mem = Memory::new("old fact", MemorySource::Auto);
     let id = mem.id;
     store.save(&mem).unwrap();
@@ -558,12 +554,12 @@ async fn memory_store_update_and_delete() {
 #[tokio::test]
 async fn memory_provider_selects_relevant() {
     let dir = temp_dir("marrow_mem");
-    let store = MemoryStore::new(dir.path());
+    let store = MemoryStore::new(dir.path()).unwrap();
     let mem = Memory::new("user prefers dark mode", MemorySource::User);
     let id = mem.id;
     store.save(&mem).unwrap();
     let backend = MockBackend::new(vec![&format!(r#"["{id}"]"#)]);
-    let result = memory_provider::select_memories("theme?", &store, &backend)
+    let result = memory_provider::select_memories("theme?", &store, None, &backend)
         .await
         .unwrap();
     assert_eq!(result.len(), 1);
@@ -573,7 +569,7 @@ async fn memory_provider_selects_relevant() {
 #[tokio::test]
 async fn memory_writer_saves_new_facts() {
     let dir = temp_dir("marrow_mem");
-    let store = MemoryStore::new(dir.path());
+    let store = MemoryStore::new(dir.path()).unwrap();
     let backend = MockBackend::new(vec![
         r#"{"save": ["User prefers UTC"], "update": {}, "delete": []}"#,
     ]);
@@ -695,7 +691,7 @@ async fn janitor_deletes_after_max_failures() {
 #[tokio::test]
 async fn janitor_cleanup_memories_resolves_conflict() {
     let dir = temp_dir("marrow_mem");
-    let store = MemoryStore::new(dir.path());
+    let store = MemoryStore::new(dir.path()).unwrap();
     let log = noop_log().await;
 
     let old_fact = Memory::new("Email is old@example.com", MemorySource::Auto);
@@ -729,67 +725,27 @@ async fn janitor_cleanup_memories_resolves_conflict() {
 }
 
 #[tokio::test]
-async fn janitor_generate_documents_promotes_facts() {
-    let mem_dir = temp_dir("marrow_docs");
-    let knowledge_dir = temp_dir("marrow_knowledge");
-    let store = MemoryStore::new(mem_dir.path());
-    let log = noop_log().await;
-
-    let fact = Memory::new("User name is Alice", MemorySource::Auto);
-    let fact_id = fact.id;
-    store.save(&fact).unwrap();
-
-    let response = format!(
-        "```document:profile.md\n# Profile\n- Name: Alice\n```\n```json\n{{\"promoted\": [\"{fact_id}\"]}}\n```"
-    );
-    let backend = MockBackend::new(vec![&response]);
-
-    let (docs_updated, facts_promoted) =
-        marrow::memory_documents::generate_documents(&store, knowledge_dir.path(), &backend, &log)
-            .await
-            .unwrap();
-    assert_eq!(docs_updated, 1);
-    assert_eq!(facts_promoted, 1);
-
-    // Verify document was written to knowledge dir
-    let doc = std::fs::read_to_string(knowledge_dir.path().join("profile.md")).unwrap();
-    assert!(doc.contains("Alice"));
-
-    // Verify fact was deleted from memory store
-    let remaining = store.list().unwrap();
-    assert!(remaining.is_empty());
-}
-
-#[tokio::test]
 async fn janitor_generate_skills_creates_file() {
     let mem_dir = temp_dir("marrow_mem");
-    let knowledge_dir = temp_dir("marrow_knowledge");
     let skill_dir = temp_dir("marrow_skills");
     let log = noop_log().await;
     let skill_store = SkillStore::new(skill_dir.path());
-    let mem_store = MemoryStore::new(mem_dir.path());
+    let mem_store = MemoryStore::new(mem_dir.path()).unwrap();
 
-    // Create a living document in the knowledge dir
-    std::fs::write(
-        knowledge_dir.path().join("profile.md"),
-        "# Profile\n- Name: Alice\n- Uses Nextcloud",
-    )
-    .unwrap();
+    mem_store
+        .save(&Memory::new(
+            "User name is Alice, uses Nextcloud",
+            MemorySource::User,
+        ))
+        .unwrap();
 
     let response =
         "```skill:check-calendar.md\n# Check Calendar\n1. Use nextcloud_events tool\n```";
     let backend = MockBackend::new(vec![response]);
 
-    let count = marrow::skills::generate_skills(
-        &skill_store,
-        &mem_store,
-        knowledge_dir.path(),
-        &[],
-        &backend,
-        &log,
-    )
-    .await
-    .unwrap();
+    let count = marrow::skills::generate_skills(&skill_store, &mem_store, &[], &backend, &log)
+        .await
+        .unwrap();
     assert_eq!(count, 1);
 
     let skills = skill_store.list().unwrap();
@@ -804,9 +760,8 @@ async fn janitor_generate_skills_from_facts_only() {
     let skill_dir = temp_dir("marrow_skills");
     let log = noop_log().await;
     let skill_store = SkillStore::new(skill_dir.path());
-    let mem_store = MemoryStore::new(mem_dir.path());
+    let mem_store = MemoryStore::new(mem_dir.path()).unwrap();
 
-    // Save a fact without any living documents
     mem_store
         .save(&Memory::new(
             "Deploy target is deploy.example.com via SSH",
@@ -817,17 +772,9 @@ async fn janitor_generate_skills_from_facts_only() {
     let response = "```skill:deploy.md\n# Deploy\n1. SSH to deploy.example.com\n```";
     let backend = MockBackend::new(vec![response]);
 
-    let knowledge_dir = temp_dir("marrow_knowledge");
-    let count = marrow::skills::generate_skills(
-        &skill_store,
-        &mem_store,
-        knowledge_dir.path(),
-        &[],
-        &backend,
-        &log,
-    )
-    .await
-    .unwrap();
+    let count = marrow::skills::generate_skills(&skill_store, &mem_store, &[], &backend, &log)
+        .await
+        .unwrap();
     assert_eq!(count, 1);
 
     let skills = skill_store.list().unwrap();

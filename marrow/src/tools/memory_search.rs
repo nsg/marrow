@@ -53,26 +53,17 @@ impl Tool for MemorySearchTool {
                 _ => 0,
             };
 
-            let all_memories = match store.list() {
-                Ok(mems) => mems,
+            let (matches, total) = match store.search(query, offset, 20) {
+                Ok(result) => result,
                 Err(e) => {
                     return Ok(
-                        serde_json::json!({"error": format!("failed to list memories: {e}")}),
+                        serde_json::json!({"error": format!("failed to search memories: {e}")}),
                     );
                 }
             };
 
-            let query_lower = query.to_lowercase();
-            let matches: Vec<_> = all_memories
-                .into_iter()
-                .filter(|m| m.fact.to_lowercase().contains(&query_lower))
-                .collect();
-
-            let total = matches.len();
             let results: Vec<serde_json::Value> = matches
-                .into_iter()
-                .skip(offset)
-                .take(20)
+                .iter()
                 .map(|m| {
                     serde_json::json!({
                         "id": m.id.to_string(),

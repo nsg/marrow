@@ -55,11 +55,6 @@ pub enum Event {
         updated: u32,
         deleted: u32,
     },
-    DocumentsUpdated {
-        documents: u32,
-        promoted: u32,
-        deleted: u32,
-    },
     SkillsGenerated {
         count: u32,
     },
@@ -205,15 +200,6 @@ impl EventLog {
             }
             Event::MemoryCleanupResult { updated, deleted } => {
                 eprintln!("[janitor] memory cleanup: {updated} updated, {deleted} deleted");
-            }
-            Event::DocumentsUpdated {
-                documents,
-                promoted,
-                deleted,
-            } => {
-                eprintln!(
-                    "[janitor] updated {documents} document(s), promoted {promoted} fact(s), removed {deleted} document(s)"
-                );
             }
             Event::SkillsGenerated { count } => {
                 eprintln!("[janitor] generated {count} skill(s)");

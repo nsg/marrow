@@ -5,7 +5,6 @@ pub mod events;
 pub mod heartbeat;
 pub mod janitor;
 pub mod memory;
-pub mod memory_documents;
 pub mod memory_provider;
 pub mod memory_writer;
 pub mod metrics;
