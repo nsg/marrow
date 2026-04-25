@@ -14,11 +14,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-          - target: aarch64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
 
@@ -26,13 +21,6 @@ jobs:
         run: |
           rustup update stable
           rustup default stable
-          rustup target add ${{ matrix.target }}
-
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -43,27 +31,25 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: cargo-${{ matrix.target }}-
+          key: cargo-x86_64-unknown-linux-gnu-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-x86_64-unknown-linux-gnu-
 
       - name: Build release binaries
-        run: cargo build --release --target ${{ matrix.target }}
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release
 
       - name: Package binaries
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/marrow dist/
-          cp target/${{ matrix.target }}/release/marrow-discord dist/
+          cp target/release/marrow dist/
+          cp target/release/marrow-discord dist/
           cd dist
-          tar czf marrow-${{ matrix.target }}.tar.gz marrow marrow-discord
+          tar czf marrow-x86_64-unknown-linux-gnu.tar.gz marrow marrow-discord
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: marrow-${{ matrix.target }}
-          path: dist/marrow-${{ matrix.target }}.tar.gz
+          name: marrow-x86_64-unknown-linux-gnu
+          path: dist/marrow-x86_64-unknown-linux-gnu.tar.gz
 
   publish:
     needs: build
