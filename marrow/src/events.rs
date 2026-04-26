@@ -71,6 +71,18 @@ pub enum Event {
         success: bool,
         output: String,
     },
+    AgentModelResponse {
+        task_id: String,
+        step: u32,
+        response: String,
+    },
+    StepCompleted {
+        task_id: String,
+        step: u32,
+        action_type: String,
+        duration_ms: u64,
+        success: bool,
+    },
     ScheduleCreated {
         schedule_id: String,
         description: String,
@@ -231,6 +243,27 @@ impl EventLog {
                 ..
             } if self.verbose => {
                 eprintln!("[agent] step {step}: tool '{tool}' succeeded");
+            }
+            // Model response — always show truncated preview
+            Event::AgentModelResponse { step, response, .. } => {
+                let preview = if response.len() > 500 {
+                    format!("{}…", &response[..500])
+                } else {
+                    response.clone()
+                };
+                eprintln!("[agent] step {step}: model response:\n{preview}");
+            }
+            // Step timing — always shown
+            Event::StepCompleted {
+                step,
+                action_type,
+                duration_ms,
+                success,
+                ..
+            } => {
+                let secs = *duration_ms as f64 / 1000.0;
+                let status = if *success { "ok" } else { "failed" };
+                eprintln!("[agent] step {step}: {action_type} completed in {secs:.1}s ({status})");
             }
             Event::JanitorReview {
                 tool,

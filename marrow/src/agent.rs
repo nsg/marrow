@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Instant;
 
 use reqwest::Client;
 use tokio::sync::mpsc;
 
 use crate::events::{Event, EventLog};
 use crate::memory::Memory;
+use crate::metrics::StepTiming;
 use crate::model::ModelBackend;
 use crate::secrets::Secrets;
 use crate::session::Message;
@@ -21,6 +23,8 @@ pub struct LoopResult {
     pub code_runs: u32,
     /// True when the loop exhausted `MAX_AGENT_STEPS` and the answer was forced.
     pub hit_step_limit: bool,
+    /// Per-step timing breakdown.
+    pub step_timings: Vec<StepTiming>,
 }
 
 /// Structured progress updates from the agent loop.
@@ -175,6 +179,20 @@ pub enum Action {
     UserMessage {
         text: String,
     },
+}
+
+impl Action {
+    fn type_str(&self) -> &'static str {
+        match self {
+            Action::CallTool { .. } => "call_tool",
+            Action::RunCode { .. } => "run_code",
+            Action::SaveTool { .. } => "save_tool",
+            Action::RemoveTool { .. } => "remove_tool",
+            Action::Notify { .. } => "notify",
+            Action::Answer { .. } => "answer",
+            Action::UserMessage { .. } => "user_message",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -655,12 +673,15 @@ pub async fn run_loop(
     };
 
     let mut history: Vec<StepResult> = Vec::new();
+    let mut step_timings: Vec<StepTiming> = Vec::new();
     let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
     let mut last_successful_code: Option<String> = None; // tracked for save_tool action
     let mut incomplete_nudges: u32 = 0;
     const MAX_INCOMPLETE_NUDGES: u32 = 2;
 
     for step in 1..=MAX_AGENT_STEPS {
+        let step_start = Instant::now();
+
         // Drain any user messages that arrived since the last step
         if let Some(rx) = incoming.as_mut() {
             while let Ok(msg) = rx.try_recv() {
@@ -697,9 +718,12 @@ pub async fn run_loop(
         );
         let response = backend.complete_chat(messages).await?;
 
-        if log.is_verbose() {
-            eprintln!("[agent] step {step}: raw model response:\n{response}");
-        }
+        log.emit(Event::AgentModelResponse {
+            task_id: task_id.to_string(),
+            step,
+            response: response.clone(),
+        })
+        .await;
 
         let action = parse_action(&response);
 
@@ -756,6 +780,8 @@ pub async fn run_loop(
             }
         }
 
+        let action_type = action.type_str().to_string();
+
         match &action {
             Action::CallTool { tool, params } => {
                 // Enforce retry limit: skip tools that have failed too many times
@@ -773,6 +799,20 @@ pub async fn run_loop(
                         success: false,
                         finding: None,
                     });
+                    let step_dur = step_start.elapsed();
+                    step_timings.push(StepTiming {
+                        step,
+                        action: "call_tool".to_string(),
+                        duration: step_dur,
+                    });
+                    log.emit(Event::StepCompleted {
+                        task_id: task_id.to_string(),
+                        step,
+                        action_type: "call_tool".to_string(),
+                        duration_ms: step_dur.as_millis() as u64,
+                        success: false,
+                    })
+                    .await;
                     continue;
                 }
 
@@ -1061,6 +1101,20 @@ pub async fn run_loop(
                         success: false,
                         finding: None,
                     });
+                    let step_dur = step_start.elapsed();
+                    step_timings.push(StepTiming {
+                        step,
+                        action: "answer_nudge".to_string(),
+                        duration: step_dur,
+                    });
+                    log.emit(Event::StepCompleted {
+                        task_id: task_id.to_string(),
+                        step,
+                        action_type: "answer_nudge".to_string(),
+                        duration_ms: step_dur.as_millis() as u64,
+                        success: false,
+                    })
+                    .await;
                     continue;
                 }
 
@@ -1076,6 +1130,20 @@ pub async fn run_loop(
                 // Fall back to format_answer only for empty answers (e.g.
                 // model said "answer" but left text blank).
                 if !text.trim().is_empty() {
+                    let step_dur = step_start.elapsed();
+                    step_timings.push(StepTiming {
+                        step,
+                        action: "answer".to_string(),
+                        duration: step_dur,
+                    });
+                    log.emit(Event::StepCompleted {
+                        task_id: task_id.to_string(),
+                        step,
+                        action_type: "answer".to_string(),
+                        duration_ms: step_dur.as_millis() as u64,
+                        success: true,
+                    })
+                    .await;
                     let (tool_calls, code_runs) = loop_stats(&history);
                     return Ok(LoopResult {
                         answer: text.clone(),
@@ -1083,6 +1151,7 @@ pub async fn run_loop(
                         tool_calls,
                         code_runs,
                         hit_step_limit: false,
+                        step_timings,
                     });
                 }
 
@@ -1100,6 +1169,20 @@ pub async fn run_loop(
                     formatting_hint,
                 )
                 .await?;
+                let step_dur = step_start.elapsed();
+                step_timings.push(StepTiming {
+                    step,
+                    action: "answer".to_string(),
+                    duration: step_dur,
+                });
+                log.emit(Event::StepCompleted {
+                    task_id: task_id.to_string(),
+                    step,
+                    action_type: "answer".to_string(),
+                    duration_ms: step_dur.as_millis() as u64,
+                    success: true,
+                })
+                .await;
                 let (tool_calls, code_runs) = loop_stats(&history);
                 return Ok(LoopResult {
                     answer,
@@ -1107,12 +1190,31 @@ pub async fn run_loop(
                     tool_calls,
                     code_runs,
                     hit_step_limit: false,
+                    step_timings,
                 });
             }
         }
+
+        // Record timing for non-answer steps (CallTool, RunCode, SaveTool, RemoveTool, Notify)
+        let step_dur = step_start.elapsed();
+        let step_success = history.last().is_some_and(|s| s.success);
+        step_timings.push(StepTiming {
+            step,
+            action: action_type.clone(),
+            duration: step_dur,
+        });
+        log.emit(Event::StepCompleted {
+            task_id: task_id.to_string(),
+            step,
+            action_type,
+            duration_ms: step_dur.as_millis() as u64,
+            success: step_success,
+        })
+        .await;
     }
 
     // Max steps reached — force an answer with what we have
+    let forced_start = Instant::now();
     history.push(StepResult {
         step: MAX_AGENT_STEPS + 1,
         action: Action::UserMessage {
@@ -1133,6 +1235,20 @@ pub async fn run_loop(
         formatting_hint,
     )
     .await?;
+    let forced_dur = forced_start.elapsed();
+    step_timings.push(StepTiming {
+        step: MAX_AGENT_STEPS + 1,
+        action: "forced_answer".to_string(),
+        duration: forced_dur,
+    });
+    log.emit(Event::StepCompleted {
+        task_id: task_id.to_string(),
+        step: MAX_AGENT_STEPS + 1,
+        action_type: "forced_answer".to_string(),
+        duration_ms: forced_dur.as_millis() as u64,
+        success: true,
+    })
+    .await;
     let (tool_calls, code_runs) = loop_stats(&history);
     Ok(LoopResult {
         answer,
@@ -1140,6 +1256,7 @@ pub async fn run_loop(
         tool_calls,
         code_runs,
         hit_step_limit: true,
+        step_timings,
     })
 }
 

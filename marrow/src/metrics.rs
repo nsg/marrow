@@ -99,6 +99,14 @@ impl Metrics {
     }
 }
 
+/// Timing for a single agent loop step.
+#[derive(Debug, Clone)]
+pub struct StepTiming {
+    pub step: u32,
+    pub action: String,
+    pub duration: Duration,
+}
+
 /// Per-task performance metrics collected during a single agent run.
 #[derive(Debug, Clone, Default)]
 pub struct TaskMetrics {
@@ -114,6 +122,8 @@ pub struct TaskMetrics {
     pub model_roles: Vec<(String, RoleMetrics)>,
     /// True when the agent exhausted the step limit and the answer was forced.
     pub hit_step_limit: bool,
+    /// Per-step timing breakdown.
+    pub step_timings: Vec<StepTiming>,
 }
 
 impl TaskMetrics {
@@ -129,6 +139,15 @@ impl TaskMetrics {
                 self.steps,
                 if self.steps == 1 { "step" } else { "steps" }
             ));
+        }
+
+        if !self.step_timings.is_empty() {
+            let step_strs: Vec<String> = self
+                .step_timings
+                .iter()
+                .map(|st| format!("{:.1}s", st.duration.as_secs_f64()))
+                .collect();
+            parts.push(format!("({})", step_strs.join(", ")));
         }
 
         if self.tool_calls > 0 {
@@ -186,6 +205,17 @@ impl TaskMetrics {
                 m.prompt_tokens,
                 m.completion_tokens
             );
+        }
+        if !self.step_timings.is_empty() {
+            eprintln!("Step breakdown:");
+            for st in &self.step_timings {
+                eprintln!(
+                    "  step {}: {} ({:.1}s)",
+                    st.step,
+                    st.action,
+                    st.duration.as_secs_f64()
+                );
+            }
         }
         eprintln!("---");
     }
