@@ -112,6 +112,8 @@ pub struct TaskMetrics {
     pub code_runs: u32,
     /// Per-role model call statistics (timing + tokens).
     pub model_roles: Vec<(String, RoleMetrics)>,
+    /// True when the agent exhausted the step limit and the answer was forced.
+    pub hit_step_limit: bool,
 }
 
 impl TaskMetrics {
@@ -119,11 +121,15 @@ impl TaskMetrics {
     pub fn one_line(&self) -> String {
         let mut parts = Vec::new();
         parts.push(format!("{:.1}s", self.wall_time.as_secs_f64()));
-        parts.push(format!(
-            "{} {}",
-            self.steps,
-            if self.steps == 1 { "step" } else { "steps" }
-        ));
+        if self.hit_step_limit {
+            parts.push(format!("{} steps (limit)", self.steps));
+        } else {
+            parts.push(format!(
+                "{} {}",
+                self.steps,
+                if self.steps == 1 { "step" } else { "steps" }
+            ));
+        }
 
         if self.tool_calls > 0 {
             parts.push(format!(
@@ -162,8 +168,15 @@ impl TaskMetrics {
         eprintln!("\n--- Task Metrics ---");
         eprintln!("Wall time: {:.1}s", self.wall_time.as_secs_f64());
         eprintln!(
-            "Steps: {}, Tool calls: {}, Code runs: {}",
-            self.steps, self.tool_calls, self.code_runs
+            "Steps: {}{}, Tool calls: {}, Code runs: {}",
+            self.steps,
+            if self.hit_step_limit {
+                " (hit limit)"
+            } else {
+                ""
+            },
+            self.tool_calls,
+            self.code_runs
         );
         for (role, m) in &self.model_roles {
             eprintln!(

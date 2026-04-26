@@ -356,6 +356,7 @@ impl Runtime {
                 tool_calls: loop_result.tool_calls,
                 code_runs: loop_result.code_runs,
                 model_roles: task_metrics_ref.summary(),
+                hit_step_limit: loop_result.hit_step_limit,
             },
         })
     }

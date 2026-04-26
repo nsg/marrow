@@ -19,6 +19,8 @@ pub struct LoopResult {
     pub steps: u32,
     pub tool_calls: u32,
     pub code_runs: u32,
+    /// True when the loop exhausted `MAX_AGENT_STEPS` and the answer was forced.
+    pub hit_step_limit: bool,
 }
 
 /// Structured progress updates from the agent loop.
@@ -1080,6 +1082,7 @@ pub async fn run_loop(
                         steps: step,
                         tool_calls,
                         code_runs,
+                        hit_step_limit: false,
                     });
                 }
 
@@ -1103,6 +1106,7 @@ pub async fn run_loop(
                     steps: step,
                     tool_calls,
                     code_runs,
+                    hit_step_limit: false,
                 });
             }
         }
@@ -1135,6 +1139,7 @@ pub async fn run_loop(
         steps: MAX_AGENT_STEPS,
         tool_calls,
         code_runs,
+        hit_step_limit: true,
     })
 }
 
