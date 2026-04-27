@@ -10,7 +10,7 @@ pub struct AppState {
     pub memory: RwLock<data::memory::MemoryStats>,
     pub toolbox: RwLock<Vec<data::toolbox::ToolInfo>>,
     pub schedules: RwLock<Vec<data::schedules::ScheduleInfo>>,
-    pub skills: RwLock<Vec<String>>,
+    pub skills: RwLock<Vec<data::skills::SkillInfo>>,
     pub config: data::config::ConfigInfo,
     pub memory_dir: PathBuf,
     pub embed_backend: Option<Box<dyn EmbedBackend>>,

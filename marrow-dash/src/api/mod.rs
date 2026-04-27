@@ -8,6 +8,7 @@ mod events;
 mod memories;
 mod overview;
 mod schedules;
+mod skills;
 mod tasks;
 mod tools;
 
@@ -18,5 +19,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .merge(tools::routes())
         .merge(memories::routes())
         .merge(schedules::routes())
+        .merge(skills::routes())
         .merge(events::routes())
 }

@@ -573,6 +573,63 @@ tr.clickable:hover td:first-child {
   border-radius: 2px;
 }
 
+/* Skills */
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 12px;
+}
+.skill-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--purple);
+  padding: 16px 18px;
+}
+.skill-card-header {
+  margin-bottom: 8px;
+}
+.skill-card-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+  text-transform: capitalize;
+  color: var(--text-primary);
+}
+.skill-card-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+.skill-details summary {
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 0;
+  font-family: var(--font-body);
+  transition: color 0.15s;
+}
+.skill-details summary:hover {
+  color: var(--accent);
+}
+.skill-details[open] summary {
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.skill-content {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  padding: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
 /* Janitor timeline */
 .timeline { padding: 0; list-style: none; position: relative; margin-left: 12px; }
 .timeline::before {
@@ -798,6 +855,10 @@ tr.clickable:hover td:first-child {
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
       <span class="nav-tooltip">Schedules</span>
     </button>
+    <button class="nav-btn" data-tab="skills" aria-label="Skills">
+      <svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+      <span class="nav-tooltip">Skills</span>
+    </button>
     <button class="nav-btn" data-tab="events" aria-label="Events">
       <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       <span class="nav-tooltip">Events</span>
@@ -859,6 +920,11 @@ tr.clickable:hover td:first-child {
       <div id="schedules-content"><div class="state-msg"><span class="spinner"></span> Loading schedules...</div></div>
     </div>
 
+    <!-- Skills -->
+    <div class="tab-panel" id="panel-skills">
+      <div id="skills-content"><div class="state-msg"><span class="spinner"></span> Loading skills...</div></div>
+    </div>
+
     <!-- Events -->
     <div class="tab-panel" id="panel-events">
       <div class="filter-bar">
@@ -891,6 +957,7 @@ tr.clickable:hover td:first-child {
   var viewNames = {
     overview: "Overview",
     tasks: "Tasks",
+    skills: "Skills",
     tools: "Tools",
     memory: "Memory",
     schedules: "Schedules",
@@ -1358,6 +1425,47 @@ tr.clickable:hover td:first-child {
     }
   }
 
+  // --- Skills ---
+  async function loadSkills() {
+    try {
+      const data = await apiFetch("/api/skills");
+      const skills = Array.isArray(data) ? data : [];
+      if (skills.length === 0) {
+        setContent("skills-content", emptyMsg("No skills generated yet."));
+        return;
+      }
+      let html = '<div class="skills-grid">';
+      for (const s of skills) {
+        const title = s.name.replace(/-/g, " ");
+        // Extract first paragraph after the heading as description
+        const lines = (s.content || "").split("\n");
+        let desc = "";
+        let body = "";
+        let pastHeading = false;
+        for (const line of lines) {
+          if (line.startsWith("#")) { pastHeading = true; continue; }
+          if (pastHeading && line.trim().length > 0 && !desc) { desc = line.trim(); continue; }
+          if (pastHeading && desc) { body += line + "\n"; }
+        }
+        html += '<div class="skill-card">';
+        html += '<div class="skill-card-header">';
+        html += '<span class="skill-card-name">' + esc(title) + '</span>';
+        html += '</div>';
+        if (desc) {
+          html += '<div class="skill-card-desc">' + esc(desc) + '</div>';
+        }
+        html += '<details class="skill-details"><summary>Full content</summary>';
+        html += '<pre class="skill-content">' + esc(s.content || "") + '</pre>';
+        html += '</details>';
+        html += '</div>';
+      }
+      html += '</div>';
+      setContent("skills-content", html);
+    } catch (e) {
+      setContent("skills-content", errorMsg(e));
+    }
+  }
+
   // --- Events ---
   async function loadEvents() {
     try {
@@ -1430,6 +1538,7 @@ tr.clickable:hover td:first-child {
       case "tools": loadTools(); break;
       case "memory": loadMemory(); break;
       case "schedules": loadSchedules(); break;
+      case "skills": loadSkills(); break;
       case "events": loadEvents(); break;
     }
     updateLastRefreshed();
