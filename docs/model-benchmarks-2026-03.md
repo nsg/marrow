@@ -5,7 +5,7 @@ with a simple prompt and 30s timeout on 2026-03-28.
 
 ## Models Evaluated
 
-### GLM-5 (Zhipu AI) — Selected as default
+### GLM-5 (Zhipu AI) — Selected as agent
 
 | Metric | Score |
 |---|---|
@@ -25,7 +25,7 @@ Best SWE-bench score. Strong disciplined step-by-step reasoning. Near-perfect ma
 **Weaknesses:** Slow with thinking enabled (8.6s). Not the fastest without thinking either (1.3s).
 Less tested in Western agent frameworks compared to Qwen/DeepSeek.
 
-**Verdict:** Best choice for default and code roles where quality matters most.
+**Verdict:** Best choice for agent and janitor roles where quality matters most.
 
 ---
 
@@ -170,9 +170,9 @@ SWE-bench (60%) despite being the largest Qwen model. Would be competitive if it
 
 | Role | Model | Speed | Why |
 |---|---|---|---|
+| **agent** | `glm-5:cloud` | 1277ms | Smartest (50), best agentic, best SWE-bench |
 | **fast** | `kimi-k2.5:cloud` | 1084ms | Smart (47), best tool calling, good speed |
-| **default** | `glm-5:cloud` | 1277ms | Smartest (50), best agentic, best SWE-bench |
-| **code** | `glm-5:cloud` | 1277ms | Highest coding quality (77.8% SWE-bench) |
+| **janitor** | `glm-5:cloud` | 1277ms | Highest coding quality (77.8% SWE-bench) |
 
 ## Key Findings
 

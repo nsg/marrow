@@ -1,25 +1,29 @@
 # Marrow model routing configuration
 # Maps role keys to model providers and models
+#
+# Required roles: agent, fast
+# Required if janitor is enabled: janitor
+# Optional: embedding
 
-# Default role — used for chat and task execution
+# Agent role — the main planner that drives the agent loop
 # Pick the smartest model available
-[roles.default]
+[roles.agent]
 provider = "ollama"
 model = "deepseek-v4-flash:cloud"
 api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
-# Fast role — used for memory retrieval, summarization, and fallbacks
-# Needs to be fast and reliable for lightweight structured tasks
+# Fast role — used for memory retrieval, summarization, and lightweight tasks
+# Needs to be fast and reliable for structured tasks
 [roles.fast]
 provider = "ollama"
 model = "deepseek-v4-flash:cloud"
 api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
-# Code role — used for runtime Lua tool generation and janitor reviews
-# Supplements built-in Rust tools. Needs strong coding ability (SWE-bench, LiveCodeBench)
-[roles.code]
+# Janitor role — used for Lua tool review, regeneration, and cleanup
+# Needs strong coding ability (SWE-bench, LiveCodeBench)
+[roles.janitor]
 provider = "ollama"
 model = "deepseek-v4-pro:cloud"
 api_base = "https://ollama.com"
@@ -31,14 +35,6 @@ api_base = "https://ollama.com"
 provider = "ollama"
 model = "nomic-embed-text"
 api_base = "https://ollama.com"
-# api_key = "your-key-here"
-
-# Optional agent role — overrides the planner model used by the agent loop.
-# If omitted, Marrow falls back to roles.default, then roles.fast.
-# [roles.agent]
-# provider = "ollama"
-# model = "deepseek-v4-pro:cloud"
-# api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
 # --- Discord bot ---
@@ -59,13 +55,13 @@ api_base = "https://ollama.com"
 # tick_seconds = 60           # how often to check for due schedules (seconds)
 
 # --- Local Ollama (omit api_base to use localhost:11434) ---
-# [roles.default]
+# [roles.agent]
 # provider = "ollama"
 # model = "mistral"
 
 # --- OpenAI-compatible API ---
 # Works with OpenAI, OpenRouter, Together, Groq, etc.
-# [roles.default]
+# [roles.agent]
 # provider = "openai"
 # model = "gpt-4o"
 # api_base = "https://api.openai.com/v1"
@@ -90,7 +86,7 @@ api_base = "https://ollama.com"
 # model = "nomic-embed-text"
 #
 # --- OpenRouter ---
-# [roles.default]
+# [roles.agent]
 # provider = "openai"
 # model = "anthropic/claude-sonnet-4"
 # api_base = "https://openrouter.ai/api/v1"

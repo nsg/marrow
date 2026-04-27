@@ -74,6 +74,21 @@ impl Runtime {
         config: &RouterConfig,
         options: RuntimeOptions,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        // Validate required roles are configured
+        for role in &["agent", "fast"] {
+            if !config.roles.contains_key(*role) {
+                return Err(
+                    format!("required role '{role}' is not configured in config.toml").into(),
+                );
+            }
+        }
+        if options.spawn_janitor && !config.roles.contains_key("janitor") {
+            return Err(
+                "janitor is enabled but required role 'janitor' is not configured in config.toml"
+                    .into(),
+            );
+        }
+
         let metrics = Arc::new(Metrics::new());
         let router = Arc::new(ModelRouter::from_config_with_metrics(
             config,
@@ -113,9 +128,7 @@ impl Runtime {
         }
 
         if options.spawn_janitor {
-            let janitor_backend = config
-                .build_backend("code")
-                .or_else(|_| config.build_backend("default"))?;
+            let janitor_backend = config.build_backend("janitor")?;
             let janitor_toolbox = Toolbox::new(&options.toolbox_path);
             let janitor_log = log.clone();
             let janitor_builtins = registry.builtin_info();
@@ -163,9 +176,7 @@ impl Runtime {
     }
 
     pub fn fast_backend(&self) -> Result<&dyn ModelBackend, Box<dyn Error + Send + Sync>> {
-        self.router
-            .backend("fast")
-            .or_else(|_| self.router.backend("default"))
+        self.router.backend("fast")
     }
 
     pub fn metrics(&self) -> &Metrics {
@@ -182,10 +193,7 @@ impl Runtime {
 
     /// Run a single janitor pass: review unvalidated tools and clean up the toolbox.
     pub async fn run_janitor_once(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
-        let code_backend = self
-            .router
-            .backend("code")
-            .or_else(|_| self.router.backend("default"))?;
+        let code_backend = self.router.backend("janitor")?;
         let builtins = self.registry.builtin_info();
         let tools = self.registry.list_all();
         janitor::run_once(
@@ -225,16 +233,8 @@ impl Runtime {
             })
             .await;
 
-        let agent_backend = self
-            .router
-            .backend("agent")
-            .or_else(|_| self.router.backend("default"))
-            .or_else(|_| self.router.backend("fast"))?;
+        let agent_backend = self.router.backend("agent")?;
         let fast_backend = self.fast_backend()?;
-        let answer_backend = self
-            .router
-            .backend("default")
-            .or_else(|_| self.router.backend("fast"))?;
         let embed_backend = self.router.embed_backend("embedding").ok();
         let memories = load_relevant_memories(
             description,
@@ -254,7 +254,6 @@ impl Runtime {
                     description,
                     &task_id,
                     agent_backend,
-                    answer_backend,
                     fast_backend,
                     self.registry.as_ref(),
                     self.client.clone(),
@@ -292,9 +291,7 @@ impl Runtime {
         let mem_progress = progress.cloned();
         let mem_changed = self.memory_changed.clone();
         tokio::spawn(async move {
-            let fast = mem_router
-                .backend("fast")
-                .or_else(|_| mem_router.backend("default"));
+            let fast = mem_router.backend("fast");
             let Ok(fast) = fast else { return };
 
             match memory_writer::process_interaction(

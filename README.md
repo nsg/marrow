@@ -66,13 +66,12 @@ Marrow runs as a Discord bot that responds to @mentions and DMs. See [DISCORD.md
 
 All configuration lives in `config.toml`. Copy [`config.example.toml`](config.example.toml) as a starting point — it documents every role and provider option inline.
 
-| Role | Used for |
-|---|---|
-| `default` | Chat and task execution (smartest model) |
-| `fast` | Session summarization and lightweight in-loop post-processing |
-| `code` | Lua tool generation and janitor reviews |
-| `embedding` | Vector memory retrieval |
-| `agent` | Optional override for the agent loop planner; falls back to `default` then `fast` if unset |
+| Role | Used for | Required |
+|---|---|---|
+| `agent` | Agent loop planner — drives task execution and inline Lua generation | Yes |
+| `fast` | Session summarization, memory retrieval, and lightweight post-processing | Yes |
+| `janitor` | Lua tool review, regeneration, and toolbox/memory cleanup | If janitor enabled |
+| `embedding` | Vector memory retrieval | No |
 
 Supported providers:
 - **`ollama`** — Ollama Cloud or local. Omit `api_base` for local at `localhost:11434`. Omit `api_key` for local instances.

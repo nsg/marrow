@@ -82,25 +82,25 @@ fn agent_parse_call_tool() {
 }
 
 #[test]
-fn agent_parse_answer() {
-    let input = r#"{"action": "answer", "text": "The answer is 42."}"#;
+fn agent_parse_done() {
+    let input = r#"{"action": "done", "text": "The answer is 42."}"#;
     match agent::parse_action(input) {
-        agent::Action::Answer { text, fallback } => {
+        agent::Action::Done { text, fallback } => {
             assert_eq!(text, "The answer is 42.");
             assert!(!fallback);
         }
-        other => panic!("expected Answer, got {other:?}"),
+        other => panic!("expected Done, got {other:?}"),
     }
 }
 
 #[test]
-fn agent_parse_malformed_defaults_to_answer() {
+fn agent_parse_malformed_defaults_to_done() {
     match agent::parse_action("I don't know") {
-        agent::Action::Answer { text, fallback } => {
+        agent::Action::Done { text, fallback } => {
             assert_eq!(text, "I don't know");
             assert!(fallback);
         }
-        other => panic!("expected Answer, got {other:?}"),
+        other => panic!("expected Done, got {other:?}"),
     }
 }
 
@@ -133,16 +133,14 @@ async fn agent_loop_call_tool_then_answer() {
     // Step 2: agent answers directly with collected data
     let agent_backend = MockBackend::new(vec![
         r#"{"action": "call_tool", "tool": "greeter", "params": {}}"#,
-        r#"{"action": "answer", "text": "The greeting is: hello world"}"#,
+        r#"{"action": "done", "text": "The greeting is: hello world"}"#,
     ]);
-    let answer_backend = MockBackend::new(vec![]);
     let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
         "say hello",
         "test-task",
         &agent_backend,
-        &answer_backend,
         &fast_backend,
         &registry,
         client,
@@ -182,17 +180,15 @@ async fn agent_loop_save_tool_then_call_then_answer() {
         "```lua\nreturn { echo = \"hi\" }\n```",
         r#"{"action": "save_tool", "name": "echo_tool", "description": "Echoes a message"}"#,
         r#"{"action": "call_tool", "tool": "echo_tool", "params": {"MSG": "hi"}}"#,
-        r#"{"action": "answer", "text": "Echo says: hi"}"#,
+        r#"{"action": "done", "text": "Echo says: hi"}"#,
     ]);
 
-    let answer_backend = MockBackend::new(vec![]);
     let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
         "echo something",
         "test-task",
         &agent_backend,
-        &answer_backend,
         &fast_backend,
         &registry,
         client,
@@ -224,15 +220,13 @@ async fn agent_loop_direct_answer() {
 
     let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
 
-    let agent_backend = MockBackend::new(vec![r#"{"action": "answer", "text": "2 + 2 = 4"}"#]);
-    let answer_backend = MockBackend::new(vec![]);
+    let agent_backend = MockBackend::new(vec![r#"{"action": "done", "text": "2 + 2 = 4"}"#]);
     let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
         "what is 2+2?",
         "test-task",
         &agent_backend,
-        &answer_backend,
         &fast_backend,
         &registry,
         client,
@@ -267,16 +261,14 @@ async fn agent_loop_tool_failure_recovery() {
     // Step 2: agent answers directly
     let agent_backend = MockBackend::new(vec![
         r#"{"action": "call_tool", "tool": "missing_tool", "params": {}}"#,
-        r#"{"action": "answer", "text": "The tool was not available, so I could not complete the request."}"#,
+        r#"{"action": "done", "text": "The tool was not available, so I could not complete the request."}"#,
     ]);
-    let answer_backend = MockBackend::new(vec![]);
     let fast_backend = MockBackend::new(vec![]);
 
     let result = agent::run_loop(
         "do something",
         "test-task",
         &agent_backend,
-        &answer_backend,
         &fast_backend,
         &registry,
         client,
@@ -795,7 +787,7 @@ async fn event_log_writes_to_file() {
     log.emit(Event::TaskCreated {
         task_id: "t1".to_string(),
         description: "test".to_string(),
-        role: "default".to_string(),
+        role: "test".to_string(),
     })
     .await;
     log.emit(Event::TaskExecuted {

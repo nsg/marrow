@@ -77,15 +77,15 @@ const MAX_AGENT_STEPS: u32 = 25;
 
 /// Static system prompt — identical across all steps and tasks.
 /// Placed in the system message so API providers can cache it.
-const AGENT_SYSTEM_PROMPT: &str = r#"You are an agent that completes tasks step by step. Each turn you perform ONE action.
+const AGENT_SYSTEM_PROMPT: &str = r#"You are an agent that completes tasks step by step.
 
 CRITICAL: You have NO shell access. No curl, no bash, no command line. You can ONLY interact through the actions below.
 
-You can respond with EITHER a JSON action OR a Lua code block.
+Each response can contain any combination of ```lua code blocks and JSON actions. They all execute in parallel.
 
 ## Inline Lua code (preferred for one-off data fetching)
 
-Write a ```lua code block and it will be executed in a sandbox with ONLY these functions:
+Write ```lua code blocks and they will be executed in a sandbox with ONLY these functions:
 - http_request({{ method, url, body?, headers? }}) / http_get(url) / http_post(url, body)
 - json_parse(string) / json_encode(table)
 - xml_parse(string) / xml_encode(table)
@@ -105,39 +105,79 @@ local data = json_parse(resp.body)
 return {{ result = data }}
 ```
 
+### Multiple Lua blocks & naming
+
+You can write multiple ```lua blocks in one response. They run in parallel in separate sandboxes — they cannot access each other's variables or results. Name blocks with a `-- name: xyz` comment on the first line:
+
+```lua
+-- name: fetch_weather
+local resp = http_get("https://api.example.com/weather")
+return json_parse(resp.body)
+```
+
+```lua
+-- name: fetch_news
+local resp = http_get("https://api.example.com/news")
+return json_parse(resp.body)
+```
+
+Results come back labeled by name (e.g. [fetch_weather]: ..., [fetch_news]: ...). If you omit the name, blocks are labeled by index ([inline 1], [inline 2]).
+
 ## JSON actions
 
-To call an existing tool:
+Multiple JSON actions can appear in one response. Wrap them in a JSON array:
+[{{"action": "call_tool", "tool": "TOOL_A", "params": {{}}}}, {{"action": "call_tool", "tool": "TOOL_B", "params": {{}}}}]
+
+A single action can be a plain object (no array needed):
 {{"action": "call_tool", "tool": "TOOL_NAME", "params": {{"KEY": "value"}}}}
 
-To save the last successful inline Lua as a reusable tool (saves the code from your most recent successful ```lua block):
-{{"action": "save_tool", "name": "generic_tool_name", "description": "one line description"}}
-IMPORTANT: save_tool must be its own action — do NOT combine it with a ```lua block in the same response.
+Available actions:
 
-To remove a broken tool from the toolbox:
+**call_tool** — call an existing tool:
+{{"action": "call_tool", "tool": "TOOL_NAME", "params": {{"KEY": "value"}}}}
+
+**save_tool** — save a previously successful ```lua block as a reusable tool. Reference the block by name or index:
+{{"action": "save_tool", "name": "generic_tool_name", "description": "one line description", "block": "fetch_weather"}}
+
+**remove_tool** — remove a broken tool from the toolbox:
 {{"action": "remove_tool", "name": "tool_name"}}
 
-To send the user a progress update while you continue working (does NOT end the task):
-{{"action": "notify", "text": "status message"}}
+**progress** — send the user a progress update while you continue working (does NOT end the task):
+{{"action": "progress", "text": "status message"}}
 
-To give your final answer (this text is shown directly to the user — make it complete and well-formatted):
-{{"action": "answer", "text": "your complete answer to the user"}}
+**done** — give your final answer (this text is shown directly to the user — make it complete and well-formatted):
+{{"action": "done", "text": "your complete answer to the user"}}
+IMPORTANT: done MUST be the only action in a response. If you combine done with other actions (Lua blocks, tool calls, etc.), the done will be IGNORED and all other actions will execute. You will be asked to resubmit done on its own.
 
-Rules:
-- After inline Lua succeeds: if the code is generally useful (API calls, data fetching, etc.), save it with save_tool before answering. The flow is: (1) write and run inline Lua, (2) if it works, send save_tool as the next action, (3) then answer. Skip saving only if a tool with the same purpose already exists.
-- CRITICAL: When a step already returned the data you need, do NOT rewrite the code. Use save_tool immediately on the last successful code. Rewriting working code risks regression — save first, then answer with the data you already have.
+## Mixing actions
+
+You can freely combine ```lua blocks with JSON actions (call_tool, save_tool, remove_tool, progress) in a single response. Everything executes in parallel. The only exception is done, which must appear alone.
+
+Example — fetch data and save a previous block in the same response:
+```lua
+-- name: fetch_prices
+local resp = http_get("https://api.example.com/prices")
+return json_parse(resp.body)
+```
+{{"action": "save_tool", "name": "weather_lookup", "description": "Fetches weather data", "block": "fetch_weather"}}
+
+## Rules
+
+- After inline Lua succeeds: if the code is generally useful (API calls, data fetching, etc.), save it with save_tool. You can save a block in the same response as new work, or in a subsequent response.
+- CRITICAL: When a step already returned the data you need, do NOT rewrite the code. Use save_tool referencing the successful block. Rewriting working code risks regression.
 - If a tool or code fails, read the error carefully. Do NOT repeat the same approach — fix the specific issue.
 - NEVER retry something that already failed with the same error. If "require" failed, it will always fail. If a secret name was not found, try a different name.
 - If something worked in a previous step, reuse that exact approach. Do not regress to a pattern that already failed.
-- Do NOT answer prematurely. If data collection failed, try a different approach before giving up. Only answer when you have actual data or have exhausted all reasonable approaches.
+- Do NOT answer prematurely. If data collection failed, try a different approach before giving up. Only use done when you have actual data or have exhausted all reasonable approaches.
 - If a follow-up question asks about different data (different dates, different items, etc.), you MUST fetch new data — previous conversation results do not cover it.
 - If a saved tool fails repeatedly, use remove_tool to delete it — you can always recreate it or use inline Lua instead.
 - Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
 - When saving tools, prefer generic names and use PARAMS for inputs (e.g. PARAMS["LOCATION"] instead of hardcoded "Stockholm"). This makes tools reusable for different inputs.
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
-- The answer action text should be a natural language response, NOT a JSON action. It is sent directly to the user — include all relevant details from your findings.
-- CRITICAL: Every response MUST be either a JSON action or a ```lua block. Plain text without an action will be treated as your final answer and sent to the user immediately. Do NOT output bare text as a thinking or planning step — if you are not ready to answer, use a JSON action or ```lua block.
-- Use notify sparingly — only when the user would genuinely benefit from an intermediate update during a long multi-step task. Do NOT notify before every tool call.
+- The done action text should be a natural language response, NOT a JSON action. It is sent directly to the user — include all relevant details from your findings.
+- CRITICAL: Every response MUST contain at least one action (JSON or ```lua block). Plain text without an action will be treated as your final answer and sent to the user immediately. Do NOT output bare text as a thinking or planning step — if you are not ready to answer, use an action.
+- Use progress sparingly — only when the user would genuinely benefit from an intermediate update during a long multi-step task.
+- When you can do independent work in parallel (e.g. fetch from multiple APIs), use multiple ```lua blocks in one response instead of sequential steps.
 - If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling."#;
 
 /// Dynamic user prompt — changes every step with tools, memories, history, etc.
@@ -156,22 +196,24 @@ pub enum Action {
         params: HashMap<String, String>,
     },
     RunCode {
+        name: String,
         code: String,
     },
     SaveTool {
         name: String,
         description: String,
+        block: Option<String>,
     },
     RemoveTool {
         name: String,
     },
-    Notify {
+    Progress {
         text: String,
     },
-    Answer {
+    Done {
         text: String,
-        /// True when the answer was inferred from unparseable text (no explicit
-        /// `{"action":"answer"}` was found).  The main loop uses this to nudge
+        /// True when the done signal was inferred from unparseable text (no explicit
+        /// `{"action":"done"}` was found).  The main loop uses this to nudge
         /// the model back into the loop instead of accepting a half-finished
         /// response.
         fallback: bool,
@@ -181,6 +223,12 @@ pub enum Action {
     },
 }
 
+/// Parsed response from the model: zero or more actions per turn.
+#[derive(Debug, Clone)]
+pub struct ParsedResponse {
+    pub actions: Vec<Action>,
+}
+
 impl Action {
     fn type_str(&self) -> &'static str {
         match self {
@@ -188,8 +236,8 @@ impl Action {
             Action::RunCode { .. } => "run_code",
             Action::SaveTool { .. } => "save_tool",
             Action::RemoveTool { .. } => "remove_tool",
-            Action::Notify { .. } => "notify",
-            Action::Answer { .. } => "answer",
+            Action::Progress { .. } => "progress",
+            Action::Done { .. } => "done",
             Action::UserMessage { .. } => "user_message",
         }
     }
@@ -387,99 +435,201 @@ pub fn build_agent_prompt(
     ]
 }
 
-pub fn parse_action(response: &str) -> Action {
-    let trimmed = response.trim();
+/// Parse a single JSON action string into an Action.
+fn parse_json_action(json_str: &str) -> Option<Action> {
+    // If parsing fails, try fixing double-brace escaping from the model
+    let json_str = if serde_json::from_str::<serde_json::Value>(json_str).is_err() {
+        std::borrow::Cow::Owned(json_str.replace("{{", "{").replace("}}", "}"))
+    } else {
+        std::borrow::Cow::Borrowed(json_str)
+    };
+    let json_str = json_str.as_ref();
 
-    // Check for inline Lua code block first
-    if let Some(code) = extract_lua_block(trimmed) {
-        return Action::RunCode { code };
+    #[derive(serde::Deserialize)]
+    struct RawAction {
+        action: String,
+        #[serde(default)]
+        tool: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        block: Option<String>,
+        #[serde(default)]
+        params: HashMap<String, serde_json::Value>,
     }
 
-    let start = trimmed.find('{');
-    let end = trimmed.rfind('}');
-
-    if let (Some(s), Some(e)) = (start, end)
-        && s < e
-    {
-        let json_str = &trimmed[s..=e];
-
-        // If parsing fails, try fixing double-brace escaping from the model
-        let json_str = if serde_json::from_str::<serde_json::Value>(json_str).is_err() {
-            std::borrow::Cow::Owned(json_str.replace("{{", "{").replace("}}", "}"))
-        } else {
-            std::borrow::Cow::Borrowed(json_str)
-        };
-        let json_str = json_str.as_ref();
-
-        #[derive(serde::Deserialize)]
-        struct RawAction {
-            action: String,
-            #[serde(default)]
-            tool: Option<String>,
-            #[serde(default)]
-            name: Option<String>,
-            #[serde(default)]
-            description: Option<String>,
-            #[serde(default)]
-            text: Option<String>,
-            #[serde(default)]
-            params: HashMap<String, serde_json::Value>,
+    let raw: RawAction = serde_json::from_str(json_str).ok()?;
+    match raw.action.as_str() {
+        "call_tool" => {
+            let tool = raw.tool?;
+            let params = raw
+                .params
+                .into_iter()
+                .map(|(k, v)| {
+                    let s = match v {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    (k, s)
+                })
+                .collect();
+            Some(Action::CallTool { tool, params })
         }
+        "save_tool" => {
+            let name = raw.name?;
+            let description = raw.description?;
+            Some(Action::SaveTool {
+                name,
+                description,
+                block: raw.block,
+            })
+        }
+        "remove_tool" => {
+            let name = raw.name.or(raw.tool)?;
+            Some(Action::RemoveTool { name })
+        }
+        "progress" => {
+            let text = raw.text.filter(|t| !t.trim().is_empty())?;
+            Some(Action::Progress { text })
+        }
+        "done" => {
+            let text = raw.text?;
+            Some(Action::Done {
+                text,
+                fallback: false,
+            })
+        }
+        _ => None,
+    }
+}
 
-        if let Ok(raw) = serde_json::from_str::<RawAction>(json_str) {
-            match raw.action.as_str() {
-                "call_tool" => {
-                    if let Some(tool) = raw.tool {
-                        let params = raw
-                            .params
-                            .into_iter()
-                            .map(|(k, v)| {
-                                let s = match v {
-                                    serde_json::Value::String(s) => s,
-                                    other => other.to_string(),
-                                };
-                                (k, s)
-                            })
-                            .collect();
-                        return Action::CallTool { tool, params };
-                    }
+/// Extract all JSON actions from the response text, ignoring anything inside
+/// ```lua blocks. Supports both single objects and JSON arrays.
+fn extract_json_actions(text: &str) -> Vec<Action> {
+    // Remove ```lua...``` blocks from the text so we don't match JSON inside them
+    let mut stripped = String::new();
+    let mut pos = 0;
+    while pos < text.len() {
+        if let Some(start) = text[pos..].find("```lua") {
+            stripped.push_str(&text[pos..pos + start]);
+            let block_start = pos + start + 6;
+            if let Some(nl) = text[block_start..].find('\n') {
+                let code_start = block_start + nl + 1;
+                if let Some(end) = text[code_start..].find("```") {
+                    pos = code_start + end + 3;
+                    continue;
                 }
-                "save_tool" => {
-                    if let (Some(name), Some(description)) =
-                        (raw.name.clone(), raw.description.clone())
-                    {
-                        return Action::SaveTool { name, description };
-                    }
+            }
+            // Malformed block — just skip the marker
+            stripped.push_str(&text[pos..pos + start + 6]);
+            pos = block_start;
+        } else {
+            stripped.push_str(&text[pos..]);
+            break;
+        }
+    }
+
+    let mut actions = Vec::new();
+
+    // Try to find a JSON array first: [{ ... }, { ... }]
+    if let Some(arr_start) = stripped.find('[')
+        && let Some(arr_end) = stripped.rfind(']')
+    {
+        let arr_str = &stripped[arr_start..=arr_end];
+        if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(arr_str) {
+            for val in arr {
+                if val.is_object()
+                    && let Some(action) = parse_json_action(&val.to_string())
+                {
+                    actions.push(action);
                 }
-                "remove_tool" => {
-                    if let Some(name) = raw.name.or(raw.tool) {
-                        return Action::RemoveTool { name };
-                    }
-                }
-                "notify" => {
-                    if let Some(text) = raw.text.filter(|t| !t.trim().is_empty()) {
-                        return Action::Notify { text };
-                    }
-                }
-                "answer" => {
-                    if let Some(text) = raw.text {
-                        return Action::Answer {
-                            text,
-                            fallback: false,
-                        };
-                    }
-                }
-                _ => {}
+            }
+            if !actions.is_empty() {
+                return actions;
             }
         }
     }
 
-    // If we can't parse an action, treat the whole response as an answer
-    // (marked as fallback so the main loop can challenge it)
-    Action::Answer {
-        text: trimmed.to_string(),
-        fallback: true,
+    // Fallback: find individual JSON objects by scanning for { ... }
+    let stripped_bytes = stripped.as_bytes();
+    let mut i = 0;
+    while i < stripped.len() {
+        if stripped_bytes[i] == b'{' {
+            let mut depth = 0;
+            let mut j = i;
+            let mut in_string = false;
+            let mut escape = false;
+            while j < stripped.len() {
+                let ch = stripped_bytes[j];
+                if escape {
+                    escape = false;
+                } else if ch == b'\\' && in_string {
+                    escape = true;
+                } else if ch == b'"' {
+                    in_string = !in_string;
+                } else if !in_string {
+                    if ch == b'{' {
+                        depth += 1;
+                    } else if ch == b'}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            let candidate = &stripped[i..=j];
+                            if let Some(action) = parse_json_action(candidate) {
+                                actions.push(action);
+                            }
+                            i = j + 1;
+                            break;
+                        }
+                    }
+                }
+                j += 1;
+            }
+            if depth != 0 {
+                i += 1; // malformed, skip
+            }
+        } else {
+            i += 1;
+        }
     }
+
+    actions
+}
+
+/// Parse the full model response into a ParsedResponse containing all actions.
+pub fn parse_response(response: &str) -> ParsedResponse {
+    let trimmed = response.trim();
+
+    let lua_blocks = extract_lua_blocks(trimmed);
+    let json_actions = extract_json_actions(trimmed);
+
+    let mut actions: Vec<Action> = lua_blocks
+        .into_iter()
+        .map(|(name, code)| Action::RunCode { name, code })
+        .collect();
+    actions.extend(json_actions);
+
+    // If nothing was parsed, treat the whole response as a fallback done
+    if actions.is_empty() {
+        actions.push(Action::Done {
+            text: trimmed.to_string(),
+            fallback: true,
+        });
+    }
+
+    ParsedResponse { actions }
+}
+
+/// Backward-compatible single-action parse (for tests and simple call sites).
+pub fn parse_action(response: &str) -> Action {
+    let parsed = parse_response(response);
+    parsed.actions.into_iter().next().unwrap_or(Action::Done {
+        text: response.trim().to_string(),
+        fallback: true,
+    })
 }
 
 /// Heuristic: does this text look like the model was mid-thought rather than
@@ -531,21 +681,21 @@ fn format_action_short(action: &Action) -> String {
                 .join(", ");
             format!("Called tool \"{tool}\" ({params_str})")
         }
-        Action::RunCode { .. } => "Ran inline Lua".to_string(),
+        Action::RunCode { name, .. } => format!("Ran inline Lua [{name}]"),
         Action::SaveTool { name, .. } => format!("Saved tool \"{name}\""),
         Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
-        Action::Notify { text } => {
+        Action::Progress { text } => {
             if text.len() > 60 {
-                format!("Notified user: \"{}...\"", &text[..60])
+                format!("Progress: \"{}...\"", &text[..60])
             } else {
-                format!("Notified user: \"{text}\"")
+                format!("Progress: \"{text}\"")
             }
         }
-        Action::Answer { fallback, .. } => {
+        Action::Done { fallback, .. } => {
             if *fallback {
-                "Answered (fallback — no action parsed)".to_string()
+                "Done (fallback — no action parsed)".to_string()
             } else {
-                "Answered".to_string()
+                "Done".to_string()
             }
         }
         Action::UserMessage { text } => format!("User: \"{text}\""),
@@ -609,18 +759,52 @@ async fn make_finding(output: &str, fast_backend: &dyn ModelBackend) -> Option<S
     }
 }
 
-fn extract_lua_block(text: &str) -> Option<String> {
-    let start = text.find("```lua")?;
-    let rest = &text[start + 6..];
-    let newline = rest.find('\n')?;
-    let rest = &rest[newline + 1..];
-    let end = rest.find("```")?;
-    let code = rest[..end].trim();
-    if code.is_empty() {
-        None
-    } else {
-        Some(code.to_string())
+/// Extract all ```lua blocks from a response. Each block can optionally be
+/// named with `-- name: xyz` on the first line. Unnamed blocks get indexed
+/// names: "inline 1", "inline 2", etc.
+fn extract_lua_blocks(text: &str) -> Vec<(String, String)> {
+    let mut blocks = Vec::new();
+    let mut unnamed_idx = 0u32;
+    let mut search_from = 0;
+
+    while let Some(start) = text[search_from..].find("```lua") {
+        let abs_start = search_from + start + 6;
+        let Some(newline) = text[abs_start..].find('\n') else {
+            break;
+        };
+        let code_start = abs_start + newline + 1;
+        let Some(end) = text[code_start..].find("```") else {
+            break;
+        };
+        let code = text[code_start..code_start + end].trim();
+        search_from = code_start + end + 3;
+
+        if code.is_empty() {
+            continue;
+        }
+
+        // Check for -- name: xyz on the first line
+        let (name, code) = if let Some(rest) = code.strip_prefix("-- name:") {
+            if let Some(nl) = rest.find('\n') {
+                let name = rest[..nl].trim().to_string();
+                let remaining = rest[nl + 1..].trim();
+                if remaining.is_empty() {
+                    continue;
+                }
+                (name, remaining.to_string())
+            } else {
+                // Only a name line, no actual code
+                continue;
+            }
+        } else {
+            unnamed_idx += 1;
+            (format!("inline {unnamed_idx}"), code.to_string())
+        };
+
+        blocks.push((name, code));
     }
+
+    blocks
 }
 
 fn loop_stats(history: &[StepResult]) -> (u32, u32) {
@@ -640,7 +824,6 @@ pub async fn run_loop(
     task: &str,
     task_id: &str,
     backend: &dyn ModelBackend,
-    answer_backend: &dyn ModelBackend,
     fast_backend: &dyn ModelBackend,
     registry: &ToolRegistry,
     client: Arc<Client>,
@@ -675,7 +858,8 @@ pub async fn run_loop(
     let mut history: Vec<StepResult> = Vec::new();
     let mut step_timings: Vec<StepTiming> = Vec::new();
     let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
-    let mut last_successful_code: Option<String> = None; // tracked for save_tool action
+    let mut last_successful_code: Option<String> = None; // fallback for save_tool without block ref
+    let mut successful_blocks: HashMap<String, String> = HashMap::new(); // name -> code
     let mut incomplete_nudges: u32 = 0;
     const MAX_INCOMPLETE_NUDGES: u32 = 2;
 
@@ -725,348 +909,81 @@ pub async fn run_loop(
         })
         .await;
 
-        let action = parse_action(&response);
+        let parsed = parse_response(&response);
+        let mut actions = parsed.actions;
 
         if log.is_verbose() {
-            match &action {
-                Action::CallTool { tool, params } => {
-                    let params_str = params
-                        .iter()
-                        .map(|(k, v)| format!("  {k} = \"{v}\""))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let expected = registry.extract_params(tool);
-                    eprintln!(
-                        "[agent] step {step}: parsed call_tool \"{tool}\"\n  params passed:\n{params_str}\n  tool expects: {:?}",
-                        expected
-                    );
+            eprintln!("[agent] step {step}: parsed {} action(s)", actions.len());
+            for a in &actions {
+                match a {
+                    Action::CallTool { tool, params } => {
+                        let params_str = params
+                            .iter()
+                            .map(|(k, v)| format!("  {k} = \"{v}\""))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let expected = registry.extract_params(tool);
+                        eprintln!(
+                            "[agent] step {step}:   call_tool \"{tool}\"\n  params passed:\n{params_str}\n  tool expects: {:?}",
+                            expected
+                        );
+                    }
+                    Action::RunCode { name, code } => {
+                        let preview = if code.len() > 200 {
+                            format!("{}...", &code[..200])
+                        } else {
+                            code.clone()
+                        };
+                        eprintln!("[agent] step {step}:   run_code [{name}]:\n{preview}");
+                    }
+                    Action::SaveTool {
+                        name,
+                        description,
+                        block,
+                    } => {
+                        eprintln!(
+                            "[agent] step {step}:   save_tool \"{name}\" — {description} (block: {block:?})"
+                        );
+                    }
+                    Action::RemoveTool { name } => {
+                        eprintln!("[agent] step {step}:   remove_tool \"{name}\"");
+                    }
+                    Action::Progress { text } => {
+                        let preview = if text.len() > 200 {
+                            format!("{}...", &text[..200])
+                        } else {
+                            text.clone()
+                        };
+                        eprintln!("[agent] step {step}:   progress — {preview}");
+                    }
+                    Action::Done { text, fallback } => {
+                        let preview = if text.len() > 200 {
+                            format!("{}...", &text[..200])
+                        } else {
+                            text.clone()
+                        };
+                        let tag = if *fallback { "fallback done" } else { "done" };
+                        eprintln!("[agent] step {step}:   {tag} — {preview}");
+                    }
+                    Action::UserMessage { .. } => {}
                 }
-                Action::RunCode { code } => {
-                    let preview = if code.len() > 200 {
-                        format!("{}...", &code[..200])
-                    } else {
-                        code.clone()
-                    };
-                    eprintln!("[agent] step {step}: parsed run_code:\n{preview}");
-                }
-                Action::SaveTool { name, description } => {
-                    eprintln!("[agent] step {step}: parsed save_tool \"{name}\" — {description}");
-                }
-                Action::RemoveTool { name } => {
-                    eprintln!("[agent] step {step}: parsed remove_tool \"{name}\"");
-                }
-                Action::Notify { text } => {
-                    let preview = if text.len() > 200 {
-                        format!("{}...", &text[..200])
-                    } else {
-                        text.clone()
-                    };
-                    eprintln!("[agent] step {step}: parsed notify — {preview}");
-                }
-                Action::Answer { text, fallback } => {
-                    let preview = if text.len() > 200 {
-                        format!("{}...", &text[..200])
-                    } else {
-                        text.clone()
-                    };
-                    let tag = if *fallback {
-                        "fallback answer"
-                    } else {
-                        "answer"
-                    };
-                    eprintln!("[agent] step {step}: parsed {tag} — {preview}");
-                }
-                Action::UserMessage { .. } => {}
             }
         }
 
-        let action_type = action.type_str().to_string();
+        // Check for done exclusivity: if done is mixed with other actions,
+        // drop the done and inform the model.
+        let has_done = actions.iter().any(|a| matches!(a, Action::Done { .. }));
+        let has_other = actions.iter().any(|a| !matches!(a, Action::Done { .. }));
+        if has_done && has_other {
+            actions.retain(|a| !matches!(a, Action::Done { .. }));
+            // We'll append a system message after executing the other actions
+        }
 
-        match &action {
-            Action::CallTool { tool, params } => {
-                // Enforce retry limit: skip tools that have failed too many times
-                let fail_count = tool_fail_counts.get(tool.as_str()).copied().unwrap_or(0);
-                if fail_count >= 2 {
-                    if log.is_verbose() {
-                        eprintln!(
-                            "[agent] step {step}: BLOCKED tool \"{tool}\" — failed {fail_count} times already, forcing move on"
-                        );
-                    }
-                    history.push(StepResult {
-                        step,
-                        action: action.clone(),
-                        output: format!("{{\"error\": \"tool '{tool}' has failed {fail_count} times already. You MUST use a different tool or create a new one.\"}}"),
-                        success: false,
-                        finding: None,
-                    });
-                    let step_dur = step_start.elapsed();
-                    step_timings.push(StepTiming {
-                        step,
-                        action: "call_tool".to_string(),
-                        duration: step_dur,
-                    });
-                    log.emit(Event::StepCompleted {
-                        task_id: task_id.to_string(),
-                        step,
-                        action_type: "call_tool".to_string(),
-                        duration_ms: step_dur.as_millis() as u64,
-                        success: false,
-                    })
-                    .await;
-                    continue;
-                }
-
-                log.emit(Event::AgentAction {
-                    task_id: task_id.to_string(),
-                    step,
-                    action_type: "call_tool".to_string(),
-                    detail: tool.clone(),
-                })
-                .await;
-
-                emit(ProgressUpdate::ToolCallStart);
-
-                // Normalize param keys to uppercase
-                let upper_params: HashMap<String, String> = params
-                    .iter()
-                    .map(|(k, v)| (k.to_uppercase(), v.clone()))
-                    .collect();
-
-                if log.is_verbose() {
-                    let upper_str = upper_params
-                        .iter()
-                        .map(|(k, v)| format!("  {k} = \"{v}\""))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    eprintln!(
-                        "[agent] step {step}: executing tool \"{tool}\" with uppercase params:\n{upper_str}"
-                    );
-                }
-
-                let (output, step_success) =
-                    match registry.execute_tool(tool, &upper_params, &tool_ctx).await {
-                        Ok(value) => {
-                            let has_error = value.get("error").is_some();
-                            let output_str = value.to_string();
-                            if log.is_verbose() {
-                                let preview = if output_str.len() > 500 {
-                                    format!("{}...", &output_str[..500])
-                                } else {
-                                    output_str.clone()
-                                };
-                                eprintln!("[agent] step {step}: tool \"{tool}\" output: {preview}");
-                            }
-                            if has_error {
-                                *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
-                            }
-                            log.emit(Event::AgentToolResult {
-                                task_id: task_id.to_string(),
-                                step,
-                                tool: tool.clone(),
-                                success: !has_error,
-                                output: output_str.clone(),
-                            })
-                            .await;
-                            (output_str, !has_error)
-                        }
-                        Err(e) => {
-                            let output_str =
-                                format!("{{\"error\": \"tool execution failed: {e}\"}}");
-                            *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
-                            log.emit(Event::AgentToolResult {
-                                task_id: task_id.to_string(),
-                                step,
-                                tool: tool.clone(),
-                                success: false,
-                                output: output_str.clone(),
-                            })
-                            .await;
-                            (output_str, false)
-                        }
-                    };
-
-                let finding = if step_success {
-                    make_finding(&output, fast_backend).await
-                } else {
-                    None
-                };
-                emit(ProgressUpdate::ToolCallEnd);
-
-                history.push(StepResult {
-                    step,
-                    action,
-                    output,
-                    success: step_success,
-                    finding,
-                });
-            }
-
-            Action::RunCode { code } => {
-                log.emit(Event::AgentAction {
-                    task_id: task_id.to_string(),
-                    step,
-                    action_type: "run_code".to_string(),
-                    detail: String::new(),
-                })
-                .await;
-
-                emit(ProgressUpdate::CodeRunStart);
-
-                let provider = crate::context::LuaProvider::new("inline", code);
-                let toolbox_dir = Some(registry.toolbox_path().to_path_buf());
-                let (output, step_success) = match provider
-                    .execute_with_params(
-                        task,
-                        client.clone(),
-                        &HashMap::new(),
-                        toolbox_dir,
-                        secrets,
-                        registry.builtins_arc(),
-                    )
-                    .await
-                {
-                    Ok(value) => {
-                        last_successful_code = Some(code.clone());
-                        let output_str = value.to_string();
-                        log.emit(Event::AgentToolResult {
-                            task_id: task_id.to_string(),
-                            step,
-                            tool: "inline".to_string(),
-                            success: true,
-                            output: output_str.clone(),
-                        })
-                        .await;
-                        (output_str, true)
-                    }
-                    Err(e) => {
-                        let output_str = format!("{{\"error\": \"inline code failed: {e}\"}}");
-                        log.emit(Event::AgentToolResult {
-                            task_id: task_id.to_string(),
-                            step,
-                            tool: "inline".to_string(),
-                            success: false,
-                            output: output_str.clone(),
-                        })
-                        .await;
-                        (output_str, false)
-                    }
-                };
-
-                emit(ProgressUpdate::CodeRunEnd);
-
-                let finding = if step_success {
-                    make_finding(&output, fast_backend).await
-                } else {
-                    None
-                };
-                history.push(StepResult {
-                    step,
-                    action,
-                    output,
-                    success: step_success,
-                    finding,
-                });
-            }
-
-            Action::SaveTool { name, description } => {
-                log.emit(Event::AgentAction {
-                    task_id: task_id.to_string(),
-                    step,
-                    action_type: "save_tool".to_string(),
-                    detail: name.clone(),
-                })
-                .await;
-
-                let output = if let Some(ref code) = last_successful_code {
-                    let meta = crate::toolbox::ToolMeta {
-                        name: name.clone(),
-                        description: description.clone(),
-                        provides: vec![name.clone()],
-                        validated: false,
-                    };
-                    match registry.toolbox().save_tool(&meta, code) {
-                        Ok(()) => {
-                            emit(ProgressUpdate::ToolCreated);
-                            format!("Tool \"{name}\" saved. You can now call it with call_tool.")
-                        }
-                        Err(e) => format!("Failed to save tool: {e}"),
-                    }
-                } else {
-                    "No successful inline code to save. Run inline code first.".to_string()
-                };
-
-                let step_success = output.starts_with("Tool \"") && output.ends_with("call_tool.");
-                history.push(StepResult {
-                    step,
-                    action,
-                    output,
-                    success: step_success,
-                    finding: None,
-                });
-            }
-
-            Action::RemoveTool { name } => {
-                log.emit(Event::AgentAction {
-                    task_id: task_id.to_string(),
-                    step,
-                    action_type: "remove_tool".to_string(),
-                    detail: name.clone(),
-                })
-                .await;
-
-                let output = match registry.toolbox().delete_tool(name) {
-                    Ok(()) => {
-                        emit(ProgressUpdate::ToolRemoved);
-                        format!("Tool \"{name}\" has been removed.")
-                    }
-                    Err(e) => format!("Failed to remove tool: {e}"),
-                };
-
-                let step_success = !output.starts_with("Failed");
-                history.push(StepResult {
-                    step,
-                    action,
-                    output,
-                    success: step_success,
-                    finding: None,
-                });
-            }
-
-            Action::Notify { text } => {
-                log.emit(Event::AgentAction {
-                    task_id: task_id.to_string(),
-                    step,
-                    action_type: "notify".to_string(),
-                    detail: if text.len() > 80 {
-                        format!("{}...", &text[..80])
-                    } else {
-                        text.clone()
-                    },
-                })
-                .await;
-
-                emit(ProgressUpdate::Notification(text.clone()));
-
-                history.push(StepResult {
-                    step,
-                    action,
-                    output: "Notification sent.".to_string(),
-                    success: true,
-                    finding: None,
-                });
-            }
-
-            Action::UserMessage { .. } => unreachable!(),
-
-            Action::Answer { text, fallback } => {
-                // Detect mid-thought answers and nudge the model to continue.
-                // For fallback answers (no parseable action): use the full
-                //   heuristic — intent phrases, trailing punctuation, etc.
-                // For explicit answer actions: only override on strong trailing
-                //   signals (:  ...  —) since the model deliberately chose to
-                //   answer.  This catches the common pattern where the model
-                //   narrates "Let me try X:" inside an answer action.
-                let is_incomplete = if *fallback {
+        // If the only action is a single Done, handle it directly (with nudging)
+        if actions.len() == 1 && matches!(actions[0], Action::Done { .. }) {
+            let action = actions.remove(0);
+            if let Action::Done { ref text, fallback } = action {
+                let is_incomplete = if fallback {
                     looks_incomplete(text)
                 } else {
                     let t = text.trim();
@@ -1076,23 +993,22 @@ pub async fn run_loop(
                 if is_incomplete && !history.is_empty() && incomplete_nudges < MAX_INCOMPLETE_NUDGES
                 {
                     incomplete_nudges += 1;
-                    let kind = if *fallback { "fallback" } else { "explicit" };
+                    let kind = if fallback { "fallback" } else { "explicit" };
                     if log.is_verbose() {
                         eprintln!(
-                            "[agent] step {step}: {kind} answer looks incomplete, nudging model (attempt {incomplete_nudges}/{MAX_INCOMPLETE_NUDGES})"
+                            "[agent] step {step}: {kind} done looks incomplete, nudging model (attempt {incomplete_nudges}/{MAX_INCOMPLETE_NUDGES})"
                         );
                     }
-                    let nudge_msg = if *fallback {
+                    let nudge_msg = if fallback {
                         "SYSTEM: Your response was plain text without a valid action. \
                          If you are not done, respond with your next action as a JSON \
                          object or a ```lua block. If you are done, use \
-                         {\"action\": \"answer\", \"text\": \"...\"}."
+                         {\"action\": \"done\", \"text\": \"...\"}."
                     } else {
-                        "SYSTEM: Your answer text ends mid-thought — it looks like you \
+                        "SYSTEM: Your response text ends mid-thought — it looks like you \
                          were about to take further action. If you still have work to \
                          do, respond with your next action as a JSON object or ```lua \
-                         block. If you are truly done, resubmit your answer without \
-                         trailing narration."
+                         block. If you are truly done, resubmit with a complete response."
                     };
                     history.push(StepResult {
                         step,
@@ -1104,13 +1020,13 @@ pub async fn run_loop(
                     let step_dur = step_start.elapsed();
                     step_timings.push(StepTiming {
                         step,
-                        action: "answer_nudge".to_string(),
+                        action: "done_nudge".to_string(),
                         duration: step_dur,
                     });
                     log.emit(Event::StepCompleted {
                         task_id: task_id.to_string(),
                         step,
-                        action_type: "answer_nudge".to_string(),
+                        action_type: "done_nudge".to_string(),
                         duration_ms: step_dur.as_millis() as u64,
                         success: false,
                     })
@@ -1121,25 +1037,22 @@ pub async fn run_loop(
                 log.emit(Event::AgentAction {
                     task_id: task_id.to_string(),
                     step,
-                    action_type: "answer".to_string(),
+                    action_type: "done".to_string(),
                     detail: String::new(),
                 })
                 .await;
 
-                // Use the agent's own answer text directly when available.
-                // Fall back to format_answer only for empty answers (e.g.
-                // model said "answer" but left text blank).
                 if !text.trim().is_empty() {
                     let step_dur = step_start.elapsed();
                     step_timings.push(StepTiming {
                         step,
-                        action: "answer".to_string(),
+                        action: "done".to_string(),
                         duration: step_dur,
                     });
                     log.emit(Event::StepCompleted {
                         task_id: task_id.to_string(),
                         step,
-                        action_type: "answer".to_string(),
+                        action_type: "done".to_string(),
                         duration_ms: step_dur.as_millis() as u64,
                         success: true,
                     })
@@ -1163,7 +1076,7 @@ pub async fn run_loop(
                     memories,
                     skills,
                     &history,
-                    answer_backend,
+                    backend,
                     conversation,
                     registry,
                     formatting_hint,
@@ -1172,13 +1085,13 @@ pub async fn run_loop(
                 let step_dur = step_start.elapsed();
                 step_timings.push(StepTiming {
                     step,
-                    action: "answer".to_string(),
+                    action: "done".to_string(),
                     duration: step_dur,
                 });
                 log.emit(Event::StepCompleted {
                     task_id: task_id.to_string(),
                     step,
-                    action_type: "answer".to_string(),
+                    action_type: "done".to_string(),
                     duration_ms: step_dur.as_millis() as u64,
                     success: true,
                 })
@@ -1195,18 +1108,324 @@ pub async fn run_loop(
             }
         }
 
-        // Record timing for non-answer steps (CallTool, RunCode, SaveTool, RemoveTool, Notify)
+        // Execute all actions in parallel using JoinSet
+        let mut join_set = tokio::task::JoinSet::new();
+        let mut sync_results: Vec<StepResult> = Vec::new();
+
+        for action in &actions {
+            match action {
+                Action::CallTool { tool, params } => {
+                    let fail_count = tool_fail_counts.get(tool.as_str()).copied().unwrap_or(0);
+                    if fail_count >= 2 {
+                        if log.is_verbose() {
+                            eprintln!(
+                                "[agent] step {step}: BLOCKED tool \"{tool}\" — failed {fail_count} times already"
+                            );
+                        }
+                        sync_results.push(StepResult {
+                            step,
+                            action: action.clone(),
+                            output: format!("{{\"error\": \"tool '{tool}' has failed {fail_count} times already. You MUST use a different tool or create a new one.\"}}"),
+                            success: false,
+                            finding: None,
+                        });
+                        continue;
+                    }
+
+                    log.emit(Event::AgentAction {
+                        task_id: task_id.to_string(),
+                        step,
+                        action_type: "call_tool".to_string(),
+                        detail: tool.clone(),
+                    })
+                    .await;
+
+                    emit(ProgressUpdate::ToolCallStart);
+
+                    let upper_params: HashMap<String, String> = params
+                        .iter()
+                        .map(|(k, v)| (k.to_uppercase(), v.clone()))
+                        .collect();
+
+                    let tool_name = tool.clone();
+                    let action_clone = action.clone();
+                    let registry_ref = registry as *const ToolRegistry;
+                    let tool_ctx_client = tool_ctx.client.clone();
+                    let tool_ctx_secrets = tool_ctx.secrets.clone();
+                    let tool_ctx_task = tool_ctx.task_description.clone();
+                    let tool_ctx_schedule = tool_ctx.schedule_store.clone();
+                    let tool_ctx_memory = tool_ctx.memory_store.clone();
+                    let tool_ctx_frontend = tool_ctx.frontend_context.clone();
+
+                    // SAFETY: registry lives for the entire loop iteration and we
+                    // await the JoinSet before the next iteration.
+                    let reg = unsafe { &*registry_ref };
+                    let ctx = ToolContext {
+                        client: tool_ctx_client,
+                        secrets: tool_ctx_secrets,
+                        task_description: tool_ctx_task,
+                        schedule_store: tool_ctx_schedule,
+                        memory_store: tool_ctx_memory,
+                        frontend_context: tool_ctx_frontend,
+                    };
+
+                    join_set.spawn(async move {
+                        let (output, success) =
+                            match reg.execute_tool(&tool_name, &upper_params, &ctx).await {
+                                Ok(value) => {
+                                    let has_error = value.get("error").is_some();
+                                    (value.to_string(), !has_error)
+                                }
+                                Err(e) => (
+                                    format!("{{\"error\": \"tool execution failed: {e}\"}}"),
+                                    false,
+                                ),
+                            };
+                        (action_clone, output, success)
+                    });
+                }
+
+                Action::RunCode { name, code } => {
+                    log.emit(Event::AgentAction {
+                        task_id: task_id.to_string(),
+                        step,
+                        action_type: "run_code".to_string(),
+                        detail: name.clone(),
+                    })
+                    .await;
+
+                    emit(ProgressUpdate::CodeRunStart);
+
+                    let block_name = name.clone();
+                    let code = code.clone();
+                    let task_str = task.to_string();
+                    let client_clone = client.clone();
+                    let toolbox_dir = Some(registry.toolbox_path().to_path_buf());
+                    let secrets_clone = secrets.cloned();
+                    let builtins = registry.builtins_arc();
+                    let action_clone = action.clone();
+
+                    join_set.spawn(async move {
+                        let provider = crate::context::LuaProvider::new(&block_name, &code);
+                        let (output, success) = match provider
+                            .execute_with_params(
+                                &task_str,
+                                client_clone,
+                                &HashMap::new(),
+                                toolbox_dir,
+                                secrets_clone.as_ref(),
+                                builtins,
+                            )
+                            .await
+                        {
+                            Ok(value) => (value.to_string(), true),
+                            Err(e) => {
+                                (format!("{{\"error\": \"inline code failed: {e}\"}}"), false)
+                            }
+                        };
+                        (action_clone, output, success)
+                    });
+                }
+
+                Action::SaveTool {
+                    name,
+                    description,
+                    block,
+                } => {
+                    log.emit(Event::AgentAction {
+                        task_id: task_id.to_string(),
+                        step,
+                        action_type: "save_tool".to_string(),
+                        detail: name.clone(),
+                    })
+                    .await;
+
+                    let code = block
+                        .as_ref()
+                        .and_then(|b| successful_blocks.get(b))
+                        .or(last_successful_code.as_ref());
+
+                    let output = if let Some(code) = code {
+                        let meta = crate::toolbox::ToolMeta {
+                            name: name.clone(),
+                            description: description.clone(),
+                            provides: vec![name.clone()],
+                            validated: false,
+                        };
+                        match registry.toolbox().save_tool(&meta, code) {
+                            Ok(()) => {
+                                emit(ProgressUpdate::ToolCreated);
+                                format!(
+                                    "Tool \"{name}\" saved. You can now call it with call_tool."
+                                )
+                            }
+                            Err(e) => format!("Failed to save tool: {e}"),
+                        }
+                    } else {
+                        block
+                            .as_deref()
+                            .map(|b| format!("No successful block named \"{b}\" found."))
+                            .unwrap_or_else(|| {
+                                "No successful inline code to save. Run inline code first."
+                                    .to_string()
+                            })
+                    };
+
+                    let step_success =
+                        output.starts_with("Tool \"") && output.ends_with("call_tool.");
+                    sync_results.push(StepResult {
+                        step,
+                        action: action.clone(),
+                        output,
+                        success: step_success,
+                        finding: None,
+                    });
+                }
+
+                Action::RemoveTool { name } => {
+                    log.emit(Event::AgentAction {
+                        task_id: task_id.to_string(),
+                        step,
+                        action_type: "remove_tool".to_string(),
+                        detail: name.clone(),
+                    })
+                    .await;
+
+                    let output = match registry.toolbox().delete_tool(name) {
+                        Ok(()) => {
+                            emit(ProgressUpdate::ToolRemoved);
+                            format!("Tool \"{name}\" has been removed.")
+                        }
+                        Err(e) => format!("Failed to remove tool: {e}"),
+                    };
+
+                    let step_success = !output.starts_with("Failed");
+                    sync_results.push(StepResult {
+                        step,
+                        action: action.clone(),
+                        output,
+                        success: step_success,
+                        finding: None,
+                    });
+                }
+
+                Action::Progress { text } => {
+                    log.emit(Event::AgentAction {
+                        task_id: task_id.to_string(),
+                        step,
+                        action_type: "progress".to_string(),
+                        detail: if text.len() > 80 {
+                            format!("{}...", &text[..80])
+                        } else {
+                            text.clone()
+                        },
+                    })
+                    .await;
+
+                    emit(ProgressUpdate::Notification(text.clone()));
+
+                    sync_results.push(StepResult {
+                        step,
+                        action: action.clone(),
+                        output: "Progress update sent.".to_string(),
+                        success: true,
+                        finding: None,
+                    });
+                }
+
+                Action::Done { .. } | Action::UserMessage { .. } => {}
+            }
+        }
+
+        // Collect parallel results
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok((action, output, success)) => {
+                    // Track tool fail counts
+                    if let Action::CallTool { ref tool, .. } = action {
+                        if !success {
+                            *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
+                        }
+                        emit(ProgressUpdate::ToolCallEnd);
+                        log.emit(Event::AgentToolResult {
+                            task_id: task_id.to_string(),
+                            step,
+                            tool: tool.clone(),
+                            success,
+                            output: output.clone(),
+                        })
+                        .await;
+                    }
+                    if let Action::RunCode { ref name, ref code } = action {
+                        if success {
+                            successful_blocks.insert(name.clone(), code.clone());
+                            last_successful_code = Some(code.clone());
+                        }
+                        emit(ProgressUpdate::CodeRunEnd);
+                        log.emit(Event::AgentToolResult {
+                            task_id: task_id.to_string(),
+                            step,
+                            tool: name.clone(),
+                            success,
+                            output: output.clone(),
+                        })
+                        .await;
+                    }
+
+                    let finding = if success {
+                        make_finding(&output, fast_backend).await
+                    } else {
+                        None
+                    };
+
+                    history.push(StepResult {
+                        step,
+                        action,
+                        output,
+                        success,
+                        finding,
+                    });
+                }
+                Err(e) => {
+                    eprintln!("[agent] step {step}: parallel task panicked: {e}");
+                }
+            }
+        }
+
+        // Add synchronous results to history
+        history.extend(sync_results);
+
+        // If done was mixed with other actions, inform the model
+        if has_done && has_other {
+            history.push(StepResult {
+                step,
+                action: Action::UserMessage {
+                    text: String::new(),
+                },
+                output: "SYSTEM: Your done action was ignored because it was combined with other actions. The done action must be the only action in a response. Continue working or submit done on its own.".to_string(),
+                success: false,
+                finding: None,
+            });
+        }
+
+        // Record step timing
         let step_dur = step_start.elapsed();
-        let step_success = history.last().is_some_and(|s| s.success);
+        let action_types: Vec<&str> = actions.iter().map(|a| a.type_str()).collect();
+        let action_label = if action_types.len() == 1 {
+            action_types[0].to_string()
+        } else {
+            format!("parallel({})", action_types.join("+"))
+        };
+        let step_success = history.iter().filter(|s| s.step == step).all(|s| s.success);
         step_timings.push(StepTiming {
             step,
-            action: action_type.clone(),
+            action: action_label.clone(),
             duration: step_dur,
         });
         log.emit(Event::StepCompleted {
             task_id: task_id.to_string(),
             step,
-            action_type,
+            action_type: action_label,
             duration_ms: step_dur.as_millis() as u64,
             success: step_success,
         })
@@ -1229,7 +1448,7 @@ pub async fn run_loop(
         memories,
         skills,
         &history,
-        answer_backend,
+        backend,
         conversation,
         registry,
         formatting_hint,
@@ -1238,13 +1457,13 @@ pub async fn run_loop(
     let forced_dur = forced_start.elapsed();
     step_timings.push(StepTiming {
         step: MAX_AGENT_STEPS + 1,
-        action: "forced_answer".to_string(),
+        action: "forced_done".to_string(),
         duration: forced_dur,
     });
     log.emit(Event::StepCompleted {
         task_id: task_id.to_string(),
         step: MAX_AGENT_STEPS + 1,
-        action_type: "forced_answer".to_string(),
+        action_type: "forced_done".to_string(),
         duration_ms: forced_dur.as_millis() as u64,
         success: true,
     })
@@ -1266,7 +1485,7 @@ async fn format_answer(
     memories: &[Memory],
     skills: &[(String, String)],
     history: &[StepResult],
-    answer_backend: &dyn ModelBackend,
+    backend: &dyn ModelBackend,
     conversation: &[Message],
     registry: &ToolRegistry,
     formatting_hint: Option<&str>,
@@ -1322,7 +1541,7 @@ async fn format_answer(
         if let Some(hint) = formatting_hint {
             context.push_str(&format!("\n\n{hint}"));
         }
-        return answer_backend.complete(context).await;
+        return backend.complete(context).await;
     }
 
     let data = history
@@ -1354,7 +1573,7 @@ async fn format_answer(
         context.push_str(&format!("\n\n{hint}"));
     }
 
-    answer_backend.complete(context).await
+    backend.complete(context).await
 }
 
 #[cfg(test)]
@@ -1375,38 +1594,38 @@ mod tests {
     }
 
     #[test]
-    fn parse_answer_action() {
-        let input = r#"{"action": "answer", "text": "The answer is 42."}"#;
+    fn parse_done_action() {
+        let input = r#"{"action": "done", "text": "The answer is 42."}"#;
         match parse_action(input) {
-            Action::Answer { text, fallback } => {
+            Action::Done { text, fallback } => {
                 assert_eq!(text, "The answer is 42.");
-                assert!(!fallback, "explicit answer should not be fallback");
+                assert!(!fallback, "explicit done should not be fallback");
             }
-            other => panic!("expected Answer, got {other:?}"),
+            other => panic!("expected Done, got {other:?}"),
         }
     }
 
     #[test]
     fn parse_with_surrounding_text() {
-        let input = r#"Here is my action: {"action": "answer", "text": "done"} hope that helps"#;
+        let input = r#"Here is my action: {"action": "done", "text": "done"} hope that helps"#;
         match parse_action(input) {
-            Action::Answer { text, fallback } => {
+            Action::Done { text, fallback } => {
                 assert_eq!(text, "done");
-                assert!(!fallback, "explicit answer should not be fallback");
+                assert!(!fallback, "explicit done should not be fallback");
             }
-            other => panic!("expected Answer, got {other:?}"),
+            other => panic!("expected Done, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_malformed_defaults_to_answer() {
+    fn parse_malformed_defaults_to_done() {
         let input = "I don't know what to do";
         match parse_action(input) {
-            Action::Answer { text, fallback } => {
+            Action::Done { text, fallback } => {
                 assert_eq!(text, "I don't know what to do");
                 assert!(fallback, "malformed input should be fallback");
             }
-            other => panic!("expected Answer, got {other:?}"),
+            other => panic!("expected Done, got {other:?}"),
         }
     }
 
@@ -1425,7 +1644,7 @@ mod tests {
     fn parse_inline_lua_block() {
         let input = "Let me fetch that:\n```lua\nlocal r = http_get(\"https://example.com\")\nreturn r\n```";
         match parse_action(input) {
-            Action::RunCode { code } => {
+            Action::RunCode { code, .. } => {
                 assert!(code.contains("http_get"));
                 assert!(code.contains("return r"));
             }
@@ -1436,14 +1655,14 @@ mod tests {
     #[test]
     fn parse_lua_block_preferred_over_json() {
         // If response has both a lua block and JSON, lua wins (checked first)
-        let input = "```lua\nreturn {}\n```\n{\"action\": \"answer\", \"text\": \"done\"}";
+        let input = "```lua\nreturn {}\n```\n{\"action\": \"done\", \"text\": \"done\"}";
         assert!(matches!(parse_action(input), Action::RunCode { .. }));
     }
 
     #[test]
     fn parse_empty_lua_block_falls_through() {
-        let input = "```lua\n\n```\n{\"action\": \"answer\", \"text\": \"done\"}";
-        assert!(matches!(parse_action(input), Action::Answer { .. }));
+        let input = "```lua\n\n```\n{\"action\": \"done\", \"text\": \"done\"}";
+        assert!(matches!(parse_action(input), Action::Done { .. }));
     }
 
     #[test]
@@ -1477,35 +1696,157 @@ mod tests {
     }
 
     #[test]
-    fn parse_notify_action() {
-        let input = r#"{"action": "notify", "text": "Working on it..."}"#;
+    fn parse_progress_action() {
+        let input = r#"{"action": "progress", "text": "Working on it..."}"#;
         match parse_action(input) {
-            Action::Notify { text } => {
+            Action::Progress { text } => {
                 assert_eq!(text, "Working on it...");
             }
-            other => panic!("expected Notify, got {other:?}"),
+            other => panic!("expected Progress, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_notify_without_text() {
-        let input = r#"{"action": "notify"}"#;
+    fn parse_progress_without_text() {
+        let input = r#"{"action": "progress"}"#;
         match parse_action(input) {
-            Action::Answer { fallback, .. } => {
+            Action::Done { fallback, .. } => {
                 assert!(fallback, "missing text should fall through to fallback");
             }
-            other => panic!("expected fallback Answer, got {other:?}"),
+            other => panic!("expected fallback Done, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_notify_empty_text() {
-        let input = r#"{"action": "notify", "text": ""}"#;
+    fn parse_progress_empty_text() {
+        let input = r#"{"action": "progress", "text": ""}"#;
         match parse_action(input) {
-            Action::Answer { fallback, .. } => {
+            Action::Done { fallback, .. } => {
                 assert!(fallback, "empty text should fall through to fallback");
             }
-            other => panic!("expected fallback Answer, got {other:?}"),
+            other => panic!("expected fallback Done, got {other:?}"),
         }
+    }
+
+    // --- Multi-action parsing tests ---
+
+    #[test]
+    fn parse_response_multiple_lua_blocks() {
+        let input = "```lua\n-- name: fetch_a\nreturn {a=1}\n```\n\n```lua\n-- name: fetch_b\nreturn {b=2}\n```";
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 2);
+        match &parsed.actions[0] {
+            Action::RunCode { name, code } => {
+                assert_eq!(name, "fetch_a");
+                assert!(code.contains("a=1"));
+            }
+            other => panic!("expected RunCode, got {other:?}"),
+        }
+        match &parsed.actions[1] {
+            Action::RunCode { name, code } => {
+                assert_eq!(name, "fetch_b");
+                assert!(code.contains("b=2"));
+            }
+            other => panic!("expected RunCode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_unnamed_lua_blocks_get_indexed() {
+        let input = "```lua\nreturn {a=1}\n```\n```lua\nreturn {b=2}\n```";
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 2);
+        match &parsed.actions[0] {
+            Action::RunCode { name, .. } => assert_eq!(name, "inline 1"),
+            other => panic!("expected RunCode, got {other:?}"),
+        }
+        match &parsed.actions[1] {
+            Action::RunCode { name, .. } => assert_eq!(name, "inline 2"),
+            other => panic!("expected RunCode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_mixed_lua_and_json() {
+        let input = "```lua\n-- name: fetch\nreturn {}\n```\n{\"action\": \"call_tool\", \"tool\": \"weather\", \"params\": {}}";
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 2);
+        assert!(matches!(parsed.actions[0], Action::RunCode { .. }));
+        assert!(matches!(parsed.actions[1], Action::CallTool { .. }));
+    }
+
+    #[test]
+    fn parse_response_json_array() {
+        let input = r#"[{"action": "call_tool", "tool": "a", "params": {}}, {"action": "call_tool", "tool": "b", "params": {}}]"#;
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 2);
+        match &parsed.actions[0] {
+            Action::CallTool { tool, .. } => assert_eq!(tool, "a"),
+            other => panic!("expected CallTool, got {other:?}"),
+        }
+        match &parsed.actions[1] {
+            Action::CallTool { tool, .. } => assert_eq!(tool, "b"),
+            other => panic!("expected CallTool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_done_with_other_actions_keeps_all() {
+        let input = "```lua\nreturn {}\n```\n{\"action\": \"done\", \"text\": \"all done\"}";
+        let parsed = parse_response(input);
+        // Both are parsed — the loop handles done exclusivity, not the parser
+        assert_eq!(parsed.actions.len(), 2);
+        assert!(matches!(parsed.actions[0], Action::RunCode { .. }));
+        assert!(matches!(parsed.actions[1], Action::Done { .. }));
+    }
+
+    #[test]
+    fn parse_response_save_tool_with_block_reference() {
+        let input = r#"{"action": "save_tool", "name": "my_tool", "description": "desc", "block": "fetch_weather"}"#;
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 1);
+        match &parsed.actions[0] {
+            Action::SaveTool {
+                name,
+                description,
+                block,
+            } => {
+                assert_eq!(name, "my_tool");
+                assert_eq!(description, "desc");
+                assert_eq!(block.as_deref(), Some("fetch_weather"));
+            }
+            other => panic!("expected SaveTool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_fallback_to_done_on_plain_text() {
+        let input = "I don't know what to do";
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 1);
+        match &parsed.actions[0] {
+            Action::Done { text, fallback } => {
+                assert_eq!(text, "I don't know what to do");
+                assert!(fallback);
+            }
+            other => panic!("expected Done, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_lua_blocks_named_and_unnamed() {
+        let input = "```lua\n-- name: foo\nreturn 1\n```\n```lua\nreturn 2\n```";
+        let blocks = extract_lua_blocks(input);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].0, "foo");
+        assert_eq!(blocks[1].0, "inline 1");
+    }
+
+    #[test]
+    fn extract_json_actions_ignores_json_inside_lua() {
+        let input = "```lua\nlocal x = json_parse('{\"action\": \"done\", \"text\": \"nope\"}')\nreturn x\n```\n{\"action\": \"progress\", \"text\": \"real\"}";
+        let actions = extract_json_actions(input);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::Progress { .. }));
     }
 }
