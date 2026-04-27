@@ -2,11 +2,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     TaskCreated {
@@ -101,11 +101,11 @@ pub enum Event {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct LogEntry {
-    timestamp_ms: u64,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub timestamp_ms: u64,
     #[serde(flatten)]
-    event: Event,
+    pub event: Event,
 }
 
 fn now_ms() -> u64 {
