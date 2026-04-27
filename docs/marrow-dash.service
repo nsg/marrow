@@ -1,0 +1,33 @@
+[Unit]
+Description=Marrow dashboard
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=marrow
+Group=marrow
+
+WorkingDirectory=/var/lib/marrow
+
+ExecStart=/usr/local/bin/marrow-dash \
+  --config /etc/marrow/config.toml \
+  --toolbox /var/lib/marrow/toolbox \
+  --memory /var/lib/marrow/memory \
+  --schedules /var/lib/marrow/schedules \
+  --skills /var/lib/marrow/skills \
+  --log /var/log/marrow/events.jsonl \
+  --bind 127.0.0.1 \
+  --port 3000
+
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/marrow /var/log/marrow /etc/marrow
+
+[Install]
+WantedBy=multi-user.target

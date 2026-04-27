@@ -1,5 +1,5 @@
 [workspace]
-members = ["marrow", "marrow-cli", "marrow-discord"]
+members = ["marrow", "marrow-cli", "marrow-discord", "marrow-dash"]
 resolver = "2"
 
 [workspace.package]

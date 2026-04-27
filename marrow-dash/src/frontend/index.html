@@ -1,0 +1,1506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>marrow-dash</title>
+<link href="https://fonts.googleapis.com/css2?family=Anybody:wght@400;500;600;700&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-base: #0C0C0C;
+  --bg-surface: #161616;
+  --bg-raised: #1E1E1E;
+  --bg-hover: #282828;
+  --border: #2A2A2A;
+  --border-focus: #3D3D3D;
+
+  --text-primary: #D4CFC4;
+  --text-secondary: #8A8478;
+  --text-muted: #5A5650;
+
+  --accent: #D4854A;
+  --accent-glow: rgba(212, 133, 74, 0.15);
+  --green: #7DB87D;
+  --red: #C75C54;
+  --amber: #C9A84C;
+  --blue: #6B9FCC;
+  --purple: #9B85B5;
+  --teal: #6BA89E;
+
+  --font-display: "Anybody", sans-serif;
+  --font-body: "DM Sans", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --sidebar-width: 56px;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 100vh;
+  display: flex;
+  background-image: radial-gradient(circle, rgba(212, 133, 74, 0.04) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Sidebar */
+.sidebar {
+  width: var(--sidebar-width);
+  background: #0A0A0A;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 16px;
+  flex-shrink: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 100;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 0 8px;
+}
+
+.nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  position: relative;
+  transition: color 0.2s, border-color 0.2s;
+  border-radius: 0;
+  padding: 0;
+}
+.nav-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.nav-btn:hover {
+  color: var(--text-secondary);
+}
+.nav-btn.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+}
+
+/* Tooltip */
+.nav-btn .nav-tooltip {
+  display: none;
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: var(--font-body);
+  white-space: nowrap;
+  z-index: 200;
+  pointer-events: none;
+}
+.nav-btn:hover .nav-tooltip {
+  display: block;
+}
+
+/* Sidebar footer */
+.sidebar-footer {
+  margin-top: auto;
+  padding-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.sidebar-brand {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: none;
+  animation: pulse 2s ease-in-out infinite;
+}
+.pulse-dot.active {
+  display: inline-block;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* Main layout */
+.main-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin-left: var(--sidebar-width);
+  min-height: 100vh;
+}
+
+/* Top bar */
+.top-bar {
+  padding: 24px 32px 0 32px;
+  flex-shrink: 0;
+}
+.top-bar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.view-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 24px;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+.top-bar-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.auto-refresh-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  user-select: none;
+  font-family: var(--font-body);
+}
+.auto-refresh-toggle input { display: none; }
+.toggle-track {
+  width: 32px;
+  height: 18px;
+  background: var(--border);
+  border-radius: 9px;
+  position: relative;
+  transition: background 0.2s;
+}
+.auto-refresh-toggle input:checked + .toggle-track {
+  background: var(--accent);
+}
+.toggle-track::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--text-primary);
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s;
+}
+.auto-refresh-toggle input:checked + .toggle-track::after {
+  transform: translateX(14px);
+}
+.top-bar-divider {
+  height: 1px;
+  background: linear-gradient(to right, var(--accent), transparent);
+  margin-top: 16px;
+  opacity: 0.5;
+}
+
+/* Main content */
+.main {
+  flex: 1;
+  padding: 24px 32px;
+  overflow-y: auto;
+}
+.tab-panel {
+  display: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.tab-panel.active {
+  display: block;
+  opacity: 1;
+}
+
+/* Footer */
+.footer {
+  border-top: 1px solid var(--border);
+  padding: 10px 32px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+
+/* Fade-in animation */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fade-child {
+  animation: fadeUp 0.4s ease forwards;
+  opacity: 0;
+}
+.fade-child:nth-child(1) { animation-delay: 0.05s; }
+.fade-child:nth-child(2) { animation-delay: 0.1s; }
+.fade-child:nth-child(3) { animation-delay: 0.15s; }
+.fade-child:nth-child(4) { animation-delay: 0.2s; }
+.fade-child:nth-child(5) { animation-delay: 0.25s; }
+.fade-child:nth-child(6) { animation-delay: 0.3s; }
+.fade-child:nth-child(7) { animation-delay: 0.35s; }
+.fade-child:nth-child(8) { animation-delay: 0.4s; }
+
+/* Stat cards */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  padding: 16px 18px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.stat-card:hover {
+  background: var(--bg-raised);
+}
+.stat-card .label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  font-family: var(--font-body);
+  font-weight: 500;
+}
+.stat-card .value {
+  font-size: 24px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+.stat-card .value.green { color: var(--green); }
+.stat-card .value.blue { color: var(--blue); }
+.stat-card .value.amber { color: var(--amber); }
+.stat-card .value.teal { color: var(--teal); }
+.stat-card .value.purple { color: var(--purple); }
+
+/* Section headers */
+.section-title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+  margin-top: 28px;
+}
+.section-title:first-child { margin-top: 0; }
+
+/* Activity chart */
+.activity-chart {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+.chart-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 110px;
+  margin-top: 8px;
+}
+.chart-bar {
+  flex: 1;
+  min-width: 2px;
+  background: linear-gradient(to top, var(--accent), rgba(212, 133, 74, 0.15));
+  opacity: 0.7;
+  transition: opacity 0.15s;
+  position: relative;
+  border-radius: 1px 1px 0 0;
+}
+.chart-bar:hover {
+  opacity: 1;
+}
+.chart-bar-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+  z-index: 10;
+  font-family: var(--font-mono);
+  pointer-events: none;
+  color: var(--text-primary);
+}
+.chart-bar:hover .chart-bar-tooltip { display: block; }
+.chart-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* Info grid */
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.info-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 18px;
+}
+.info-card h3 {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+  font-size: 13px;
+}
+.info-row .info-label { color: var(--text-secondary); }
+.info-row .info-value { font-family: var(--font-mono); font-size: 13px; }
+
+/* Tables */
+.table-wrap {
+  overflow-x: auto;
+  background: var(--bg-surface);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-family: var(--font-body);
+  border-bottom: 1px solid rgba(212, 133, 74, 0.3);
+  white-space: nowrap;
+}
+td {
+  padding: 9px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td {
+  background: var(--bg-hover);
+  border-left: 2px solid var(--accent);
+}
+tr.clickable:hover td:first-child {
+  padding-left: 12px;
+}
+.mono { font-family: var(--font-mono); font-size: 12px; }
+.truncate {
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 3px;
+  font-family: var(--font-body);
+}
+.badge-succeeded, .badge-success { background: rgba(125, 184, 125, 0.15); color: var(--green); }
+.badge-failed, .badge-failure { background: rgba(199, 92, 84, 0.15); color: var(--red); }
+.badge-in-progress, .badge-running { background: rgba(201, 168, 76, 0.15); color: var(--amber); }
+.badge-validated { background: rgba(125, 184, 125, 0.15); color: var(--green); }
+.badge-unvalidated { background: rgba(90, 86, 80, 0.2); color: var(--text-secondary); }
+.badge-auto { background: rgba(107, 159, 204, 0.15); color: var(--blue); }
+.badge-user { background: rgba(155, 133, 181, 0.15); color: var(--purple); }
+.badge-enabled { background: rgba(125, 184, 125, 0.15); color: var(--green); }
+.badge-disabled { background: rgba(90, 86, 80, 0.2); color: var(--text-secondary); }
+
+/* Event type badges */
+.badge-task { background: rgba(125, 184, 125, 0.15); color: var(--green); }
+.badge-janitor { background: rgba(201, 168, 76, 0.15); color: var(--amber); }
+.badge-schedule { background: rgba(107, 159, 204, 0.15); color: var(--blue); }
+.badge-agent { background: rgba(155, 133, 181, 0.15); color: var(--purple); }
+.badge-tool { background: rgba(107, 168, 158, 0.15); color: var(--teal); }
+
+/* Pagination */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+.pagination-btns {
+  display: flex;
+  gap: 8px;
+}
+.pg-btn {
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  color: var(--text-secondary);
+  padding: 4px 2px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: color 0.15s, border-color 0.15s;
+}
+.pg-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.pg-btn:disabled { opacity: 0.3; cursor: default; }
+
+/* Tool cards */
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.tool-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--teal);
+  padding: 18px 20px;
+  transition: background 0.2s;
+}
+.tool-card:hover {
+  background: var(--bg-raised);
+}
+.tool-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.tool-card-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--teal);
+}
+.tool-card-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+.tool-card-provides {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.provides-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: rgba(107, 159, 204, 0.1);
+  color: var(--blue);
+  font-family: var(--font-mono);
+  border-radius: 2px;
+}
+
+/* Janitor timeline */
+.timeline { padding: 0; list-style: none; position: relative; margin-left: 12px; }
+.timeline::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--accent);
+  opacity: 0.4;
+}
+.timeline-item {
+  display: flex;
+  gap: 14px;
+  padding: 10px 0 10px 20px;
+  font-size: 13px;
+  position: relative;
+}
+.timeline-item::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 16px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.timeline-item:last-child { padding-bottom: 0; }
+.timeline-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 140px;
+}
+.timeline-content { flex: 1; }
+
+/* Search input */
+.search-bar {
+  margin-bottom: 16px;
+}
+.search-input {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 8px 0;
+  font-size: 14px;
+  font-family: var(--font-body);
+  width: 100%;
+  max-width: 400px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.search-input::placeholder { color: var(--text-muted); }
+.search-input:focus { border-bottom-color: var(--accent); }
+
+/* Filter */
+.filter-bar {
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.filter-select {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: var(--font-body);
+  outline: none;
+  transition: border-color 0.2s;
+}
+.filter-select:focus { border-color: var(--accent); }
+.filter-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Task detail inline expand */
+.task-detail-row td {
+  padding: 0;
+  background: var(--bg-raised);
+}
+.task-detail-inner {
+  padding: 14px 18px;
+  max-height: 400px;
+  overflow-y: auto;
+  border-left: 2px solid var(--accent);
+  margin: 0;
+}
+.task-event {
+  display: flex;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+}
+.task-event:last-child { border-bottom: none; }
+.task-event-time {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 80px;
+}
+.task-event-content { flex: 1; word-break: break-word; }
+
+/* Loading / empty / error states */
+.state-msg {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.state-msg.error { color: var(--red); }
+.spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Stats bar (memory) */
+.stats-bar {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.stats-bar-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.stats-bar-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* Responsive: mobile */
+@media (max-width: 640px) {
+  .sidebar {
+    position: fixed;
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 52px;
+    flex-direction: row;
+    border-right: none;
+    border-top: 1px solid var(--border);
+    padding: 0;
+    z-index: 100;
+  }
+  .sidebar-nav {
+    flex-direction: row;
+    justify-content: space-around;
+    padding: 0;
+    width: 100%;
+  }
+  .nav-btn {
+    border-left: none;
+    border-top: 2px solid transparent;
+    width: auto;
+    height: 52px;
+    flex: 1;
+  }
+  .nav-btn.active {
+    border-left-color: transparent;
+    border-top-color: var(--accent);
+  }
+  .nav-btn .nav-tooltip { display: none !important; }
+  .sidebar-footer { display: none; }
+  .main-wrapper {
+    margin-left: 0;
+    margin-bottom: 52px;
+  }
+  .top-bar { padding: 16px 16px 0 16px; }
+  .main { padding: 16px; }
+  .footer { padding: 10px 16px; }
+  .view-title { font-size: 20px; }
+  .stat-row { grid-template-columns: repeat(2, 1fr); }
+  .tool-grid { grid-template-columns: 1fr; }
+  .info-grid { grid-template-columns: 1fr; }
+  .truncate { max-width: 200px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="sidebar-nav">
+    <button class="nav-btn active" data-tab="overview" aria-label="Overview">
+      <svg viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>
+      <span class="nav-tooltip">Overview</span>
+    </button>
+    <button class="nav-btn" data-tab="tasks" aria-label="Tasks">
+      <svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+      <span class="nav-tooltip">Tasks</span>
+    </button>
+    <button class="nav-btn" data-tab="tools" aria-label="Tools">
+      <svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+      <span class="nav-tooltip">Tools</span>
+    </button>
+    <button class="nav-btn" data-tab="memory" aria-label="Memory">
+      <svg viewBox="0 0 24 24"><path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2"/><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 9h6v6H9z"/></svg>
+      <span class="nav-tooltip">Memory</span>
+    </button>
+    <button class="nav-btn" data-tab="schedules" aria-label="Schedules">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      <span class="nav-tooltip">Schedules</span>
+    </button>
+    <button class="nav-btn" data-tab="events" aria-label="Events">
+      <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      <span class="nav-tooltip">Events</span>
+    </button>
+  </div>
+  <div class="sidebar-footer">
+    <span class="sidebar-brand">
+      <span class="pulse-dot" id="pulse-dot"></span>
+      marrow
+    </span>
+  </div>
+</nav>
+
+<!-- Main wrapper -->
+<div class="main-wrapper">
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <div class="top-bar-inner">
+      <span class="view-title" id="view-title">Overview</span>
+      <div class="top-bar-controls">
+        <label class="auto-refresh-toggle">
+          <input type="checkbox" id="auto-refresh-check">
+          <span class="toggle-track"></span>
+          <span>auto-refresh</span>
+        </label>
+      </div>
+    </div>
+    <div class="top-bar-divider"></div>
+  </div>
+
+  <!-- Content area -->
+  <div class="main">
+    <!-- Overview -->
+    <div class="tab-panel active" id="panel-overview">
+      <div id="overview-content"><div class="state-msg"><span class="spinner"></span> Loading overview...</div></div>
+    </div>
+
+    <!-- Tasks -->
+    <div class="tab-panel" id="panel-tasks">
+      <div id="tasks-content"><div class="state-msg"><span class="spinner"></span> Loading tasks...</div></div>
+    </div>
+
+    <!-- Tools -->
+    <div class="tab-panel" id="panel-tools">
+      <div id="tools-content"><div class="state-msg"><span class="spinner"></span> Loading tools...</div></div>
+    </div>
+
+    <!-- Memory -->
+    <div class="tab-panel" id="panel-memory">
+      <div class="search-bar">
+        <input type="text" class="search-input" id="memory-search" placeholder="Search memories...">
+      </div>
+      <div id="memory-content"><div class="state-msg"><span class="spinner"></span> Loading memories...</div></div>
+    </div>
+
+    <!-- Schedules -->
+    <div class="tab-panel" id="panel-schedules">
+      <div id="schedules-content"><div class="state-msg"><span class="spinner"></span> Loading schedules...</div></div>
+    </div>
+
+    <!-- Events -->
+    <div class="tab-panel" id="panel-events">
+      <div class="filter-bar">
+        <span class="filter-label">Type:</span>
+        <select class="filter-select" id="events-type-filter">
+          <option value="">All</option>
+          <option value="task">Task</option>
+          <option value="janitor">Janitor</option>
+          <option value="schedule">Schedule</option>
+          <option value="agent">Agent</option>
+          <option value="tool">Tool</option>
+        </select>
+      </div>
+      <div id="events-content"><div class="state-msg"><span class="spinner"></span> Loading events...</div></div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span id="last-refreshed">--</span>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  // --- View name map ---
+  var viewNames = {
+    overview: "Overview",
+    tasks: "Tasks",
+    tools: "Tools",
+    memory: "Memory",
+    schedules: "Schedules",
+    events: "Events"
+  };
+
+  // --- State ---
+  const state = {
+    activeTab: "overview",
+    autoRefresh: false,
+    refreshTimer: null,
+    tasks: { offset: 0, limit: 50, total: 0, expanded: null },
+    memory: { offset: 0, limit: 50, total: 0, search: "" },
+    events: { offset: 0, limit: 100, total: 0, type: "" },
+    loaded: {}
+  };
+
+  // --- Helpers ---
+  function esc(s) {
+    if (s == null) return "";
+    const d = document.createElement("div");
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+
+  function formatTime(ms) {
+    if (!ms) return "--";
+    const d = new Date(ms);
+    return d.toLocaleString(undefined, {
+      month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false
+    });
+  }
+
+  function formatTimeShort(ms) {
+    if (!ms) return "--";
+    const d = new Date(ms);
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+
+  function formatDate(ms) {
+    if (!ms) return "--";
+    return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
+
+  function formatDuration(ms) {
+    if (ms == null) return "--";
+    if (ms < 1000) return ms + "ms";
+    const s = Math.round(ms / 1000);
+    if (s < 60) return s + "s";
+    const m = Math.floor(s / 60);
+    return m + "m " + (s % 60) + "s";
+  }
+
+  function statusBadge(status) {
+    if (!status) return "";
+    const s = String(status).toLowerCase();
+    const cls = s === "succeeded" || s === "success" ? "badge-succeeded"
+      : s === "failed" || s === "failure" ? "badge-failed"
+      : s === "in-progress" || s === "running" ? "badge-in-progress"
+      : "";
+    return '<span class="badge ' + cls + '">' + esc(status) + '</span>';
+  }
+
+  function eventTypeBadge(type) {
+    if (!type) return "";
+    const t = String(type).toLowerCase();
+    let cls = "";
+    if (t.startsWith("task") || t.includes("task")) cls = "badge-task";
+    else if (t.startsWith("janitor") || t.includes("janitor")) cls = "badge-janitor";
+    else if (t.startsWith("schedule") || t.includes("schedule")) cls = "badge-schedule";
+    else if (t.startsWith("agent") || t.includes("agent")) cls = "badge-agent";
+    else if (t.startsWith("tool") || t.includes("tool")) cls = "badge-tool";
+    return '<span class="badge ' + cls + '">' + esc(type) + '</span>';
+  }
+
+  function truncate(s, max) {
+    if (!s) return "";
+    return s.length > max ? s.slice(0, max) + "…" : s;
+  }
+
+  async function apiFetch(url) {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    return resp.json();
+  }
+
+  function setContent(id, html) {
+    document.getElementById(id).innerHTML = html;
+  }
+
+  function errorMsg(err) {
+    return '<div class="state-msg error">Failed to load: ' + esc(err.message) + '</div>';
+  }
+
+  function emptyMsg(text) {
+    return '<div class="state-msg">' + esc(text) + '</div>';
+  }
+
+  function loadingMsg() {
+    return '<div class="state-msg"><span class="spinner"></span> Loading...</div>';
+  }
+
+  // --- Overview ---
+  async function loadOverview() {
+    try {
+      const data = await apiFetch("/api/overview");
+      let html = "";
+
+      // Stat cards
+      html += '<div class="stat-row fade-child">';
+      html += statCard("Tasks", data.total_tasks, "blue");
+      html += statCard("Steps", data.total_steps, "");
+      html += statCard("Tool Calls", data.total_tool_calls, "teal");
+      html += statCard("Code Runs", data.total_code_runs, "purple");
+      html += statCard("Success Rate", data.success_rate != null ? (data.success_rate * 100).toFixed(1) + "%" : "--", "green");
+      html += '</div>';
+
+      // Activity chart
+      html += '<div class="section-title fade-child">Activity (48h)</div>';
+      html += '<div class="fade-child">' + renderActivityChart(data.activity_buckets || []) + '</div>';
+
+      // Info grid
+      html += '<div class="info-grid fade-child">';
+
+      // Memory card
+      const mem = data.memory || {};
+      html += '<div class="info-card"><h3>Memory</h3>';
+      html += infoRow("Total", mem.total || 0);
+      html += infoRow("Auto", mem.auto_count || 0);
+      html += infoRow("User", mem.user_count || 0);
+      html += infoRow("Embedded", mem.embedded_count || 0);
+      html += '</div>';
+
+      // Toolbox card
+      const tb = data.toolbox || {};
+      html += '<div class="info-card"><h3>Toolbox</h3>';
+      html += infoRow("Total", tb.total || 0);
+      html += infoRow("Validated", tb.validated || 0);
+      html += infoRow("Unvalidated", tb.unvalidated || 0);
+      html += '</div>';
+
+      // Schedules card
+      const sched = data.schedules || {};
+      html += '<div class="info-card"><h3>Schedules</h3>';
+      html += infoRow("Total", sched.total || 0);
+      html += infoRow("Enabled", sched.enabled || 0);
+      html += infoRow("Disabled", sched.disabled || 0);
+      html += '</div>';
+
+      html += '</div>';
+
+      // Model config
+      const roles = (data.config && data.config.roles) || [];
+      if (roles.length > 0) {
+        html += '<div class="section-title fade-child">Model Configuration</div>';
+        html += '<div class="table-wrap fade-child"><table>';
+        html += '<tr><th>Role</th><th>Provider</th><th>Model</th></tr>';
+        for (const r of roles) {
+          html += '<tr><td>' + esc(r.name) + '</td><td class="mono">' + esc(r.provider) + '</td><td class="mono">' + esc(r.model) + '</td></tr>';
+        }
+        html += '</table></div>';
+      }
+
+      // Timespan
+      if (data.event_timespan) {
+        html += '<div class="section-title fade-child">Event Log Timespan</div>';
+        html += '<div class="fade-child" style="font-size:13px;color:var(--text-secondary);font-family:var(--font-mono)">';
+        html += esc(formatTime(data.event_timespan[0])) + '  →  ' + esc(formatTime(data.event_timespan[1]));
+        html += '</div>';
+      }
+
+      // Skills
+      if (data.skills_count != null) {
+        html += '<div class="fade-child" style="margin-top:16px;font-size:13px;color:var(--text-secondary)">';
+        html += 'Skills loaded: <span class="mono">' + esc(data.skills_count) + '</span>';
+        html += '</div>';
+      }
+
+      setContent("overview-content", html);
+    } catch (e) {
+      setContent("overview-content", errorMsg(e));
+    }
+  }
+
+  function statCard(label, value, colorCls) {
+    return '<div class="stat-card"><div class="label">' + esc(label) + '</div><div class="value ' + colorCls + '">' + esc(String(value)) + '</div></div>';
+  }
+
+  function infoRow(label, value) {
+    return '<div class="info-row"><span class="info-label">' + esc(label) + '</span><span class="info-value">' + esc(String(value)) + '</span></div>';
+  }
+
+  function renderActivityChart(buckets) {
+    if (!buckets.length) {
+      return '<div class="activity-chart"><div class="state-msg">No activity data</div></div>';
+    }
+    const max = Math.max(1, ...buckets.map(b => b.count));
+    let bars = "";
+    for (const b of buckets) {
+      const pct = Math.max(1, (b.count / max) * 100);
+      bars += '<div class="chart-bar" style="height:' + pct + '%">'
+        + '<div class="chart-bar-tooltip">' + esc(formatTimeShort(b.hour_ms)) + ': ' + b.count + '</div>'
+        + '</div>';
+    }
+    const firstLabel = buckets.length > 0 ? formatTimeShort(buckets[0].hour_ms) : "";
+    const lastLabel = buckets.length > 0 ? formatTimeShort(buckets[buckets.length - 1].hour_ms) : "";
+    return '<div class="activity-chart">'
+      + '<div class="chart-bars">' + bars + '</div>'
+      + '<div class="chart-labels"><span>' + esc(firstLabel) + '</span><span>' + esc(lastLabel) + '</span></div>'
+      + '</div>';
+  }
+
+  // --- Tasks ---
+  async function loadTasks() {
+    try {
+      const data = await apiFetch("/api/tasks?limit=" + state.tasks.limit + "&offset=" + state.tasks.offset);
+      state.tasks.total = data.total || 0;
+      const tasks = data.tasks || [];
+      if (tasks.length === 0) {
+        setContent("tasks-content", emptyMsg("No tasks found."));
+        return;
+      }
+      let html = '<div class="table-wrap"><table id="tasks-table">';
+      html += '<tr><th>Time</th><th>Description</th><th>Role</th><th>Status</th><th>Steps</th><th>Duration</th></tr>';
+      for (const t of tasks) {
+        const rowId = "task-" + t.task_id;
+        html += '<tr class="clickable" data-task-id="' + esc(t.task_id) + '">';
+        html += '<td class="mono">' + esc(formatTime(t.timestamp_ms)) + '</td>';
+        html += '<td class="truncate">' + esc(truncate(t.description, 80)) + '</td>';
+        html += '<td>' + esc(t.role || "") + '</td>';
+        html += '<td>' + statusBadge(t.status) + '</td>';
+        html += '<td class="mono">' + esc(t.steps != null ? t.steps : "--") + '</td>';
+        html += '<td class="mono">' + esc(formatDuration(t.total_duration_ms)) + '</td>';
+        html += '</tr>';
+        html += '<tr class="task-detail-row" id="' + rowId + '" style="display:none"><td colspan="6"><div class="task-detail-inner"><span class="spinner"></span> Loading...</div></td></tr>';
+      }
+      html += '</table></div>';
+      html += renderPagination(state.tasks, "tasks");
+      setContent("tasks-content", html);
+      bindTaskClicks();
+    } catch (e) {
+      setContent("tasks-content", errorMsg(e));
+    }
+  }
+
+  function bindTaskClicks() {
+    const rows = document.querySelectorAll("#tasks-table tr.clickable");
+    for (const row of rows) {
+      row.addEventListener("click", function() {
+        const tid = this.getAttribute("data-task-id");
+        toggleTaskDetail(tid);
+      });
+    }
+  }
+
+  async function toggleTaskDetail(taskId) {
+    const detailRow = document.getElementById("task-" + taskId);
+    if (!detailRow) return;
+    if (detailRow.style.display !== "none") {
+      detailRow.style.display = "none";
+      state.tasks.expanded = null;
+      return;
+    }
+    // Collapse any previously expanded
+    const allDetails = document.querySelectorAll(".task-detail-row");
+    for (const d of allDetails) d.style.display = "none";
+
+    detailRow.style.display = "";
+    state.tasks.expanded = taskId;
+    const inner = detailRow.querySelector(".task-detail-inner");
+    inner.innerHTML = '<span class="spinner"></span> Loading...';
+    try {
+      const data = await apiFetch("/api/tasks/" + encodeURIComponent(taskId));
+      const events = data.events || [];
+      if (events.length === 0) {
+        inner.innerHTML = '<div style="color:var(--text-secondary);font-size:12px">No events for this task.</div>';
+        return;
+      }
+      let html = "";
+      for (const ev of events) {
+        html += '<div class="task-event">';
+        html += '<span class="task-event-time">' + esc(formatTimeShort(ev.timestamp_ms)) + '</span>';
+        html += '<span>' + eventTypeBadge(ev.type) + '</span>';
+        html += '<span class="task-event-content">' + esc(eventSummary(ev)) + '</span>';
+        html += '</div>';
+      }
+      inner.innerHTML = html;
+    } catch (e) {
+      inner.innerHTML = '<div class="state-msg error">' + esc(e.message) + '</div>';
+    }
+  }
+
+  function eventSummary(ev) {
+    const parts = [];
+    for (const k of Object.keys(ev)) {
+      if (k === "timestamp_ms" || k === "type") continue;
+      const v = ev[k];
+      if (v == null) continue;
+      if (typeof v === "string" && v.length > 120) {
+        parts.push(k + ": " + v.slice(0, 120) + "…");
+      } else if (typeof v === "object") {
+        parts.push(k + ": " + JSON.stringify(v).slice(0, 120));
+      } else {
+        parts.push(k + ": " + v);
+      }
+    }
+    return parts.join(" | ") || "(event)";
+  }
+
+  // --- Tools ---
+  async function loadTools() {
+    try {
+      const data = await apiFetch("/api/tools");
+      const tools = data.tools || [];
+      const history = data.janitor_history || [];
+
+      let html = "";
+      if (tools.length === 0) {
+        html += emptyMsg("No tools in toolbox.");
+      } else {
+        html += '<div class="section-title fade-child">Tools</div>';
+        html += '<div class="tool-grid fade-child">';
+        for (const t of tools) {
+          html += '<div class="tool-card">';
+          html += '<div class="tool-card-header">';
+          html += '<span class="tool-card-name">' + esc(t.name) + '</span>';
+          html += t.validated
+            ? '<span class="badge badge-validated">validated</span>'
+            : '<span class="badge badge-unvalidated">unvalidated</span>';
+          html += '</div>';
+          if (t.description) {
+            html += '<div class="tool-card-desc">' + esc(t.description) + '</div>';
+          }
+          if (t.provides && t.provides.length > 0) {
+            html += '<div class="tool-card-provides">';
+            for (const p of t.provides) {
+              html += '<span class="provides-tag">' + esc(p) + '</span>';
+            }
+            html += '</div>';
+          }
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+
+      if (history.length > 0) {
+        html += '<div class="section-title fade-child">Janitor History</div>';
+        html += '<ul class="timeline fade-child">';
+        for (const h of history) {
+          html += '<li class="timeline-item">';
+          html += '<span class="timeline-time">' + esc(formatTime(h.timestamp_ms)) + '</span>';
+          html += '<span class="timeline-content">';
+          html += eventTypeBadge(h.type) + ' ';
+          if (h.tool) html += '<span class="mono">' + esc(h.tool) + '</span> ';
+          html += esc(eventSummary(h));
+          html += '</span>';
+          html += '</li>';
+        }
+        html += '</ul>';
+      }
+
+      setContent("tools-content", html);
+    } catch (e) {
+      setContent("tools-content", errorMsg(e));
+    }
+  }
+
+  // --- Memory ---
+  let memorySearchTimeout = null;
+  async function loadMemory() {
+    try {
+      const search = state.memory.search;
+      const url = "/api/memories?limit=" + state.memory.limit
+        + "&offset=" + state.memory.offset
+        + (search ? "&search=" + encodeURIComponent(search) : "");
+      const data = await apiFetch(url);
+      state.memory.total = data.total || 0;
+      const memories = data.memories || [];
+      const stats = data.stats || {};
+
+      let html = "";
+
+      // Stats bar
+      html += '<div class="stats-bar">';
+      html += '<div class="stats-bar-item"><span class="stats-bar-dot" style="background:var(--blue)"></span> Total: <strong>' + esc(stats.total || 0) + '</strong></div>';
+      html += '<div class="stats-bar-item"><span class="stats-bar-dot" style="background:var(--blue)"></span> Auto: <strong>' + esc(stats.auto_count || 0) + '</strong></div>';
+      html += '<div class="stats-bar-item"><span class="stats-bar-dot" style="background:var(--purple)"></span> User: <strong>' + esc(stats.user_count || 0) + '</strong></div>';
+      html += '<div class="stats-bar-item"><span class="stats-bar-dot" style="background:var(--green)"></span> Embedded: <strong>' + esc(stats.embedded_count || 0) + '</strong></div>';
+      html += '</div>';
+
+      // Search mode indicator
+      const mode = data.search_mode;
+      if (search && mode) {
+        const modeLabel = mode === "vector" ? "vector similarity" : mode === "text" ? "text match" : "";
+        if (modeLabel) {
+          html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">Search mode: <span class="mono">' + esc(modeLabel) + '</span></div>';
+        }
+      }
+
+      if (memories.length === 0) {
+        html += emptyMsg(search ? "No memories match your search." : "No memories stored.");
+      } else {
+        html += '<div class="table-wrap"><table>';
+        html += '<tr><th>ID</th><th>Fact</th><th>Source</th><th>Embedded</th><th>Created</th></tr>';
+        for (const m of memories) {
+          const shortId = m.id ? String(m.id).slice(0, 8) : "--";
+          const embeddedIcon = m.has_embedding
+            ? '<span style="color:var(--green)" title="has embedding">&#x25cf;</span>'
+            : '<span style="color:var(--text-muted)" title="no embedding">&#x25cb;</span>';
+          html += '<tr>';
+          html += '<td class="mono">' + esc(shortId) + '</td>';
+          html += '<td>' + esc(m.fact) + '</td>';
+          html += '<td>' + sourceBadge(m.source) + '</td>';
+          html += '<td style="text-align:center">' + embeddedIcon + '</td>';
+          html += '<td class="mono">' + esc(formatDate(m.created)) + '</td>';
+          html += '</tr>';
+        }
+        html += '</table></div>';
+        html += renderPagination(state.memory, "memory");
+      }
+
+      setContent("memory-content", html);
+    } catch (e) {
+      setContent("memory-content", errorMsg(e));
+    }
+  }
+
+  function sourceBadge(source) {
+    if (!source) return "";
+    const s = String(source).toLowerCase();
+    const cls = s === "auto" ? "badge-auto" : s === "user" ? "badge-user" : "";
+    return '<span class="badge ' + cls + '">' + esc(source) + '</span>';
+  }
+
+  // --- Schedules ---
+  async function loadSchedules() {
+    try {
+      const data = await apiFetch("/api/schedules");
+      const schedules = Array.isArray(data) ? data : [];
+      if (schedules.length === 0) {
+        setContent("schedules-content", emptyMsg("No schedules configured."));
+        return;
+      }
+      let html = '<div class="table-wrap"><table>';
+      html += '<tr><th>Description</th><th>Repeat</th><th>Enabled</th><th>Last Run</th><th>Last Status</th><th>Next Run</th><th>Frontend</th></tr>';
+      for (const s of schedules) {
+        html += '<tr>';
+        html += '<td>' + esc(s.description || "--") + '</td>';
+        html += '<td class="mono">' + esc(s.repeat || "--") + '</td>';
+        html += '<td>' + (s.enabled
+          ? '<span class="badge badge-enabled">enabled</span>'
+          : '<span class="badge badge-disabled">disabled</span>') + '</td>';
+        html += '<td class="mono">' + esc(formatTime(s.last_run)) + '</td>';
+        html += '<td>' + statusBadge(s.last_status) + '</td>';
+        html += '<td class="mono">' + esc(formatTime(s.next_run)) + '</td>';
+        html += '<td>' + esc(s.frontend || "--") + '</td>';
+        html += '</tr>';
+      }
+      html += '</table></div>';
+      setContent("schedules-content", html);
+    } catch (e) {
+      setContent("schedules-content", errorMsg(e));
+    }
+  }
+
+  // --- Events ---
+  async function loadEvents() {
+    try {
+      const url = "/api/events?limit=" + state.events.limit
+        + "&offset=" + state.events.offset
+        + (state.events.type ? "&type=" + encodeURIComponent(state.events.type) : "");
+      const data = await apiFetch(url);
+      state.events.total = data.total || 0;
+      const events = data.events || [];
+      if (events.length === 0) {
+        setContent("events-content", emptyMsg("No events found."));
+        return;
+      }
+      let html = '<div class="table-wrap"><table>';
+      html += '<tr><th>Time</th><th>Type</th><th>Details</th></tr>';
+      for (const ev of events) {
+        html += '<tr>';
+        html += '<td class="mono" style="white-space:nowrap">' + esc(formatTime(ev.timestamp_ms)) + '</td>';
+        html += '<td>' + eventTypeBadge(ev.type) + '</td>';
+        html += '<td style="word-break:break-word">' + esc(eventSummary(ev)) + '</td>';
+        html += '</tr>';
+      }
+      html += '</table></div>';
+      html += renderPagination(state.events, "events");
+      setContent("events-content", html);
+    } catch (e) {
+      setContent("events-content", errorMsg(e));
+    }
+  }
+
+  // --- Pagination ---
+  function renderPagination(s, section) {
+    const total = s.total;
+    const offset = s.offset;
+    const limit = s.limit;
+    const from = total === 0 ? 0 : offset + 1;
+    const to = Math.min(offset + limit, total);
+    return '<div class="pagination">'
+      + '<span>Showing ' + from + '-' + to + ' of ' + total + '</span>'
+      + '<div class="pagination-btns">'
+      + '<button class="pg-btn" onclick="window.__dash.paginate(\'' + section + '\',-1)"' + (offset === 0 ? " disabled" : "") + '>Prev</button>'
+      + '<button class="pg-btn" onclick="window.__dash.paginate(\'' + section + '\',1)"' + (offset + limit >= total ? " disabled" : "") + '>Next</button>'
+      + '</div></div>';
+  }
+
+  function paginate(section, dir) {
+    const s = state[section];
+    if (!s) return;
+    s.offset = Math.max(0, s.offset + dir * s.limit);
+    loadTab(section === "memory" ? "memory" : section);
+  }
+
+  // --- Tab management ---
+  function switchTab(tab) {
+    state.activeTab = tab;
+    document.querySelectorAll(".nav-btn").forEach(function(btn) {
+      btn.classList.toggle("active", btn.getAttribute("data-tab") === tab);
+    });
+    document.querySelectorAll(".tab-panel").forEach(function(panel) {
+      panel.classList.toggle("active", panel.id === "panel-" + tab);
+    });
+    document.getElementById("view-title").textContent = viewNames[tab] || tab;
+    loadTab(tab);
+  }
+
+  function loadTab(tab) {
+    switch (tab) {
+      case "overview": loadOverview(); break;
+      case "tasks": loadTasks(); break;
+      case "tools": loadTools(); break;
+      case "memory": loadMemory(); break;
+      case "schedules": loadSchedules(); break;
+      case "events": loadEvents(); break;
+    }
+    updateLastRefreshed();
+  }
+
+  function updateLastRefreshed() {
+    document.getElementById("last-refreshed").textContent =
+      "Last refreshed: " + new Date().toLocaleTimeString();
+  }
+
+  // --- Auto-refresh ---
+  function toggleAutoRefresh(enabled) {
+    state.autoRefresh = enabled;
+    var dot = document.getElementById("pulse-dot");
+    if (dot) dot.classList.toggle("active", enabled);
+    if (state.refreshTimer) {
+      clearInterval(state.refreshTimer);
+      state.refreshTimer = null;
+    }
+    if (enabled) {
+      state.refreshTimer = setInterval(function() {
+        loadTab(state.activeTab);
+      }, 5000);
+    }
+  }
+
+  // --- Init ---
+  function init() {
+    // Nav clicks
+    document.querySelectorAll(".nav-btn").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        switchTab(this.getAttribute("data-tab"));
+      });
+    });
+
+    // Auto-refresh toggle
+    document.getElementById("auto-refresh-check").addEventListener("change", function() {
+      toggleAutoRefresh(this.checked);
+    });
+
+    // Memory search
+    document.getElementById("memory-search").addEventListener("input", function() {
+      const val = this.value;
+      clearTimeout(memorySearchTimeout);
+      memorySearchTimeout = setTimeout(function() {
+        state.memory.search = val;
+        state.memory.offset = 0;
+        if (state.activeTab === "memory") loadMemory();
+      }, 300);
+    });
+
+    // Events type filter
+    document.getElementById("events-type-filter").addEventListener("change", function() {
+      state.events.type = this.value;
+      state.events.offset = 0;
+      if (state.activeTab === "events") loadEvents();
+    });
+
+    // Expose pagination for inline onclick
+    window.__dash = { paginate: paginate };
+
+    // Initial load
+    loadTab("overview");
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>
