@@ -5,7 +5,7 @@
 # Pick the smartest model available
 [roles.default]
 provider = "ollama"
-model = "glm-5:cloud"
+model = "deepseek-v4-flash:cloud"
 api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
@@ -13,7 +13,7 @@ api_base = "https://ollama.com"
 # Needs to be fast and reliable for lightweight structured tasks
 [roles.fast]
 provider = "ollama"
-model = "kimi-k2.5:cloud"
+model = "deepseek-v4-flash:cloud"
 api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
@@ -21,7 +21,7 @@ api_base = "https://ollama.com"
 # Supplements built-in Rust tools. Needs strong coding ability (SWE-bench, LiveCodeBench)
 [roles.code]
 provider = "ollama"
-model = "glm-5:cloud"
+model = "deepseek-v4-pro:cloud"
 api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
@@ -37,7 +37,7 @@ api_base = "https://ollama.com"
 # If omitted, Marrow falls back to roles.default, then roles.fast.
 # [roles.agent]
 # provider = "ollama"
-# model = "glm-5:cloud"
+# model = "deepseek-v4-pro:cloud"
 # api_base = "https://ollama.com"
 # api_key = "your-key-here"
 
