@@ -2,7 +2,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
 
@@ -79,7 +79,12 @@ impl Runtime {
             config,
             Some(metrics.clone()),
         )?);
-        let client = Arc::new(Client::new());
+        let client = Arc::new(
+            Client::builder()
+                .timeout(Duration::from_secs(120))
+                .build()
+                .expect("failed to build HTTP client"),
+        );
         let toolbox = Toolbox::new(&options.toolbox_path);
         let mut registry = ToolRegistry::new(toolbox, &options.toolbox_path);
         crate::tools::register_all(&mut registry);

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,10 @@ impl OpenAIBackend {
         api_key: impl Into<String>,
     ) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(300))
+                .build()
+                .expect("failed to build HTTP client"),
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
@@ -201,7 +204,10 @@ impl OpenAIEmbedBackend {
         api_key: impl Into<String>,
     ) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(120))
+                .build()
+                .expect("failed to build HTTP client"),
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),

@@ -39,7 +39,9 @@ fn binary_name() -> Result<String, Box<dyn std::error::Error>> {
 pub async fn check_for_update() -> Result<Option<String>, Box<dyn std::error::Error>> {
     let current = env!("CARGO_PKG_VERSION");
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
     let release: Release = client
         .get(GITHUB_API_URL)
         .header("User-Agent", format!("marrow/{current}"))
@@ -66,7 +68,9 @@ pub async fn check_and_update() -> Result<bool, Box<dyn std::error::Error>> {
     let current = env!("CARGO_PKG_VERSION");
     eprintln!("[update] checking for updates (current: v{current})");
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
     let release: Release = client
         .get(GITHUB_API_URL)
         .header("User-Agent", format!("marrow/{current}"))

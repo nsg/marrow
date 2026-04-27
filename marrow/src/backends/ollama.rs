@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -42,7 +42,10 @@ pub struct OllamaBackend {
 impl OllamaBackend {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(300))
+                .build()
+                .expect("failed to build HTTP client"),
             base_url: base_url.into(),
             api_key: None,
             model: model.into(),
@@ -145,7 +148,10 @@ pub struct OllamaEmbedBackend {
 impl OllamaEmbedBackend {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(120))
+                .build()
+                .expect("failed to build HTTP client"),
             base_url: base_url.into(),
             api_key: None,
             model: model.into(),
