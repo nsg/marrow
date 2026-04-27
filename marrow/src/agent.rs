@@ -75,6 +75,26 @@ pub type IncomingRx = mpsc::UnboundedReceiver<String>;
 
 const MAX_AGENT_STEPS: u32 = 25;
 
+/// Character budget for the full prompt. Assumes ~1M-token context models with
+/// ~2 chars/token for code-heavy content, minus headroom for the response.
+const PROMPT_CHAR_BUDGET: usize = 1_800_000;
+
+/// Number of most recent steps shown with full output detail in history.
+const RECENT_STEPS: usize = 3;
+
+/// Create a checkpoint after this many steps since the last checkpoint.
+const CHECKPOINT_STEP_INTERVAL: u32 = 8;
+
+/// A compacted summary of all history up to a certain step. When present,
+/// the prompt shows the checkpoint text + only the steps that followed it.
+#[derive(Debug, Clone)]
+pub struct Checkpoint {
+    /// Compacted summary produced by the fast model.
+    pub text: String,
+    /// This checkpoint covers all steps up to and including this step number.
+    pub up_to_step: u32,
+}
+
 /// Static system prompt — identical across all steps and tasks.
 /// Placed in the system message so API providers can cache it.
 const AGENT_SYSTEM_PROMPT: &str = r#"You are an agent that completes tasks step by step.
@@ -260,6 +280,7 @@ pub fn build_agent_prompt(
     memories: &[Memory],
     skills: &[(String, String)],
     history: &[StepResult],
+    checkpoint: Option<&Checkpoint>,
     secret_descriptions: &[(&str, &str)],
     conversation: &[Message],
     frontend: &str,
@@ -291,72 +312,6 @@ pub fn build_agent_prompt(
         format!(
             "Working memory (bracketed UUID is the ID param for memory_update / memory_delete / memory_search):\n{facts}\n\n"
         )
-    };
-
-    let history_section = if history.is_empty() {
-        String::new()
-    } else {
-        const RECENT_STEPS: usize = 3;
-        let total = history.len();
-        let split = total.saturating_sub(RECENT_STEPS);
-
-        let mut parts = Vec::new();
-
-        // Working context: pinned findings from ALL successful steps
-        let findings: Vec<String> = history
-            .iter()
-            .filter_map(|s| {
-                s.finding
-                    .as_ref()
-                    .map(|f| format!("- Step {}: {f}", s.step))
-            })
-            .collect();
-        if !findings.is_empty() {
-            parts.push("Working context (confirmed discoveries):".to_string());
-            parts.extend(findings);
-            parts.push(String::new());
-        }
-
-        // Older steps: compressed differently based on success/failure
-        if split > 0 {
-            parts.push("Earlier actions:".to_string());
-            for s in &history[..split] {
-                let desc = format_action_short(&s.action);
-                if s.success {
-                    // Successful older steps: action + finding (or brief output)
-                    let detail = s.finding.as_deref().unwrap_or("OK");
-                    parts.push(format!("  Step {}: {} → {detail}", s.step, desc));
-                } else {
-                    // Failed older steps: action + brief error reason
-                    let reason = extract_error_reason(&s.output);
-                    parts.push(format!("  Step {}: {} → FAILED: {reason}", s.step, desc));
-                }
-            }
-            parts.push(String::new());
-        }
-
-        // Recent steps: full detail for successes, compressed for failures
-        parts.push("Recent actions:".to_string());
-        for s in &history[split..] {
-            let desc = format_action_short(&s.action);
-            if s.success {
-                let output_display = if s.output.len() > 1000 {
-                    format!("{}... (truncated)", &s.output[..1000])
-                } else {
-                    s.output.clone()
-                };
-                parts.push(format!(
-                    "[Step {}] {}\nResult: {}\n",
-                    s.step, desc, output_display
-                ));
-            } else {
-                // Failed recent steps: show error but not the full output
-                let reason = extract_error_reason(&s.output);
-                parts.push(format!("[Step {}] {} → FAILED: {reason}\n", s.step, desc));
-            }
-        }
-
-        format!("{}\n", parts.join("\n"))
     };
 
     let secrets_section = if secret_descriptions.is_empty() {
@@ -417,6 +372,8 @@ pub fn build_agent_prompt(
         .format("%Y-%m-%d %H:%M (%A)")
         .to_string();
 
+    let history_section = build_history_section(history, checkpoint);
+
     let user_content = AGENT_USER_PROMPT_TEMPLATE
         .replace("{tools}", tools_section)
         .replace(
@@ -433,6 +390,203 @@ pub fn build_agent_prompt(
         Message::system(AGENT_SYSTEM_PROMPT),
         Message::user(user_content),
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Step history — checkpoint-based compaction
+// ---------------------------------------------------------------------------
+
+/// Build the history section for the prompt. If a checkpoint exists, show the
+/// checkpoint summary followed by only the steps that happened after it.
+/// Otherwise show the full history with the existing compression scheme.
+fn build_history_section(history: &[StepResult], checkpoint: Option<&Checkpoint>) -> String {
+    if history.is_empty() && checkpoint.is_none() {
+        return String::new();
+    }
+
+    let mut parts = Vec::new();
+
+    // If we have a checkpoint, show it and only include steps after it
+    let visible_history = if let Some(cp) = checkpoint {
+        parts.push(format!(
+            "Summary of steps 1–{}:\n{}\n",
+            cp.up_to_step, cp.text
+        ));
+        history
+            .iter()
+            .filter(|s| s.step > cp.up_to_step)
+            .collect::<Vec<_>>()
+    } else {
+        history.iter().collect()
+    };
+
+    if visible_history.is_empty() {
+        if parts.is_empty() {
+            return String::new();
+        }
+        return format!("{}\n", parts.join("\n"));
+    }
+
+    // Working context: findings from visible steps
+    let findings: Vec<String> = visible_history
+        .iter()
+        .filter_map(|s| {
+            s.finding
+                .as_ref()
+                .map(|f| format!("- Step {}: {f}", s.step))
+        })
+        .collect();
+    if !findings.is_empty() {
+        parts.push("Working context (confirmed discoveries):".to_string());
+        parts.extend(findings);
+        parts.push(String::new());
+    }
+
+    let total = visible_history.len();
+    let split = total.saturating_sub(RECENT_STEPS);
+
+    // Earlier steps: one-line summaries
+    if split > 0 {
+        parts.push("Earlier actions:".to_string());
+        for s in &visible_history[..split] {
+            let desc = format_action_short(&s.action);
+            if s.success {
+                let detail = s.finding.as_deref().unwrap_or("OK");
+                parts.push(format!("  Step {}: {} → {detail}", s.step, desc));
+            } else {
+                let reason = extract_error_reason(&s.output);
+                parts.push(format!("  Step {}: {} → FAILED: {reason}", s.step, desc));
+            }
+        }
+        parts.push(String::new());
+    }
+
+    // Recent steps: full detail
+    parts.push("Recent actions:".to_string());
+    for s in &visible_history[split..] {
+        let desc = format_action_short(&s.action);
+        if s.success {
+            let output_display = truncate_str(&s.output, 1000);
+            parts.push(format!(
+                "[Step {}] {}\nResult: {}\n",
+                s.step, desc, output_display
+            ));
+        } else {
+            let reason = extract_error_reason(&s.output);
+            parts.push(format!("[Step {}] {} → FAILED: {reason}\n", s.step, desc));
+        }
+    }
+
+    format!("{}\n", parts.join("\n"))
+}
+
+/// Create a checkpoint by summarizing the current checkpoint (if any) plus
+/// all steps since into a compact text using the fast model.
+async fn create_checkpoint(
+    history: &[StepResult],
+    current_checkpoint: Option<&Checkpoint>,
+    current_step: u32,
+    fast_backend: &dyn ModelBackend,
+) -> Option<Checkpoint> {
+    // Gather steps to summarize: everything after the last checkpoint
+    let steps_to_summarize: Vec<&StepResult> = if let Some(cp) = current_checkpoint {
+        history.iter().filter(|s| s.step > cp.up_to_step).collect()
+    } else {
+        history.iter().collect()
+    };
+
+    if steps_to_summarize.is_empty() {
+        return current_checkpoint.cloned();
+    }
+
+    // Build context for the summarizer
+    let mut context = String::new();
+    if let Some(cp) = current_checkpoint {
+        context.push_str(&format!(
+            "Previous summary (steps 1–{}):\n{}\n\n",
+            cp.up_to_step, cp.text
+        ));
+    }
+
+    context.push_str("Steps to incorporate:\n");
+    for s in &steps_to_summarize {
+        let desc = format_action_short(&s.action);
+        if s.success {
+            let summary = s.finding.as_deref().unwrap_or("OK");
+            context.push_str(&format!("  Step {}: {} → {summary}\n", s.step, desc));
+        } else {
+            let reason = extract_error_reason(&s.output);
+            context.push_str(&format!("  Step {}: {} → FAILED: {reason}\n", s.step, desc));
+        }
+    }
+
+    let prompt = format!(
+        "Summarize this agent execution history into a compact checkpoint. Include:\n\
+         - What data was successfully retrieved and key values\n\
+         - What approaches failed and why (so they are not retried)\n\
+         - What tools were created or removed\n\
+         Be concise — this replaces the full history in future prompts.\n\n\
+         {context}"
+    );
+
+    match fast_backend.complete(prompt).await {
+        Ok(summary) => {
+            let text = summary.trim().to_string();
+            if text.is_empty() {
+                eprintln!("[agent] checkpoint creation failed: empty summary");
+                return current_checkpoint.cloned();
+            }
+            eprintln!(
+                "[agent] checkpoint created at step {current_step} ({} chars)",
+                text.len()
+            );
+            Some(Checkpoint {
+                text,
+                up_to_step: current_step,
+            })
+        }
+        Err(e) => {
+            eprintln!("[agent] checkpoint creation failed: {e}");
+            current_checkpoint.cloned()
+        }
+    }
+}
+
+/// Check whether a checkpoint should be created based on step count or prompt size.
+fn needs_checkpoint(
+    history: &[StepResult],
+    checkpoint: Option<&Checkpoint>,
+    prompt_chars: usize,
+) -> bool {
+    let steps_since = if let Some(cp) = checkpoint {
+        history.iter().filter(|s| s.step > cp.up_to_step).count() as u32
+    } else {
+        history.len() as u32
+    };
+
+    // Trigger on step count
+    if steps_since >= CHECKPOINT_STEP_INTERVAL {
+        return true;
+    }
+
+    // Trigger on prompt size
+    if prompt_chars > PROMPT_CHAR_BUDGET {
+        return true;
+    }
+
+    false
+}
+
+/// Truncate a string to at most `limit` chars, UTF-8–safe.
+fn truncate_str(s: &str, limit: usize) -> String {
+    if s.len() <= limit {
+        return s.to_string();
+    }
+    let mut end = limit;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}... (truncated)", &s[..end])
 }
 
 /// Parse a single JSON action string into an Action.
@@ -856,6 +1010,7 @@ pub async fn run_loop(
     };
 
     let mut history: Vec<StepResult> = Vec::new();
+    let mut checkpoint: Option<Checkpoint> = None;
     let mut step_timings: Vec<StepTiming> = Vec::new();
     let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
     let mut last_successful_code: Option<String> = None; // fallback for save_tool without block ref
@@ -890,16 +1045,37 @@ pub async fn run_loop(
         }
 
         let secret_descs = secrets.map(|s| s.descriptions()).unwrap_or_default();
-        let messages = build_agent_prompt(
+        let mut messages = build_agent_prompt(
             task,
             &tools_section,
             memories,
             skills,
             &history,
+            checkpoint.as_ref(),
             &secret_descs,
             conversation,
             frontend,
         );
+
+        // Check if we need a checkpoint before sending
+        let prompt_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+        if needs_checkpoint(&history, checkpoint.as_ref(), prompt_chars) {
+            checkpoint =
+                create_checkpoint(&history, checkpoint.as_ref(), step - 1, fast_backend).await;
+            // Rebuild the prompt with the new checkpoint
+            messages = build_agent_prompt(
+                task,
+                &tools_section,
+                memories,
+                skills,
+                &history,
+                checkpoint.as_ref(),
+                &secret_descs,
+                conversation,
+                frontend,
+            );
+        }
+
         let response = backend.complete_chat(messages).await?;
 
         log.emit(Event::AgentModelResponse {
