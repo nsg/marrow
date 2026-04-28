@@ -269,11 +269,27 @@ impl MemoryStore {
     }
 
     pub fn update(&self, id: Uuid, new_fact: String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.update_with_source(id, new_fact, None)
+    }
+
+    pub fn update_with_source(
+        &self,
+        id: Uuid,
+        new_fact: String,
+        source: Option<MemorySource>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let conn = self.conn.lock().unwrap();
-        let changed = conn.execute(
-            "UPDATE memories SET fact = ?1 WHERE id = ?2",
-            rusqlite::params![new_fact, id.to_string()],
-        )?;
+        let changed = if let Some(src) = source {
+            conn.execute(
+                "UPDATE memories SET fact = ?1, source = ?2 WHERE id = ?3",
+                rusqlite::params![new_fact, src.as_str(), id.to_string()],
+            )?
+        } else {
+            conn.execute(
+                "UPDATE memories SET fact = ?1 WHERE id = ?2",
+                rusqlite::params![new_fact, id.to_string()],
+            )?
+        };
         if changed == 0 {
             return Err(format!("memory not found: {id}").into());
         }

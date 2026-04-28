@@ -573,6 +573,10 @@ fn cluster_memories(memories: &[Memory]) -> Vec<Vec<&Memory>> {
 const MEMORY_CLEANUP_PROMPT: &str = r#"You are a memory janitor. Review the following cluster of related memory facts.
 These facts may contain duplicates, contradictions, or outdated information.
 
+Each fact is tagged with its source:
+- (user) — the user explicitly stated this
+- (auto) — the agent discovered or derived this
+
 Facts:
 {facts}
 
@@ -587,6 +591,7 @@ Return a JSON object (inside a ```json block) with exactly these fields:
 - "delete": array of UUIDs to remove
 
 Every UUID from the input must appear in exactly one of keep, update, or delete.
+When two facts conflict, user-sourced facts always take precedence over auto-sourced facts.
 Prefer keeping the most recent or most specific version of conflicting facts.
 When two facts say the same thing differently, keep the better-worded one and delete the other."#;
 
@@ -616,7 +621,7 @@ pub async fn cleanup_memories(
     for cluster in &clusters {
         let facts = cluster
             .iter()
-            .map(|m| format!("- [{}] {}", m.id, m.fact))
+            .map(|m| format!("- [{}] ({}) {}", m.id, m.source.as_str(), m.fact))
             .collect::<Vec<_>>()
             .join("\n");
 

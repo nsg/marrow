@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
+use crate::memory::MemorySource;
 use crate::tool::{ExecuteResult, ParamDef, Tool, ToolContext};
 use crate::toolbox::ToolMeta;
 
@@ -18,7 +19,11 @@ impl Tool for MemoryUpdateTool {
     }
 
     fn params(&self) -> Vec<ParamDef> {
-        vec![ParamDef::required("ID"), ParamDef::required("FACT")]
+        vec![
+            ParamDef::required("ID"),
+            ParamDef::required("FACT"),
+            ParamDef::optional("SOURCE"),
+        ]
     }
 
     fn returns(&self) -> Vec<String> {
@@ -55,7 +60,19 @@ impl Tool for MemoryUpdateTool {
                 }
             };
 
-            match store.update(id, new_fact.clone()) {
+            let source = match params.get("SOURCE") {
+                Some(s) if !s.is_empty() => match MemorySource::from_db_str(s) {
+                    Ok(src) => Some(src),
+                    Err(_) => {
+                        return Ok(
+                            serde_json::json!({"error": format!("invalid SOURCE: {s} (expected 'user' or 'auto')")}),
+                        );
+                    }
+                },
+                _ => None,
+            };
+
+            match store.update_with_source(id, new_fact.clone(), source) {
                 Ok(()) => Ok(serde_json::json!({
                     "id": id.to_string(),
                     "fact": new_fact,

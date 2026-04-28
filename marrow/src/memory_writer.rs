@@ -25,11 +25,14 @@ Rules:
 - Don't save task-specific details (like "user asked about weather in London")
 - DO save preferences, patterns, and reusable knowledge
 - When the user explicitly asks to remember something, always save it
+- For each saved fact, indicate the source:
+  - "user" — the user explicitly stated or confirmed this fact in their message
+  - "auto" — the agent discovered, derived, or looked this up (not directly from the user's words)
 
 Respond in this exact JSON format:
 ```json
 {{
-  "save": ["fact 1", "fact 2"],
+  "save": [{{"fact": "fact 1", "source": "user"}}, {{"fact": "fact 2", "source": "auto"}}],
   "update": {{"<uuid>": "updated fact text"}},
   "delete": ["<uuid>"]
 }}
@@ -45,13 +48,56 @@ If nothing to do, respond with:
 ```"#;
 
 #[derive(Debug, serde::Deserialize)]
+struct SaveEntry {
+    fact: String,
+    #[serde(default = "default_source")]
+    source: String,
+}
+
+fn default_source() -> String {
+    "auto".to_string()
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct WriterResponse {
-    #[serde(default)]
-    save: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_save_entries")]
+    save: Vec<SaveEntry>,
     #[serde(default)]
     update: std::collections::HashMap<String, String>,
     #[serde(default)]
     delete: Vec<String>,
+}
+
+/// Accept both the new format [{"fact": "...", "source": "..."}] and the
+/// legacy format ["fact 1", "fact 2"] for backwards compatibility.
+fn deserialize_save_entries<'de, D>(deserializer: D) -> Result<Vec<SaveEntry>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: serde_json::Value = serde::Deserialize::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Array(arr) => {
+            let mut entries = Vec::new();
+            for item in arr {
+                match item {
+                    serde_json::Value::Object(_) => {
+                        if let Ok(entry) = serde_json::from_value::<SaveEntry>(item) {
+                            entries.push(entry);
+                        }
+                    }
+                    serde_json::Value::String(s) => {
+                        entries.push(SaveEntry {
+                            fact: s,
+                            source: "auto".to_string(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            Ok(entries)
+        }
+        _ => Ok(Vec::new()),
+    }
 }
 
 /// Summary of what the memory writer did.
@@ -90,10 +136,14 @@ pub async fn process_interaction(
 
     let mut result = MemoryWriterResult::default();
 
-    for fact in &actions.save {
-        let memory = Memory::new(fact, MemorySource::Auto);
+    for entry in &actions.save {
+        let source = match entry.source.as_str() {
+            "user" => MemorySource::User,
+            _ => MemorySource::Auto,
+        };
+        let memory = Memory::new(&entry.fact, source);
         store.save(&memory)?;
-        result.saved.push(fact.clone());
+        result.saved.push(entry.fact.clone());
     }
 
     for (id_str, new_fact) in &actions.update {
@@ -149,19 +199,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_save_facts() {
-        let input = r#"{"save": ["User prefers UTC"], "update": {}, "delete": []}"#;
+    fn parse_save_facts_new_format() {
+        let input = r#"{"save": [{"fact": "User prefers UTC", "source": "user"}], "update": {}, "delete": []}"#;
         let r = parse_writer_response(input).unwrap();
-        assert_eq!(r.save, vec!["User prefers UTC"]);
+        assert_eq!(r.save.len(), 1);
+        assert_eq!(r.save[0].fact, "User prefers UTC");
+        assert_eq!(r.save[0].source, "user");
         assert!(r.update.is_empty());
         assert!(r.delete.is_empty());
     }
 
     #[test]
-    fn parse_wrapped_in_json_block() {
-        let input = "Here is what to remember:\n```json\n{\"save\": [\"likes coffee\"], \"update\": {}, \"delete\": []}\n```";
+    fn parse_save_facts_legacy_format() {
+        let input = r#"{"save": ["User prefers UTC"], "update": {}, "delete": []}"#;
         let r = parse_writer_response(input).unwrap();
-        assert_eq!(r.save, vec!["likes coffee"]);
+        assert_eq!(r.save.len(), 1);
+        assert_eq!(r.save[0].fact, "User prefers UTC");
+        assert_eq!(r.save[0].source, "auto");
+    }
+
+    #[test]
+    fn parse_save_facts_mixed_format() {
+        let input = r#"{"save": [{"fact": "from user", "source": "user"}, "plain string"], "update": {}, "delete": []}"#;
+        let r = parse_writer_response(input).unwrap();
+        assert_eq!(r.save.len(), 2);
+        assert_eq!(r.save[0].fact, "from user");
+        assert_eq!(r.save[0].source, "user");
+        assert_eq!(r.save[1].fact, "plain string");
+        assert_eq!(r.save[1].source, "auto");
+    }
+
+    #[test]
+    fn parse_save_default_source() {
+        let input = r#"{"save": [{"fact": "no source field"}], "update": {}, "delete": []}"#;
+        let r = parse_writer_response(input).unwrap();
+        assert_eq!(r.save[0].source, "auto");
+    }
+
+    #[test]
+    fn parse_wrapped_in_json_block() {
+        let input = "Here is what to remember:\n```json\n{\"save\": [{\"fact\": \"likes coffee\", \"source\": \"user\"}], \"update\": {}, \"delete\": []}\n```";
+        let r = parse_writer_response(input).unwrap();
+        assert_eq!(r.save[0].fact, "likes coffee");
+        assert_eq!(r.save[0].source, "user");
     }
 
     #[test]
@@ -183,9 +263,9 @@ mod tests {
 
     #[test]
     fn parse_json_with_surrounding_text() {
-        let input = r#"I think we should save this: {"save": ["fact one"], "update": {}, "delete": []} that's all"#;
+        let input = r#"I think we should save this: {"save": [{"fact": "fact one", "source": "auto"}], "update": {}, "delete": []} that's all"#;
         let r = parse_writer_response(input).unwrap();
-        assert_eq!(r.save, vec!["fact one"]);
+        assert_eq!(r.save[0].fact, "fact one");
     }
 
     #[test]
