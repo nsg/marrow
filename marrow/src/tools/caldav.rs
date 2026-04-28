@@ -17,7 +17,9 @@ impl Tool for CalDavCalendarTool {
         ToolMeta {
             name: "caldav_calendar".to_string(),
             description:
-                "Interacts with a CalDAV server to list calendars, fetch events, or create events"
+                "Manage CalDAV calendar events (VEVENT). Actions: list_calendars, list_events, get_event, create_event. \
+                 list_events requires CALENDAR_PATH and optional START_DATE/END_DATE (ISO format). \
+                 create_event requires CALENDAR_PATH, SUMMARY, START_DATE"
                     .to_string(),
             provides: vec!["caldav_calendar".to_string()],
             validated: true,
@@ -119,7 +121,9 @@ impl Tool for CalDavTasksTool {
         ToolMeta {
             name: "caldav_tasks".to_string(),
             description:
-                "Interacts with a CalDAV server to list, create, complete, or delete tasks (VTODO)"
+                "Manage CalDAV tasks (VTODO). Actions: list_tasks, create_task, complete_task, delete_task. \
+                 STATUS_FILTER values: NEEDS-ACTION, IN-PROCESS, COMPLETED, CANCELLED, \
+                 or ALL to include completed tasks. Default (omitted): excludes completed tasks"
                     .to_string(),
             provides: vec!["caldav_tasks".to_string()],
             validated: true,
@@ -536,14 +540,22 @@ async fn list_tasks(
 ) -> ToolResult {
     let url = resolve_url(server_url, cal_path);
 
-    let status_match = if !status_filter.is_empty() {
+    // Default: exclude COMPLETED tasks (the common case — agents want active tasks).
+    // Pass STATUS_FILTER=ALL to get everything, or a specific status to filter to it.
+    let status_match = if status_filter.eq_ignore_ascii_case("ALL") {
+        String::new()
+    } else if !status_filter.is_empty() {
         format!(
             r#"<C:prop-filter name="STATUS">
           <C:text-match>{status_filter}</C:text-match>
         </C:prop-filter>"#
         )
     } else {
-        String::new()
+        // No filter specified — exclude completed tasks by default
+        r#"<C:prop-filter name="STATUS">
+          <C:text-match negate-condition="yes">COMPLETED</C:text-match>
+        </C:prop-filter>"#
+            .to_string()
     };
 
     let body = format!(
