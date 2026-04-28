@@ -42,8 +42,9 @@ jobs:
           mkdir -p dist
           cp target/release/marrow dist/
           cp target/release/marrow-discord dist/
+          cp target/release/marrow-dash dist/
           cd dist
-          tar czf marrow-x86_64-unknown-linux-gnu.tar.gz marrow marrow-discord
+          tar czf marrow-x86_64-unknown-linux-gnu.tar.gz marrow marrow-discord marrow-dash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

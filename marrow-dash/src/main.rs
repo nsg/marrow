@@ -29,11 +29,29 @@ struct Args {
     port: u16,
     #[arg(long, default_value = "127.0.0.1")]
     bind: String,
+
+    /// Check for updates and apply if available
+    #[arg(long)]
+    update: bool,
 }
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+    if args.update {
+        match marrow::update::check_and_update().await {
+            Ok(true) => {
+                eprintln!("[marrow-dash] restart to use the new version");
+                return;
+            }
+            Ok(false) => return,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let state = Arc::new(state::AppState::load(
         &args.log,

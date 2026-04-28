@@ -112,17 +112,69 @@ pub async fn check_and_update() -> Result<bool, Box<dyn std::error::Error>> {
         .await?;
 
     let bin_name = binary_name()?;
-    let bin_bytes = extract_binary_from_tarball(&bytes, &bin_name)?;
-
     let current_exe = std::env::current_exe()?;
-    let temp_path = temp_path_for(&current_exe);
+    let own_dir = current_exe
+        .parent()
+        .ok_or("could not determine binary directory")?;
 
+    // Update self
+    update_binary_at(&bytes, &bin_name, &current_exe)?;
+    eprintln!("[update] updated {bin_name} to v{latest}");
+
+    // Update sibling binaries found on the system
+    for sibling in list_binaries_in_tarball(&bytes)? {
+        if sibling == bin_name {
+            continue;
+        }
+        if let Some(path) = find_binary_on_system(&sibling, own_dir) {
+            match update_binary_at(&bytes, &sibling, &path) {
+                Ok(()) => eprintln!("[update] updated {sibling} at {}", path.display()),
+                Err(e) => eprintln!("[update] could not update {sibling}: {e}"),
+            }
+        }
+    }
+
+    Ok(true)
+}
+
+fn update_binary_at(
+    tarball: &[u8],
+    binary_name: &str,
+    target_path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let bin_bytes = extract_binary_from_tarball(tarball, binary_name)?;
+    let temp_path = temp_path_for(target_path);
     std::fs::write(&temp_path, &bin_bytes)?;
     std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o755))?;
-    std::fs::rename(&temp_path, &current_exe)?;
+    std::fs::rename(&temp_path, target_path)?;
+    Ok(())
+}
 
-    eprintln!("[update] updated to v{latest}");
-    Ok(true)
+fn list_binaries_in_tarball(tarball: &[u8]) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    use flate2::read::GzDecoder;
+    use tar::Archive;
+
+    let decoder = GzDecoder::new(tarball);
+    let mut archive = Archive::new(decoder);
+    let mut names = Vec::new();
+
+    for entry in archive.entries()? {
+        let entry = entry?;
+        let path = entry.path()?;
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            names.push(name.to_string());
+        }
+    }
+
+    Ok(names)
+}
+
+fn find_binary_on_system(name: &str, own_dir: &std::path::Path) -> Option<PathBuf> {
+    let candidate = own_dir.join(name);
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    None
 }
 
 fn extract_binary_from_tarball(
@@ -217,5 +269,77 @@ mod tests {
 
         let err = extract_binary_from_tarball(&gz_bytes, "nonexistent");
         assert!(err.is_err());
+    }
+
+    fn make_test_tarball(names: &[&str]) -> Vec<u8> {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use std::io::Write;
+
+        let mut builder = tar::Builder::new(Vec::new());
+        for name in names {
+            let content = format!("fake-{name}");
+            let mut header = tar::Header::new_gnu();
+            header.set_path(*name).unwrap();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append(&header, content.as_bytes()).unwrap();
+        }
+        let tar_bytes = builder.into_inner().unwrap();
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&tar_bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn test_list_binaries_in_tarball() {
+        let gz = make_test_tarball(&["marrow", "marrow-discord", "marrow-dash"]);
+        let mut names = list_binaries_in_tarball(&gz).unwrap();
+        names.sort();
+        assert_eq!(names, vec!["marrow", "marrow-dash", "marrow-discord"]);
+    }
+
+    #[test]
+    fn test_list_binaries_empty_tarball() {
+        let gz = make_test_tarball(&[]);
+        let names = list_binaries_in_tarball(&gz).unwrap();
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn test_find_binary_in_own_dir() {
+        let dir = std::env::temp_dir().join("marrow-test-find-bin");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let bin_path = dir.join("marrow-discord");
+        std::fs::write(&bin_path, b"fake").unwrap();
+
+        assert_eq!(
+            find_binary_on_system("marrow-discord", &dir),
+            Some(bin_path)
+        );
+        assert_eq!(find_binary_on_system("nonexistent", &dir), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_update_binary_at() {
+        let dir = std::env::temp_dir().join("marrow-test-update-at");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let target = dir.join("marrow");
+        std::fs::write(&target, b"old-content").unwrap();
+
+        let gz = make_test_tarball(&["marrow", "marrow-discord"]);
+        update_binary_at(&gz, "marrow", &target).unwrap();
+
+        let content = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(content, "fake-marrow");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
