@@ -12,6 +12,7 @@ use crate::metrics::StepTiming;
 use crate::model::ModelBackend;
 use crate::secrets::Secrets;
 use crate::session::Message;
+use crate::skills::SkillStore;
 use crate::tool::{FrontendContext, ToolContext, ToolRegistry};
 
 /// Result of a single agent loop run, returned to the runtime layer.
@@ -165,6 +166,9 @@ Available actions:
 **progress** — send the user a progress update while you continue working (does NOT end the task):
 {{"action": "progress", "text": "status message"}}
 
+**load_skill** — load full procedural steps for a skill (see "Available skills" catalog):
+{{"action": "load_skill", "name": "skill-filename.md"}}
+
 **done** — give your final answer (this text is shown directly to the user — make it complete and well-formatted):
 {{"action": "done", "text": "your complete answer to the user"}}
 IMPORTANT: done MUST be the only action in a response. If you combine done with other actions (Lua blocks, tool calls, etc.), the done will be IGNORED and all other actions will execute. You will be asked to resubmit done on its own.
@@ -230,6 +234,9 @@ pub enum Action {
     Progress {
         text: String,
     },
+    LoadSkill {
+        name: String,
+    },
     Done {
         text: String,
         /// True when the done signal was inferred from unparseable text (no explicit
@@ -256,6 +263,7 @@ impl Action {
             Action::RunCode { .. } => "run_code",
             Action::SaveTool { .. } => "save_tool",
             Action::RemoveTool { .. } => "remove_tool",
+            Action::LoadSkill { .. } => "load_skill",
             Action::Progress { .. } => "progress",
             Action::Done { .. } => "done",
             Action::UserMessage { .. } => "user_message",
@@ -278,7 +286,7 @@ pub fn build_agent_prompt(
     task: &str,
     tools_section: &str,
     memories: &[Memory],
-    skills: &[(String, String)],
+    skill_catalog: &[(String, String)],
     history: &[StepResult],
     checkpoint: Option<&Checkpoint>,
     secret_descriptions: &[(&str, &str)],
@@ -291,14 +299,17 @@ pub fn build_agent_prompt(
         tools_section
     };
 
-    let skills_section = if skills.is_empty() {
+    let skills_section = if skill_catalog.is_empty() {
         String::new()
     } else {
-        let skill_parts: Vec<String> = skills
+        let lines: Vec<String> = skill_catalog
             .iter()
-            .map(|(name, content)| format!("### {name}\n{content}"))
+            .map(|(name, first_line)| format!("- {name}: {first_line}"))
             .collect();
-        format!("Relevant skills:\n{}\n\n", skill_parts.join("\n\n"))
+        format!(
+            "Available skills (use load_skill to get full steps):\n{}\n\n",
+            lines.join("\n")
+        )
     };
 
     let memories_section = if memories.is_empty() {
@@ -650,6 +661,10 @@ fn parse_json_action(json_str: &str) -> Option<Action> {
             let text = raw.text.filter(|t| !t.trim().is_empty())?;
             Some(Action::Progress { text })
         }
+        "load_skill" => {
+            let name = raw.name?;
+            Some(Action::LoadSkill { name })
+        }
         "done" => {
             let text = raw.text?;
             Some(Action::Done {
@@ -838,6 +853,7 @@ fn format_action_short(action: &Action) -> String {
         Action::RunCode { name, .. } => format!("Ran inline Lua [{name}]"),
         Action::SaveTool { name, .. } => format!("Saved tool \"{name}\""),
         Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
+        Action::LoadSkill { name } => format!("Loaded skill \"{name}\""),
         Action::Progress { text } => {
             if text.len() > 60 {
                 format!("Progress: \"{}...\"", &text[..60])
@@ -982,7 +998,7 @@ pub async fn run_loop(
     registry: &ToolRegistry,
     client: Arc<Client>,
     memories: &[Memory],
-    skills: &[(String, String)],
+    skill_store: &SkillStore,
     log: &EventLog,
     secrets: Option<&Secrets>,
     progress: Option<&ProgressTx>,
@@ -1044,12 +1060,13 @@ pub async fn run_loop(
             eprintln!("[agent] step {step}: tools shown to model:\n{tools_section}");
         }
 
+        let skill_catalog = skill_store.catalog().unwrap_or_default();
         let secret_descs = secrets.map(|s| s.descriptions()).unwrap_or_default();
         let mut messages = build_agent_prompt(
             task,
             &tools_section,
             memories,
-            skills,
+            &skill_catalog,
             &history,
             checkpoint.as_ref(),
             &secret_descs,
@@ -1067,7 +1084,7 @@ pub async fn run_loop(
                 task,
                 &tools_section,
                 memories,
-                skills,
+                &skill_catalog,
                 &history,
                 checkpoint.as_ref(),
                 &secret_descs,
@@ -1131,6 +1148,9 @@ pub async fn run_loop(
                             text.clone()
                         };
                         eprintln!("[agent] step {step}:   progress — {preview}");
+                    }
+                    Action::LoadSkill { name } => {
+                        eprintln!("[agent] step {step}:   load_skill \"{name}\"");
                     }
                     Action::Done { text, fallback } => {
                         let preview = if text.len() > 200 {
@@ -1250,7 +1270,6 @@ pub async fn run_loop(
                 let answer = format_answer(
                     task,
                     memories,
-                    skills,
                     &history,
                     backend,
                     conversation,
@@ -1485,6 +1504,41 @@ pub async fn run_loop(
                     });
                 }
 
+                Action::LoadSkill { name } => {
+                    // Accept both "check-calendar" and "check-calendar.md"
+                    let normalized = if name.ends_with(".md") {
+                        name.clone()
+                    } else {
+                        format!("{name}.md")
+                    };
+
+                    log.emit(Event::AgentAction {
+                        task_id: task_id.to_string(),
+                        step,
+                        action_type: "load_skill".to_string(),
+                        detail: normalized.clone(),
+                    })
+                    .await;
+
+                    let (output, success) = match skill_store.load(&normalized) {
+                        Ok(content) => (content, true),
+                        Err(_) => (
+                            format!(
+                                "Skill \"{normalized}\" not found. Check the catalog for available skill names."
+                            ),
+                            false,
+                        ),
+                    };
+
+                    sync_results.push(StepResult {
+                        step,
+                        action: action.clone(),
+                        output,
+                        success,
+                        finding: Some(format!("Loaded skill: {normalized}")),
+                    });
+                }
+
                 Action::Progress { text } => {
                     log.emit(Event::AgentAction {
                         task_id: task_id.to_string(),
@@ -1622,7 +1676,6 @@ pub async fn run_loop(
     let answer = format_answer(
         task,
         memories,
-        skills,
         &history,
         backend,
         conversation,
@@ -1655,11 +1708,9 @@ pub async fn run_loop(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn format_answer(
     task: &str,
     memories: &[Memory],
-    skills: &[(String, String)],
     history: &[StepResult],
     backend: &dyn ModelBackend,
     conversation: &[Message],
@@ -1702,9 +1753,6 @@ async fn format_answer(
     if history.is_empty() {
         // No tools were called — just answer directly
         let mut context = format!("{system_context}{conversation_section}Task: {task}\n");
-        for (name, content) in skills {
-            context.push_str(&format!("\nSkill — {name}:\n{content}\n"));
-        }
         if !memories.is_empty() {
             let facts = memories
                 .iter()
@@ -1725,6 +1773,7 @@ async fn format_answer(
         .filter_map(|s| match &s.action {
             Action::CallTool { tool, .. } => Some(format!("[{tool}]: {}", s.output)),
             Action::RunCode { .. } => Some(format!("[inline]: {}", s.output)),
+            Action::LoadSkill { name, .. } => Some(format!("[skill:{name}]: {}", s.output)),
             Action::UserMessage { text } => Some(format!("[User follow-up]: {text}")),
             _ => None,
         })
@@ -1733,9 +1782,6 @@ async fn format_answer(
 
     let mut context =
         format!("{system_context}{conversation_section}Task: {task}\n\nCollected data:\n{data}\n");
-    for (name, content) in skills {
-        context.push_str(&format!("\nSkill — {name}:\n{content}\n"));
-    }
     if !memories.is_empty() {
         let facts = memories
             .iter()
@@ -1869,6 +1915,28 @@ mod tests {
         assert!(!looks_incomplete("The weather in Tokyo is 22°C and sunny."));
         assert!(!looks_incomplete("Here are your results: done."));
         assert!(!looks_incomplete("No data found for that query."));
+    }
+
+    #[test]
+    fn parse_load_skill_action() {
+        let input = r#"{"action": "load_skill", "name": "check-calendar.md"}"#;
+        match parse_action(input) {
+            Action::LoadSkill { name } => {
+                assert_eq!(name, "check-calendar.md");
+            }
+            other => panic!("expected LoadSkill, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_load_skill_missing_name() {
+        let input = r#"{"action": "load_skill"}"#;
+        match parse_action(input) {
+            Action::Done { fallback, .. } => {
+                assert!(fallback, "missing name should fall through to fallback");
+            }
+            other => panic!("expected fallback Done, got {other:?}"),
+        }
     }
 
     #[test]

@@ -19,7 +19,7 @@ use crate::router::{ModelRouter, RouterConfig};
 use crate::schedule::ScheduleStore;
 use crate::secrets::Secrets;
 use crate::session::Message;
-use crate::skills::{self, SkillStore};
+use crate::skills::SkillStore;
 use crate::tool::{FrontendContext, ToolRegistry};
 use crate::toolbox::Toolbox;
 
@@ -243,9 +243,6 @@ impl Runtime {
             fast_backend,
         )
         .await;
-        let selected_skills =
-            skills::select_skills(description, self.skill_store.as_ref()).unwrap_or_default();
-
         // Run the agent loop inside a TASK_METRICS scope so backend model
         // calls automatically record into the per-task metrics instance.
         let loop_result = TASK_METRICS
@@ -258,7 +255,7 @@ impl Runtime {
                     self.registry.as_ref(),
                     self.client.clone(),
                     &memories,
-                    &selected_skills,
+                    self.skill_store.as_ref(),
                     self.log.as_ref(),
                     Some(self.secrets.as_ref()),
                     progress,

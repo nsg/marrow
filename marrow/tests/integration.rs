@@ -111,6 +111,8 @@ fn agent_parse_malformed_defaults_to_done() {
 #[tokio::test]
 async fn agent_loop_call_tool_then_answer() {
     let dir = temp_dir("marrow_tb");
+    let skill_dir = temp_dir("marrow_skills");
+    let skill_store = SkillStore::new(skill_dir.path());
     let toolbox = Toolbox::new(dir.path());
     let log = noop_log().await;
     let client = Arc::new(Client::new());
@@ -145,7 +147,7 @@ async fn agent_loop_call_tool_then_answer() {
         &registry,
         client,
         &[],
-        &[],
+        &skill_store,
         &log,
         None,
         None,
@@ -166,6 +168,8 @@ async fn agent_loop_call_tool_then_answer() {
 #[tokio::test]
 async fn agent_loop_save_tool_then_call_then_answer() {
     let dir = temp_dir("marrow_tb");
+    let skill_dir = temp_dir("marrow_skills");
+    let skill_store = SkillStore::new(skill_dir.path());
     let toolbox = Toolbox::new(dir.path());
     let log = noop_log().await;
     let client = Arc::new(Client::new());
@@ -193,7 +197,7 @@ async fn agent_loop_save_tool_then_call_then_answer() {
         &registry,
         client,
         &[],
-        &[],
+        &skill_store,
         &log,
         None,
         None,
@@ -215,6 +219,8 @@ async fn agent_loop_save_tool_then_call_then_answer() {
 #[tokio::test]
 async fn agent_loop_direct_answer() {
     let dir = temp_dir("marrow_tb");
+    let skill_dir = temp_dir("marrow_skills");
+    let skill_store = SkillStore::new(skill_dir.path());
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
@@ -231,7 +237,7 @@ async fn agent_loop_direct_answer() {
         &registry,
         client,
         &[],
-        &[],
+        &skill_store,
         &log,
         None,
         None,
@@ -252,6 +258,8 @@ async fn agent_loop_direct_answer() {
 #[tokio::test]
 async fn agent_loop_tool_failure_recovery() {
     let dir = temp_dir("marrow_tb");
+    let skill_dir = temp_dir("marrow_skills");
+    let skill_store = SkillStore::new(skill_dir.path());
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
@@ -273,7 +281,7 @@ async fn agent_loop_tool_failure_recovery() {
         &registry,
         client,
         &[],
-        &[],
+        &skill_store,
         &log,
         None,
         None,

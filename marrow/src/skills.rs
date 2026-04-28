@@ -44,6 +44,35 @@ impl SkillStore {
         Ok(skills)
     }
 
+    /// Return a lightweight catalog: `(filename, first_heading)` for each skill.
+    /// Use this to show the agent what skills exist without injecting full content.
+    pub fn catalog(&self) -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>> {
+        let mut entries = Vec::new();
+        if !self.dir.exists() {
+            return Ok(entries);
+        }
+        for entry in std::fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md")
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            {
+                let content = std::fs::read_to_string(&path).unwrap_or_default();
+                let first_line = content
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("")
+                    .trim_start_matches('#')
+                    .trim()
+                    .to_string();
+                if !first_line.is_empty() {
+                    entries.push((name.to_string(), first_line));
+                }
+            }
+        }
+        Ok(entries)
+    }
+
     pub fn save(&self, name: &str, content: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.ensure_dir()?;
         std::fs::write(self.dir.join(name), content)?;
@@ -54,62 +83,6 @@ impl SkillStore {
         let path = self.dir.join(name);
         Ok(std::fs::read_to_string(path)?)
     }
-}
-
-/// Select relevant skills for a task based on keyword matching.
-/// Returns up to 3 skills sorted by relevance score.
-pub fn select_skills(
-    task: &str,
-    store: &SkillStore,
-) -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>> {
-    let skills = store.list()?;
-    if skills.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let task_words: Vec<String> = task
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() >= 3)
-        .map(String::from)
-        .collect();
-
-    if task_words.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut scored: Vec<(usize, &(String, String))> = skills
-        .iter()
-        .map(|skill| {
-            // Extract keywords from filename (without .md) and first line
-            let name_part = skill.0.trim_end_matches(".md").to_lowercase();
-            let first_line = skill.1.lines().next().unwrap_or("").to_lowercase();
-            let skill_text = format!("{name_part} {first_line}");
-
-            let skill_words: Vec<String> = skill_text
-                .split(|c: char| !c.is_alphanumeric())
-                .filter(|w| w.len() >= 3)
-                .map(String::from)
-                .collect();
-
-            let score = task_words
-                .iter()
-                .filter(|tw| {
-                    skill_words
-                        .iter()
-                        .any(|sw| sw.contains(tw.as_str()) || tw.contains(sw.as_str()))
-                })
-                .count();
-
-            (score, skill)
-        })
-        .filter(|(score, _)| *score >= 1)
-        .collect();
-
-    scored.sort_by_key(|b| std::cmp::Reverse(b.0));
-    scored.truncate(3);
-
-    Ok(scored.into_iter().map(|(_, skill)| skill.clone()).collect())
 }
 
 const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for a workflow automation agent. Review the agent's memory facts and tools, then create or update procedural skill guides.
@@ -293,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn select_skills_matching() {
+    fn skill_store_catalog() {
         let dir = tempfile::Builder::new()
             .prefix("marrow_skills")
             .tempdir()
@@ -302,42 +275,26 @@ mod tests {
         store
             .save(
                 "check-calendar.md",
-                "# Check Calendar\nUse nextcloud calendar tool",
+                "# Check Calendar\nFetches events from CalDAV",
             )
             .unwrap();
         store
-            .save("deploy-blog.md", "# Deploy Blog\nSSH and pull latest code")
+            .save("check-weather.md", "# Check Weather\nGets forecast data")
             .unwrap();
 
-        let selected = select_skills("Check my nextcloud calendar for tomorrow", &store).unwrap();
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].0, "check-calendar.md");
-    }
-
-    #[test]
-    fn select_skills_no_match() {
-        let dir = tempfile::Builder::new()
-            .prefix("marrow_skills")
-            .tempdir()
-            .unwrap();
-        let store = SkillStore::new(dir.path());
-        store
-            .save("check-calendar.md", "# Check Calendar\nUse cal tool")
-            .unwrap();
-
-        let selected = select_skills("What is the weather?", &store).unwrap();
-        assert!(selected.is_empty());
-    }
-
-    #[test]
-    fn select_skills_empty_store() {
-        let dir = tempfile::Builder::new()
-            .prefix("marrow_skills")
-            .tempdir()
-            .unwrap();
-        let store = SkillStore::new(dir.path());
-        let selected = select_skills("anything", &store).unwrap();
-        assert!(selected.is_empty());
+        let catalog = store.catalog().unwrap();
+        assert_eq!(catalog.len(), 2);
+        // Check that we got first headings, not full content
+        assert!(
+            catalog
+                .iter()
+                .any(|(n, l)| n == "check-calendar.md" && l == "Check Calendar")
+        );
+        assert!(
+            catalog
+                .iter()
+                .any(|(n, l)| n == "check-weather.md" && l == "Check Weather")
+        );
     }
 
     #[test]
