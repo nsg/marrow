@@ -107,7 +107,7 @@ Each response can contain any combination of ```lua code blocks and JSON actions
 ## Inline Lua code (preferred for one-off data fetching)
 
 Write ```lua code blocks and they will be executed in a sandbox with ONLY these functions:
-- http_request({{ method, url, body?, headers? }}) / http_get(url) / http_post(url, body)
+- http_request({ method, url, body?, headers? }) / http_get(url) / http_post(url, body)
 - json_parse(string) / json_encode(table)
 - xml_parse(string) / xml_encode(table)
 - secret(name) — retrieve API keys/passwords (ONLY names listed under "Available secrets" above)
@@ -123,7 +123,7 @@ Return a table with the results. Example:
 ```lua
 local resp = http_get("https://api.example.com/data")
 local data = json_parse(resp.body)
-return {{ result = data }}
+return { result = data }
 ```
 
 ### Multiple Lua blocks & naming
@@ -147,30 +147,30 @@ Results come back labeled by name (e.g. [fetch_weather]: ..., [fetch_news]: ...)
 ## JSON actions
 
 Multiple JSON actions can appear in one response. Wrap them in a JSON array:
-[{{"action": "call_tool", "tool": "TOOL_A", "params": {{}}}}, {{"action": "call_tool", "tool": "TOOL_B", "params": {{}}}}]
+[{"action": "call_tool", "tool": "TOOL_A", "params": {}}, {"action": "call_tool", "tool": "TOOL_B", "params": {}}]
 
 A single action can be a plain object (no array needed):
-{{"action": "call_tool", "tool": "TOOL_NAME", "params": {{"KEY": "value"}}}}
+{"action": "call_tool", "tool": "TOOL_NAME", "params": {"KEY": "value"}}
 
 Available actions:
 
 **call_tool** — call an existing tool:
-{{"action": "call_tool", "tool": "TOOL_NAME", "params": {{"KEY": "value"}}}}
+{"action": "call_tool", "tool": "TOOL_NAME", "params": {"KEY": "value"}}
 
 **save_tool** — save a previously successful ```lua block as a reusable tool. Reference the block by name or index:
-{{"action": "save_tool", "name": "generic_tool_name", "description": "one line description", "block": "fetch_weather"}}
+{"action": "save_tool", "name": "generic_tool_name", "description": "one line description", "block": "fetch_weather"}
 
 **remove_tool** — remove a broken tool from the toolbox:
-{{"action": "remove_tool", "name": "tool_name"}}
+{"action": "remove_tool", "name": "tool_name"}
 
 **progress** — send the user a progress update while you continue working (does NOT end the task):
-{{"action": "progress", "text": "status message"}}
+{"action": "progress", "text": "status message"}
 
 **load_skill** — load full procedural steps for a skill (see "Available skills" catalog):
-{{"action": "load_skill", "name": "skill-filename.md"}}
+{"action": "load_skill", "name": "skill-filename.md"}
 
 **done** — give your final answer (this text is shown directly to the user — make it complete and well-formatted):
-{{"action": "done", "text": "your complete answer to the user"}}
+{"action": "done", "text": "your complete answer to the user"}
 IMPORTANT: done MUST be the only action in a response. If you combine done with other actions (Lua blocks, tool calls, etc.), the done will be IGNORED and all other actions will execute. You will be asked to resubmit done on its own.
 
 ## Mixing actions
@@ -183,7 +183,7 @@ Example — fetch data and save a previous block in the same response:
 local resp = http_get("https://api.example.com/prices")
 return json_parse(resp.body)
 ```
-{{"action": "save_tool", "name": "weather_lookup", "description": "Fetches weather data", "block": "fetch_weather"}}
+{"action": "save_tool", "name": "weather_lookup", "description": "Fetches weather data", "block": "fetch_weather"}
 
 ## Rules
 
