@@ -254,6 +254,9 @@ pub enum Action {
 #[derive(Debug, Clone)]
 pub struct ParsedResponse {
     pub actions: Vec<Action>,
+    /// Validation errors for malformed actions — fed back to the model so it can
+    /// learn what it did wrong and self-correct.
+    pub errors: Vec<String>,
 }
 
 impl Action {
@@ -600,8 +603,9 @@ fn truncate_str(s: &str, limit: usize) -> String {
     format!("{}... (truncated)", &s[..end])
 }
 
-/// Parse a single JSON action string into an Action.
-fn parse_json_action(json_str: &str) -> Option<Action> {
+/// Parse a single JSON action string into an Action, or return a descriptive
+/// error message that gets fed back to the model for self-correction.
+fn parse_json_action(json_str: &str) -> Result<Action, String> {
     // If parsing fails, try fixing double-brace escaping from the model
     let json_str = if serde_json::from_str::<serde_json::Value>(json_str).is_err() {
         std::borrow::Cow::Owned(json_str.replace("{{", "{").replace("}}", "}"))
@@ -627,58 +631,124 @@ fn parse_json_action(json_str: &str) -> Option<Action> {
         params: HashMap<String, serde_json::Value>,
     }
 
-    let raw: RawAction = serde_json::from_str(json_str).ok()?;
+    let raw: RawAction = match serde_json::from_str(json_str) {
+        Ok(r) => r,
+        Err(e) => {
+            // Check if it at least looks like a JSON action (has "action" key)
+            if json_str.contains("\"action\"") {
+                return Err(format!(
+                    "Malformed JSON action: {e}. Fix the syntax and resubmit. \
+                     Example: {{\"action\": \"call_tool\", \"tool\": \"TOOL_NAME\", \"params\": {{\"KEY\": \"value\"}}}}"
+                ));
+            }
+            // Doesn't look like an action at all — skip silently (could be
+            // stray JSON in the response text)
+            return Err(String::new());
+        }
+    };
+
+    let coerce_params = |params: HashMap<String, serde_json::Value>| -> HashMap<String, String> {
+        params
+            .into_iter()
+            .map(|(k, v)| {
+                let s = match v {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                (k, s)
+            })
+            .collect()
+    };
+
     match raw.action.as_str() {
         "call_tool" => {
-            let tool = raw.tool?;
-            let params = raw
-                .params
-                .into_iter()
-                .map(|(k, v)| {
-                    let s = match v {
-                        serde_json::Value::String(s) => s,
-                        other => other.to_string(),
-                    };
-                    (k, s)
-                })
-                .collect();
-            Some(Action::CallTool { tool, params })
+            let tool = raw.tool.ok_or_else(|| {
+                "call_tool action is missing the required \"tool\" field. \
+                 Correct format: {\"action\": \"call_tool\", \"tool\": \"TOOL_NAME\", \"params\": {\"KEY\": \"value\"}}"
+                    .to_string()
+            })?;
+            Ok(Action::CallTool {
+                tool,
+                params: coerce_params(raw.params),
+            })
         }
         "save_tool" => {
-            let name = raw.name?;
-            let description = raw.description?;
-            Some(Action::SaveTool {
+            let name = raw.name.ok_or_else(|| {
+                "save_tool action is missing the required \"name\" field. \
+                 Correct format: {\"action\": \"save_tool\", \"name\": \"tool_name\", \"description\": \"...\", \"block\": \"block_name\"}"
+                    .to_string()
+            })?;
+            let description = raw.description.ok_or_else(|| {
+                format!(
+                    "save_tool \"{name}\" is missing the required \"description\" field. \
+                     Correct format: {{\"action\": \"save_tool\", \"name\": \"{name}\", \"description\": \"one line description\", \"block\": \"block_name\"}}"
+                )
+            })?;
+            Ok(Action::SaveTool {
                 name,
                 description,
                 block: raw.block,
             })
         }
         "remove_tool" => {
-            let name = raw.name.or(raw.tool)?;
-            Some(Action::RemoveTool { name })
+            let name = raw.name.or(raw.tool).ok_or_else(|| {
+                "remove_tool action is missing the required \"name\" field. \
+                 Correct format: {\"action\": \"remove_tool\", \"name\": \"tool_name\"}"
+                    .to_string()
+            })?;
+            Ok(Action::RemoveTool { name })
         }
         "progress" => {
-            let text = raw.text.filter(|t| !t.trim().is_empty())?;
-            Some(Action::Progress { text })
+            let text = raw.text.filter(|t| !t.trim().is_empty()).ok_or_else(|| {
+                "progress action requires a non-empty \"text\" field. \
+                     Correct format: {\"action\": \"progress\", \"text\": \"status message\"}"
+                    .to_string()
+            })?;
+            Ok(Action::Progress { text })
         }
         "load_skill" => {
-            let name = raw.name?;
-            Some(Action::LoadSkill { name })
+            let name = raw.name.ok_or_else(|| {
+                "load_skill action is missing the required \"name\" field. \
+                 Correct format: {\"action\": \"load_skill\", \"name\": \"skill-name.md\"}"
+                    .to_string()
+            })?;
+            Ok(Action::LoadSkill { name })
         }
         "done" => {
-            let text = raw.text?;
-            Some(Action::Done {
+            let text = raw.text.ok_or_else(|| {
+                "done action is missing the required \"text\" field. \
+                 Correct format: {\"action\": \"done\", \"text\": \"your complete answer\"}"
+                    .to_string()
+            })?;
+            Ok(Action::Done {
                 text,
                 fallback: false,
             })
         }
-        _ => None,
+        // Unknown action name — if it has a tool field or params, treat as call_tool.
+        // Models sometimes use the tool name as the action (e.g. "action": "remove_schedule").
+        unknown => {
+            let tool = raw.tool.unwrap_or_else(|| unknown.to_string());
+            if !raw.params.is_empty() || tool != unknown {
+                Ok(Action::CallTool {
+                    tool,
+                    params: coerce_params(raw.params),
+                })
+            } else {
+                Err(format!(
+                    "Unknown action \"{unknown}\". Available actions: call_tool, save_tool, \
+                     remove_tool, progress, load_skill, done. To call a tool, use: \
+                     {{\"action\": \"call_tool\", \"tool\": \"{unknown}\", \"params\": {{}}}}"
+                ))
+            }
+        }
     }
 }
 
 /// Extract all JSON actions from the response text, ignoring anything inside
 /// ```lua blocks. Supports both single objects and JSON arrays.
-fn extract_json_actions(text: &str) -> Vec<Action> {
+/// Returns (valid_actions, validation_errors).
+fn extract_json_actions(text: &str) -> (Vec<Action>, Vec<String>) {
     // Remove ```lua...``` blocks from the text so we don't match JSON inside them
     let mut stripped = String::new();
     let mut pos = 0;
@@ -703,6 +773,16 @@ fn extract_json_actions(text: &str) -> Vec<Action> {
     }
 
     let mut actions = Vec::new();
+    let mut errors = Vec::new();
+
+    let collect_result =
+        |result: Result<Action, String>, actions: &mut Vec<Action>, errors: &mut Vec<String>| {
+            match result {
+                Ok(action) => actions.push(action),
+                Err(msg) if !msg.is_empty() => errors.push(msg),
+                _ => {} // empty error = not an action at all, skip
+            }
+        };
 
     // Try to find a JSON array first: [{ ... }, { ... }]
     if let Some(arr_start) = stripped.find('[')
@@ -711,14 +791,16 @@ fn extract_json_actions(text: &str) -> Vec<Action> {
         let arr_str = &stripped[arr_start..=arr_end];
         if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(arr_str) {
             for val in arr {
-                if val.is_object()
-                    && let Some(action) = parse_json_action(&val.to_string())
-                {
-                    actions.push(action);
+                if val.is_object() {
+                    collect_result(
+                        parse_json_action(&val.to_string()),
+                        &mut actions,
+                        &mut errors,
+                    );
                 }
             }
-            if !actions.is_empty() {
-                return actions;
+            if !actions.is_empty() || !errors.is_empty() {
+                return (actions, errors);
             }
         }
     }
@@ -747,9 +829,7 @@ fn extract_json_actions(text: &str) -> Vec<Action> {
                         depth -= 1;
                         if depth == 0 {
                             let candidate = &stripped[i..=j];
-                            if let Some(action) = parse_json_action(candidate) {
-                                actions.push(action);
-                            }
+                            collect_result(parse_json_action(candidate), &mut actions, &mut errors);
                             i = j + 1;
                             break;
                         }
@@ -765,7 +845,7 @@ fn extract_json_actions(text: &str) -> Vec<Action> {
         }
     }
 
-    actions
+    (actions, errors)
 }
 
 /// Parse the full model response into a ParsedResponse containing all actions.
@@ -773,7 +853,7 @@ pub fn parse_response(response: &str) -> ParsedResponse {
     let trimmed = response.trim();
 
     let lua_blocks = extract_lua_blocks(trimmed);
-    let json_actions = extract_json_actions(trimmed);
+    let (json_actions, errors) = extract_json_actions(trimmed);
 
     let mut actions: Vec<Action> = lua_blocks
         .into_iter()
@@ -789,7 +869,7 @@ pub fn parse_response(response: &str) -> ParsedResponse {
         });
     }
 
-    ParsedResponse { actions }
+    ParsedResponse { actions, errors }
 }
 
 /// Backward-compatible single-action parse (for tests and simple call sites).
@@ -1104,6 +1184,39 @@ pub async fn run_loop(
 
         let parsed = parse_response(&response);
         let mut actions = parsed.actions;
+
+        // Feed validation errors back into history so the model can self-correct
+        if !parsed.errors.is_empty() {
+            let error_feedback = format!(
+                "SYSTEM: {} of your actions had validation errors:\n{}",
+                parsed.errors.len(),
+                parsed
+                    .errors
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| format!("  {}. {e}", i + 1))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            if log.is_verbose() {
+                eprintln!(
+                    "[agent] step {step}: {} validation error(s) in parsed actions",
+                    parsed.errors.len()
+                );
+                for err in &parsed.errors {
+                    eprintln!("[agent] step {step}:   validation error: {err}");
+                }
+            }
+            history.push(StepResult {
+                step,
+                action: Action::UserMessage {
+                    text: String::new(),
+                },
+                output: error_feedback,
+                success: false,
+                finding: None,
+            });
+        }
 
         if log.is_verbose() {
             eprintln!("[agent] step {step}: parsed {} action(s)", actions.len());
@@ -1931,12 +2044,17 @@ mod tests {
     #[test]
     fn parse_load_skill_missing_name() {
         let input = r#"{"action": "load_skill"}"#;
-        match parse_action(input) {
-            Action::Done { fallback, .. } => {
-                assert!(fallback, "missing name should fall through to fallback");
-            }
-            other => panic!("expected fallback Done, got {other:?}"),
-        }
+        let parsed = parse_response(input);
+        // Falls back to done since the action is invalid
+        assert_eq!(parsed.actions.len(), 1);
+        assert!(matches!(
+            parsed.actions[0],
+            Action::Done { fallback: true, .. }
+        ));
+        // But also reports the validation error
+        assert_eq!(parsed.errors.len(), 1);
+        assert!(parsed.errors[0].contains("load_skill"));
+        assert!(parsed.errors[0].contains("name"));
     }
 
     #[test]
@@ -1953,23 +2071,28 @@ mod tests {
     #[test]
     fn parse_progress_without_text() {
         let input = r#"{"action": "progress"}"#;
-        match parse_action(input) {
-            Action::Done { fallback, .. } => {
-                assert!(fallback, "missing text should fall through to fallback");
-            }
-            other => panic!("expected fallback Done, got {other:?}"),
-        }
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 1);
+        assert!(matches!(
+            parsed.actions[0],
+            Action::Done { fallback: true, .. }
+        ));
+        assert_eq!(parsed.errors.len(), 1);
+        assert!(parsed.errors[0].contains("progress"));
+        assert!(parsed.errors[0].contains("text"));
     }
 
     #[test]
     fn parse_progress_empty_text() {
         let input = r#"{"action": "progress", "text": ""}"#;
-        match parse_action(input) {
-            Action::Done { fallback, .. } => {
-                assert!(fallback, "empty text should fall through to fallback");
-            }
-            other => panic!("expected fallback Done, got {other:?}"),
-        }
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 1);
+        assert!(matches!(
+            parsed.actions[0],
+            Action::Done { fallback: true, .. }
+        ));
+        assert_eq!(parsed.errors.len(), 1);
+        assert!(parsed.errors[0].contains("progress"));
     }
 
     // --- Multi-action parsing tests ---
@@ -2089,8 +2212,131 @@ mod tests {
     #[test]
     fn extract_json_actions_ignores_json_inside_lua() {
         let input = "```lua\nlocal x = json_parse('{\"action\": \"done\", \"text\": \"nope\"}')\nreturn x\n```\n{\"action\": \"progress\", \"text\": \"real\"}";
-        let actions = extract_json_actions(input);
+        let (actions, errors) = extract_json_actions(input);
         assert_eq!(actions.len(), 1);
+        assert!(errors.is_empty());
         assert!(matches!(actions[0], Action::Progress { .. }));
+    }
+
+    #[test]
+    fn parse_unknown_action_with_tool_field_becomes_call_tool() {
+        // Model used tool name as action instead of "call_tool"
+        let input = r#"{"action": "remove_schedule", "tool": "remove_schedule", "params": {"SCHEDULE_ID": "abc-123"}}"#;
+        match parse_action(input) {
+            Action::CallTool { tool, params } => {
+                assert_eq!(tool, "remove_schedule");
+                assert_eq!(params.get("SCHEDULE_ID").unwrap(), "abc-123");
+            }
+            other => panic!("expected CallTool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_unknown_action_with_params_only_uses_action_as_tool() {
+        // Model used tool name as action, no separate tool field
+        let input = r#"{"action": "memory_update", "params": {"ID": "x", "FACT": "something"}}"#;
+        match parse_action(input) {
+            Action::CallTool { tool, params } => {
+                assert_eq!(tool, "memory_update");
+                assert_eq!(params.get("FACT").unwrap(), "something");
+            }
+            other => panic!("expected CallTool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_unknown_action_without_tool_or_params_reports_error() {
+        // Truly unknown action with no useful fields — reports helpful error
+        let input = r#"{"action": "something_random"}"#;
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 1);
+        assert!(matches!(
+            parsed.actions[0],
+            Action::Done { fallback: true, .. }
+        ));
+        assert_eq!(parsed.errors.len(), 1);
+        assert!(parsed.errors[0].contains("Unknown action"));
+        assert!(parsed.errors[0].contains("something_random"));
+        assert!(parsed.errors[0].contains("call_tool"));
+    }
+
+    #[test]
+    fn parse_double_brace_json_recovery() {
+        // Model generated double braces (legacy behavior)
+        let input =
+            r#"{{"action": "call_tool", "tool": "weather", "params": {{"CITY": "Stockholm"}}}}"#;
+        match parse_action(input) {
+            Action::CallTool { tool, params } => {
+                assert_eq!(tool, "weather");
+                assert_eq!(params.get("CITY").unwrap(), "Stockholm");
+            }
+            other => panic!("expected CallTool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_call_tool_missing_tool_field_reports_error() {
+        let input = r#"{"action": "call_tool", "params": {"X": "1"}}"#;
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 1);
+        assert!(matches!(
+            parsed.actions[0],
+            Action::Done { fallback: true, .. }
+        ));
+        assert_eq!(parsed.errors.len(), 1);
+        assert!(parsed.errors[0].contains("call_tool"));
+        assert!(parsed.errors[0].contains("tool"));
+    }
+
+    #[test]
+    fn parse_save_tool_missing_description_reports_error() {
+        let input = r#"{"action": "save_tool", "name": "my_tool"}"#;
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 1);
+        assert!(matches!(
+            parsed.actions[0],
+            Action::Done { fallback: true, .. }
+        ));
+        assert_eq!(parsed.errors.len(), 1);
+        assert!(parsed.errors[0].contains("save_tool"));
+        assert!(parsed.errors[0].contains("description"));
+    }
+
+    #[test]
+    fn parse_done_missing_text_reports_error() {
+        let input = r#"{"action": "done"}"#;
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 1);
+        assert!(matches!(
+            parsed.actions[0],
+            Action::Done { fallback: true, .. }
+        ));
+        assert_eq!(parsed.errors.len(), 1);
+        assert!(parsed.errors[0].contains("done"));
+        assert!(parsed.errors[0].contains("text"));
+    }
+
+    #[test]
+    fn valid_actions_produce_no_errors() {
+        let input =
+            r#"{"action": "call_tool", "tool": "weather", "params": {"CITY": "Stockholm"}}"#;
+        let parsed = parse_response(input);
+        assert_eq!(parsed.actions.len(), 1);
+        assert!(
+            parsed.errors.is_empty(),
+            "valid action should produce no errors"
+        );
+    }
+
+    #[test]
+    fn parse_malformed_json_with_action_key_reports_error() {
+        let input = r#"{"action": "call_tool", "tool": }"#;
+        let parsed = parse_response(input);
+        // Malformed JSON with "action" key should report helpful error
+        assert!(
+            !parsed.errors.is_empty(),
+            "malformed JSON should produce error"
+        );
+        assert!(parsed.errors[0].contains("Malformed JSON"));
     }
 }
