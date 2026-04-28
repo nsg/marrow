@@ -11,7 +11,9 @@ impl Tool for StathostTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "stathost".to_string(),
-            description: "Manage files on a StatHost-compatible storage service — list bucket contents, upload files, and delete files"
+            description: "Manage files on a StatHost storage service. \
+                 Actions: list (bucket contents), upload (CONTENT or LOCAL_FILE to REMOTE_PATH), \
+                 delete (REMOTE_PATH). Requires BASE_URL, TOKEN, BUCKET"
                 .to_string(),
             provides: vec!["stathost".to_string()],
             validated: true,

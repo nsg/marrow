@@ -14,7 +14,11 @@ impl Tool for ScheduleTaskTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "schedule_task".to_string(),
-            description: "Creates or updates a recurring scheduled task".to_string(),
+            description: "Create or update a scheduled task. Actions: create, update. \
+                 REPEAT types: daily (HOUR+MINUTE), every_n_hours (INTERVAL in hours), \
+                 weekly (DAY+HOUR+MINUTE), once (AT as ISO datetime). \
+                 TIMEZONE_OFFSET: hours from UTC (e.g. 1 for CET, 2 for CEST)"
+                .to_string(),
             provides: vec!["schedule_task".to_string()],
             validated: true,
         }
@@ -193,7 +197,8 @@ impl Tool for ListSchedulesTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "list_schedules".to_string(),
-            description: "Lists all scheduled tasks with their status and next run time"
+            description: "List all scheduled tasks with status and next run time. \
+                 STATUS_FILTER: enabled, disabled, or omit for all"
                 .to_string(),
             provides: vec!["list_schedules".to_string()],
             validated: true,
@@ -265,7 +270,8 @@ impl Tool for RemoveScheduleTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "remove_schedule".to_string(),
-            description: "Removes, disables, or re-enables a scheduled task by ID".to_string(),
+            description: "Manage a scheduled task by ID. Actions: delete (permanent), disable (pause), enable (resume)"
+                .to_string(),
             provides: vec!["remove_schedule".to_string()],
             validated: true,
         }

@@ -14,9 +14,11 @@ impl Tool for SlTransitTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "sl_transit".to_string(),
-            description:
-                "Search SL (Stockholm public transit) stops and plan journeys between locations"
-                    .to_string(),
+            description: "Search SL (Stockholm public transit) stops and plan journeys. \
+                 Actions: lookup (search stops by name, returns placeId), \
+                 journey (plan route using ORIGIN_PLACE_ID + DESTINATION_PLACE_ID from lookup). \
+                 Always lookup first to get placeIds, then plan journey"
+                .to_string(),
             provides: vec!["sl_transit".to_string()],
             validated: true,
         }
