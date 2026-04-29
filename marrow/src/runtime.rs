@@ -252,7 +252,7 @@ impl Runtime {
                     &task_id,
                     agent_backend,
                     fast_backend,
-                    self.registry.as_ref(),
+                    self.registry.clone(),
                     self.client.clone(),
                     &memories,
                     self.skill_store.as_ref(),

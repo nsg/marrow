@@ -129,7 +129,7 @@ async fn agent_loop_call_tool_then_answer() {
         )
         .unwrap();
 
-    let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
+    let registry = Arc::new(ToolRegistry::new(Toolbox::new(dir.path()), dir.path()));
 
     // Step 1: agent calls greeter tool
     // Step 2: agent answers directly with collected data
@@ -144,7 +144,7 @@ async fn agent_loop_call_tool_then_answer() {
         "test-task",
         &agent_backend,
         &fast_backend,
-        &registry,
+        registry,
         client,
         &[],
         &skill_store,
@@ -174,7 +174,7 @@ async fn agent_loop_save_tool_then_call_then_answer() {
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
-    let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
+    let registry = Arc::new(ToolRegistry::new(Toolbox::new(dir.path()), dir.path()));
 
     // Step 1: model runs inline Lua
     // Step 2: model saves it as a tool
@@ -194,7 +194,7 @@ async fn agent_loop_save_tool_then_call_then_answer() {
         "test-task",
         &agent_backend,
         &fast_backend,
-        &registry,
+        registry,
         client,
         &[],
         &skill_store,
@@ -224,7 +224,7 @@ async fn agent_loop_direct_answer() {
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
-    let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
+    let registry = Arc::new(ToolRegistry::new(Toolbox::new(dir.path()), dir.path()));
 
     let agent_backend = MockBackend::new(vec![r#"{"action": "done", "text": "2 + 2 = 4"}"#]);
     let fast_backend = MockBackend::new(vec![]);
@@ -234,7 +234,7 @@ async fn agent_loop_direct_answer() {
         "test-task",
         &agent_backend,
         &fast_backend,
-        &registry,
+        registry,
         client,
         &[],
         &skill_store,
@@ -263,7 +263,7 @@ async fn agent_loop_tool_failure_recovery() {
     let log = noop_log().await;
     let client = Arc::new(Client::new());
 
-    let registry = ToolRegistry::new(Toolbox::new(dir.path()), dir.path());
+    let registry = Arc::new(ToolRegistry::new(Toolbox::new(dir.path()), dir.path()));
 
     // Step 1: agent tries nonexistent tool → gets error
     // Step 2: agent answers directly
@@ -278,7 +278,7 @@ async fn agent_loop_tool_failure_recovery() {
         "test-task",
         &agent_backend,
         &fast_backend,
-        &registry,
+        registry,
         client,
         &[],
         &skill_store,

@@ -1075,7 +1075,7 @@ pub async fn run_loop(
     task_id: &str,
     backend: &dyn ModelBackend,
     fast_backend: &dyn ModelBackend,
-    registry: &ToolRegistry,
+    registry: Arc<ToolRegistry>,
     client: Arc<Client>,
     memories: &[Memory],
     skill_store: &SkillStore,
@@ -1386,7 +1386,7 @@ pub async fn run_loop(
                     &history,
                     backend,
                     conversation,
-                    registry,
+                    registry.as_ref(),
                     formatting_hint,
                 )
                 .await?;
@@ -1457,7 +1457,7 @@ pub async fn run_loop(
 
                     let tool_name = tool.clone();
                     let action_clone = action.clone();
-                    let registry_ref = registry as *const ToolRegistry;
+                    let registry = registry.clone();
                     let tool_ctx_client = tool_ctx.client.clone();
                     let tool_ctx_secrets = tool_ctx.secrets.clone();
                     let tool_ctx_task = tool_ctx.task_description.clone();
@@ -1465,9 +1465,6 @@ pub async fn run_loop(
                     let tool_ctx_memory = tool_ctx.memory_store.clone();
                     let tool_ctx_frontend = tool_ctx.frontend_context.clone();
 
-                    // SAFETY: registry lives for the entire loop iteration and we
-                    // await the JoinSet before the next iteration.
-                    let reg = unsafe { &*registry_ref };
                     let ctx = ToolContext {
                         client: tool_ctx_client,
                         secrets: tool_ctx_secrets,
@@ -1479,7 +1476,7 @@ pub async fn run_loop(
 
                     join_set.spawn(async move {
                         let (output, success) =
-                            match reg.execute_tool(&tool_name, &upper_params, &ctx).await {
+                            match registry.execute_tool(&tool_name, &upper_params, &ctx).await {
                                 Ok(value) => {
                                     let has_error = value.get("error").is_some();
                                     (value.to_string(), !has_error)
@@ -1792,7 +1789,7 @@ pub async fn run_loop(
         &history,
         backend,
         conversation,
-        registry,
+        registry.as_ref(),
         formatting_hint,
     )
     .await?;
