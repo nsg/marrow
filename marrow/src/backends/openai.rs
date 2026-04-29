@@ -17,6 +17,19 @@ struct ChatRequest {
     /// likely to land on the same cache server, improving cache hit rates.
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<String>,
+    /// Extended cache retention — keeps KV tensors on GPU-local storage for up
+    /// to 24 hours instead of the default 5-10 minute in-memory window.
+    /// Only sent for models known to support it (GPT-4.1+, GPT-5+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_retention: Option<String>,
+}
+
+/// Check whether a model name is known to support `prompt_cache_retention: "24h"`.
+/// Conservative: only matches models explicitly documented as compatible.
+/// Returns false for unknown models, OpenRouter-prefixed names, etc.
+fn supports_extended_cache(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    m.starts_with("gpt-4.1") || m.starts_with("gpt-5")
 }
 
 #[derive(Debug, Serialize)]
@@ -119,10 +132,17 @@ impl OpenAIBackend {
             .try_with(|k| (**k).clone())
             .ok();
 
+        let cache_retention = if supports_extended_cache(&self.model) {
+            Some("24h".to_string())
+        } else {
+            None
+        };
+
         let body = ChatRequest {
             model: self.model.clone(),
             messages: api_messages,
             prompt_cache_key: cache_key,
+            prompt_cache_retention: cache_retention,
         };
 
         let config = RetryConfig::default();
@@ -301,5 +321,34 @@ impl OpenAIEmbedBackend {
 impl EmbedBackend for OpenAIEmbedBackend {
     fn embed(&self, texts: Vec<String>) -> EmbedResult<'_> {
         Box::pin(async move { self.send_embed(texts).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extended_cache_supported_models() {
+        assert!(supports_extended_cache("gpt-4.1"));
+        assert!(supports_extended_cache("gpt-4.1-mini"));
+        assert!(supports_extended_cache("gpt-4.1-nano"));
+        assert!(supports_extended_cache("gpt-5"));
+        assert!(supports_extended_cache("gpt-5-codex"));
+        assert!(supports_extended_cache("gpt-5.1"));
+        assert!(supports_extended_cache("gpt-5.4"));
+        assert!(supports_extended_cache("gpt-5.5"));
+        assert!(supports_extended_cache("GPT-5.5")); // case insensitive
+    }
+
+    #[test]
+    fn extended_cache_unsupported_models() {
+        assert!(!supports_extended_cache("gpt-4o"));
+        assert!(!supports_extended_cache("gpt-4o-mini"));
+        assert!(!supports_extended_cache("gpt-4"));
+        assert!(!supports_extended_cache("o3-mini"));
+        assert!(!supports_extended_cache("claude-3-sonnet"));
+        assert!(!supports_extended_cache("openai/gpt-5")); // OpenRouter-prefixed
+        assert!(!supports_extended_cache("llama-3"));
     }
 }
