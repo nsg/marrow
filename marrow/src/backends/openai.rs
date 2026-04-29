@@ -50,11 +50,19 @@ struct ResponseMessage {
 }
 
 #[derive(Debug, Deserialize)]
+struct PromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: u64,
+}
+
+#[derive(Debug, Deserialize)]
 struct Usage {
     #[serde(default)]
     prompt_tokens: u64,
     #[serde(default)]
     completion_tokens: u64,
+    #[serde(default)]
+    prompt_tokens_details: Option<PromptTokensDetails>,
 }
 
 pub struct OpenAIBackend {
@@ -147,12 +155,19 @@ impl OpenAIBackend {
         let chat_resp: ChatResponse = serde_json::from_str(&resp_text)?;
 
         if let Some(ref metrics) = self.metrics {
-            let (prompt_tokens, completion_tokens) = chat_resp
+            let (prompt_tokens, completion_tokens, cached_tokens) = chat_resp
                 .usage
                 .as_ref()
-                .map(|u| (u.prompt_tokens, u.completion_tokens))
-                .unwrap_or((0, 0));
-            metrics.record(&self.role, duration, prompt_tokens, completion_tokens);
+                .map(|u| {
+                    let cached = u
+                        .prompt_tokens_details
+                        .as_ref()
+                        .map(|d| d.cached_tokens)
+                        .unwrap_or(0);
+                    (u.prompt_tokens, u.completion_tokens, cached)
+                })
+                .unwrap_or((0, 0, 0));
+            metrics.record(&self.role, duration, prompt_tokens, completion_tokens, cached_tokens);
         }
 
         let choice = chat_resp

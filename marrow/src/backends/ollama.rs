@@ -132,6 +132,7 @@ impl OllamaBackend {
                 duration,
                 chat_resp.prompt_eval_count.unwrap_or(0),
                 chat_resp.eval_count.unwrap_or(0),
+                0,
             );
         }
 

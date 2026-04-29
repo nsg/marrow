@@ -9,6 +9,9 @@ pub struct RoleMetrics {
     pub total_duration: Duration,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    /// Prompt tokens served from the provider's prompt cache (0 when the
+    /// provider does not report this or caching is not available).
+    pub cached_tokens: u64,
 }
 
 #[derive(Debug, Default)]
@@ -34,6 +37,7 @@ impl Metrics {
         duration: Duration,
         prompt_tokens: u64,
         completion_tokens: u64,
+        cached_tokens: u64,
     ) {
         let mut roles = self.roles.lock().unwrap();
         let entry = roles.entry(role.to_string()).or_default();
@@ -41,6 +45,7 @@ impl Metrics {
         entry.total_duration += duration;
         entry.prompt_tokens += prompt_tokens;
         entry.completion_tokens += completion_tokens;
+        entry.cached_tokens += cached_tokens;
     }
 
     /// Record metrics to this instance and propagate to the per-task
@@ -51,10 +56,11 @@ impl Metrics {
         duration: Duration,
         prompt_tokens: u64,
         completion_tokens: u64,
+        cached_tokens: u64,
     ) {
-        self.record_local(role, duration, prompt_tokens, completion_tokens);
+        self.record_local(role, duration, prompt_tokens, completion_tokens, cached_tokens);
         let _ = TASK_METRICS.try_with(|m| {
-            m.record_local(role, duration, prompt_tokens, completion_tokens);
+            m.record_local(role, duration, prompt_tokens, completion_tokens, cached_tokens);
         });
     }
 
@@ -79,8 +85,13 @@ impl Metrics {
 
         for (role, m) in &entries {
             let secs = m.total_duration.as_secs_f64();
+            let cached_info = if m.cached_tokens > 0 {
+                format!(" ({} cached)", m.cached_tokens)
+            } else {
+                String::new()
+            };
             eprintln!(
-                "[{role}] {calls} calls, {secs:.1}s total, {prompt} prompt tokens, {completion} completion tokens",
+                "[{role}] {calls} calls, {secs:.1}s total, {prompt}{cached_info} prompt tokens, {completion} completion tokens",
                 calls = m.calls,
                 prompt = m.prompt_tokens,
                 completion = m.completion_tokens,
@@ -198,8 +209,13 @@ impl TaskMetrics {
             self.code_runs
         );
         for (role, m) in &self.model_roles {
+            let cached_info = if m.cached_tokens > 0 {
+                format!(" ({} cached)", m.cached_tokens)
+            } else {
+                String::new()
+            };
             eprintln!(
-                "[{role}] {} calls, {:.1}s, {} prompt / {} completion tokens",
+                "[{role}] {} calls, {:.1}s, {}{cached_info} prompt / {} completion tokens",
                 m.calls,
                 m.total_duration.as_secs_f64(),
                 m.prompt_tokens,
