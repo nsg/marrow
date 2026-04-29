@@ -208,10 +208,10 @@ return json_parse(resp.body)
 const AGENT_USER_PROMPT_TEMPLATE: &str = r#"Available tools:
 {tools}
 
-{memories}{conversation}{execution_context}Current date/time: {datetime}
-Task: {task}
+{memories}{conversation}{execution_context}Task: {task}
 
-{history}Your action:"#;
+{history}Current date/time: {datetime}
+Your action:"#;
 
 #[derive(Debug, Clone)]
 pub enum Action {
