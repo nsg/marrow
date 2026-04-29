@@ -973,6 +973,25 @@ fn extract_error_reason(output: &str) -> String {
     }
 }
 
+fn is_sensitive_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.contains("token")
+        || key.contains("password")
+        || key.contains("secret")
+        || key.contains("api_key")
+        || key == "key"
+        || key.contains("authorization")
+        || key.contains("cookie")
+}
+
+fn format_param_for_log(key: &str, value: &str) -> String {
+    if is_sensitive_key(key) {
+        format!("  {key} = \"[redacted]\"")
+    } else {
+        format!("  {key} = \"{value}\"")
+    }
+}
+
 /// Produce a finding for the working context.
 ///
 /// Small outputs (≤ 800 chars) are used verbatim — the agent can read raw
@@ -1178,7 +1197,7 @@ pub async fn run_loop(
         log.emit(Event::AgentModelResponse {
             task_id: task_id.to_string(),
             step,
-            response: response.clone(),
+            response_len: response.len(),
         })
         .await;
 
@@ -1225,7 +1244,7 @@ pub async fn run_loop(
                     Action::CallTool { tool, params } => {
                         let params_str = params
                             .iter()
-                            .map(|(k, v)| format!("  {k} = \"{v}\""))
+                            .map(|(k, v)| format_param_for_log(k, v))
                             .collect::<Vec<_>>()
                             .join("\n");
                         let expected = registry.extract_params(tool);
@@ -1692,7 +1711,7 @@ pub async fn run_loop(
                             step,
                             tool: tool.clone(),
                             success,
-                            output: output.clone(),
+                            output_len: output.len(),
                         })
                         .await;
                     }
@@ -1707,7 +1726,7 @@ pub async fn run_loop(
                             step,
                             tool: name.clone(),
                             success,
-                            output: output.clone(),
+                            output_len: output.len(),
                         })
                         .await;
                     }

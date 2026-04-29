@@ -69,12 +69,12 @@ pub enum Event {
         step: u32,
         tool: String,
         success: bool,
-        output: String,
+        output_len: usize,
     },
     AgentModelResponse {
         task_id: String,
         step: u32,
-        response: String,
+        response_len: usize,
     },
     StepCompleted {
         task_id: String,
@@ -244,14 +244,10 @@ impl EventLog {
             } if self.verbose => {
                 eprintln!("[agent] step {step}: tool '{tool}' succeeded");
             }
-            // Model response — always show truncated preview
-            Event::AgentModelResponse { step, response, .. } => {
-                let preview = if response.len() > 500 {
-                    format!("{}…", &response[..500])
-                } else {
-                    response.clone()
-                };
-                eprintln!("[agent] step {step}: model response:\n{preview}");
+            Event::AgentModelResponse {
+                step, response_len, ..
+            } if self.verbose => {
+                eprintln!("[agent] step {step}: model response received ({response_len} bytes)");
             }
             // Step timing — always shown
             Event::StepCompleted {

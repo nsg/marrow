@@ -803,6 +803,24 @@ async fn event_log_writes_to_file() {
         status: "succeeded".to_string(),
     })
     .await;
+    log.emit(Event::AgentModelResponse {
+        task_id: "t1".to_string(),
+        step: 1,
+        response_len: "secret model body".len(),
+    })
+    .await;
+    log.emit(Event::AgentToolResult {
+        task_id: "t1".to_string(),
+        step: 1,
+        tool: "test_tool".to_string(),
+        success: true,
+        output_len: "secret tool body".len(),
+    })
+    .await;
     let content = tokio::fs::read_to_string(&log_path).await.unwrap();
     assert!(content.contains("task_created"));
+    assert!(content.contains("response_len"));
+    assert!(content.contains("output_len"));
+    assert!(!content.contains("secret model body"));
+    assert!(!content.contains("secret tool body"));
 }
