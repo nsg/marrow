@@ -591,16 +591,23 @@ fn needs_checkpoint(
     false
 }
 
-/// Truncate a string to at most `limit` chars, UTF-8–safe.
+fn truncate_chars_with_suffix(s: &str, limit: usize, suffix: &str) -> String {
+    let mut chars = s.chars();
+    let truncated = chars.by_ref().take(limit).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}{suffix}")
+    } else {
+        truncated
+    }
+}
+
+fn truncate_preview(s: &str, limit: usize) -> String {
+    truncate_chars_with_suffix(s, limit, "...")
+}
+
+/// Truncate a string to at most `limit` chars.
 fn truncate_str(s: &str, limit: usize) -> String {
-    if s.len() <= limit {
-        return s.to_string();
-    }
-    let mut end = limit;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}... (truncated)", &s[..end])
+    truncate_chars_with_suffix(s, limit, "... (truncated)")
 }
 
 /// Parse a single JSON action string into an Action, or return a descriptive
@@ -935,11 +942,7 @@ fn format_action_short(action: &Action) -> String {
         Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
         Action::LoadSkill { name } => format!("Loaded skill \"{name}\""),
         Action::Progress { text } => {
-            if text.len() > 60 {
-                format!("Progress: \"{}...\"", &text[..60])
-            } else {
-                format!("Progress: \"{text}\"")
-            }
+            format!("Progress: \"{}\"", truncate_preview(text, 60))
         }
         Action::Done { fallback, .. } => {
             if *fallback {
@@ -958,19 +961,10 @@ fn extract_error_reason(output: &str) -> String {
     if let Ok(val) = serde_json::from_str::<serde_json::Value>(output)
         && let Some(err) = val.get("error").and_then(|e| e.as_str())
     {
-        let truncated = if err.len() > 120 {
-            format!("{}...", &err[..120])
-        } else {
-            err.to_string()
-        };
-        return truncated;
+        return truncate_preview(err, 120);
     }
     // Fallback: first 120 chars of output
-    if output.len() > 120 {
-        format!("{}...", &output[..120])
-    } else {
-        output.to_string()
-    }
+    truncate_preview(output, 120)
 }
 
 fn is_sensitive_key(key: &str) -> bool {
@@ -1005,11 +999,7 @@ async fn make_finding(output: &str, fast_backend: &dyn ModelBackend) -> Option<S
     }
 
     // Large output — ask the fast model for a one-line summary
-    let truncated = if output.len() > 2000 {
-        &output[..2000]
-    } else {
-        output
-    };
+    let truncated = output.chars().take(2000).collect::<String>();
     let prompt = format!(
         "Summarize what this tool output tells us in ONE short sentence (under 20 words). \
          Focus on what was discovered or confirmed — data structure, counts, key values. \
@@ -1254,11 +1244,7 @@ pub async fn run_loop(
                         );
                     }
                     Action::RunCode { name, code } => {
-                        let preview = if code.len() > 200 {
-                            format!("{}...", &code[..200])
-                        } else {
-                            code.clone()
-                        };
+                        let preview = truncate_preview(code, 200);
                         eprintln!("[agent] step {step}:   run_code [{name}]:\n{preview}");
                     }
                     Action::SaveTool {
@@ -1274,22 +1260,14 @@ pub async fn run_loop(
                         eprintln!("[agent] step {step}:   remove_tool \"{name}\"");
                     }
                     Action::Progress { text } => {
-                        let preview = if text.len() > 200 {
-                            format!("{}...", &text[..200])
-                        } else {
-                            text.clone()
-                        };
+                        let preview = truncate_preview(text, 200);
                         eprintln!("[agent] step {step}:   progress — {preview}");
                     }
                     Action::LoadSkill { name } => {
                         eprintln!("[agent] step {step}:   load_skill \"{name}\"");
                     }
                     Action::Done { text, fallback } => {
-                        let preview = if text.len() > 200 {
-                            format!("{}...", &text[..200])
-                        } else {
-                            text.clone()
-                        };
+                        let preview = truncate_preview(text, 200);
                         let tag = if *fallback { "fallback done" } else { "done" };
                         eprintln!("[agent] step {step}:   {tag} — {preview}");
                     }
@@ -1673,11 +1651,7 @@ pub async fn run_loop(
                         task_id: task_id.to_string(),
                         step,
                         action_type: "progress".to_string(),
-                        detail: if text.len() > 80 {
-                            format!("{}...", &text[..80])
-                        } else {
-                            text.clone()
-                        },
+                        detail: truncate_preview(text, 80),
                     })
                     .await;
 
@@ -1989,6 +1963,17 @@ mod tests {
             }
             other => panic!("expected CallTool, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn truncate_preview_handles_non_ascii() {
+        assert_eq!(truncate_preview("åäö🙂abcd", 4), "åäö🙂...");
+        assert_eq!(truncate_preview("åäö🙂", 4), "åäö🙂");
+    }
+
+    #[test]
+    fn truncate_str_handles_non_ascii() {
+        assert_eq!(truncate_str("åäö🙂abcd", 4), "åäö🙂... (truncated)");
     }
 
     #[test]

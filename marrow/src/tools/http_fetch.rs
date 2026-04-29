@@ -5,6 +5,20 @@ use crate::toolbox::ToolMeta;
 
 pub struct HttpFetchTool;
 
+fn truncate_chars_with_total(s: String, limit: usize) -> String {
+    let mut chars = s.chars();
+    let truncated = chars.by_ref().take(limit).collect::<String>();
+    if chars.next().is_some() {
+        format!(
+            "{}...[truncated, {} chars total]",
+            truncated,
+            s.chars().count()
+        )
+    } else {
+        s
+    }
+}
+
 impl Tool for HttpFetchTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
@@ -120,15 +134,7 @@ impl Tool for HttpFetchTool {
             };
 
             // Truncate very large responses to avoid blowing up context
-            let body_truncated = if body.len() > 50_000 {
-                format!(
-                    "{}...[truncated, {} bytes total]",
-                    &body[..50_000],
-                    body.len()
-                )
-            } else {
-                body
-            };
+            let body_truncated = truncate_chars_with_total(body, 50_000);
 
             Ok(serde_json::json!({
                 "status": status,
@@ -136,5 +142,16 @@ impl Tool for HttpFetchTool {
                 "body": body_truncated,
             }))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_chars_with_total_handles_non_ascii() {
+        let truncated = truncate_chars_with_total("åäö🙂abcd".to_string(), 4);
+        assert_eq!(truncated, "åäö🙂...[truncated, 8 chars total]");
     }
 }

@@ -787,10 +787,12 @@ async fn delete_task(
 // ---------------------------------------------------------------------------
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}...", &s[..max])
+    let mut chars = s.chars();
+    let truncated = chars.by_ref().take(max).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
     } else {
-        s.to_string()
+        truncated
     }
 }
 
@@ -1064,6 +1066,12 @@ mod tests {
         assert_eq!(normalize_date("20260420T100000Z"), "20260420T100000Z");
         assert_eq!(normalize_date("20260420"), "20260420");
         assert_eq!(normalize_date(""), "");
+    }
+
+    #[test]
+    fn truncate_handles_non_ascii() {
+        assert_eq!(truncate("åäö🙂abcd", 4), "åäö🙂...");
+        assert_eq!(truncate("åäö🙂", 4), "åäö🙂");
     }
 
     #[test]

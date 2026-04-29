@@ -293,14 +293,21 @@ async fn run_task(
 // ---------------------------------------------------------------------------
 
 fn split_message(text: &str, max_len: usize) -> Vec<&str> {
-    if text.len() <= max_len {
+    if max_len == 0 {
+        return Vec::new();
+    }
+    if text.chars().count() <= max_len {
         return vec![text];
     }
 
     let mut chunks = Vec::new();
     let mut start = 0;
     while start < text.len() {
-        let end = (start + max_len).min(text.len());
+        let end = text[start..]
+            .char_indices()
+            .nth(max_len)
+            .map(|(idx, _)| start + idx)
+            .unwrap_or(text.len());
         // Try to split at a newline or space boundary
         let split_at = if end == text.len() {
             end
@@ -315,6 +322,23 @@ fn split_message(text: &str, max_len: usize) -> Vec<&str> {
         start = split_at;
     }
     chunks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_message_handles_non_ascii_boundaries() {
+        let chunks = split_message("åäö🙂abcd", 4);
+        assert_eq!(chunks, vec!["åäö🙂", "abcd"]);
+    }
+
+    #[test]
+    fn split_message_prefers_space_boundaries() {
+        let chunks = split_message("hello world again", 12);
+        assert_eq!(chunks, vec!["hello world ", "again"]);
+    }
 }
 
 // ---------------------------------------------------------------------------
