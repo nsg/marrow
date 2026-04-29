@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "marrow"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "chrono",
  "flate2",
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-cli"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "clap",
  "marrow",
@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-dash"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "axum",
  "chrono",
@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-discord"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "clap",
  "marrow",

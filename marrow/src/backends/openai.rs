@@ -128,9 +128,7 @@ impl OpenAIBackend {
 
         let api_messages: Vec<ApiMessage> = messages.iter().map(ApiMessage::from).collect();
 
-        let cache_key = PROMPT_CACHE_KEY
-            .try_with(|k| (**k).clone())
-            .ok();
+        let cache_key = PROMPT_CACHE_KEY.try_with(|k| (**k).clone()).ok();
 
         let cache_retention = if supports_extended_cache(&self.model) {
             Some("24h".to_string())
@@ -196,7 +194,13 @@ impl OpenAIBackend {
                     (u.prompt_tokens, u.completion_tokens, cached)
                 })
                 .unwrap_or((0, 0, 0));
-            metrics.record(&self.role, duration, prompt_tokens, completion_tokens, cached_tokens);
+            metrics.record(
+                &self.role,
+                duration,
+                prompt_tokens,
+                completion_tokens,
+                cached_tokens,
+            );
         }
 
         let choice = chat_resp

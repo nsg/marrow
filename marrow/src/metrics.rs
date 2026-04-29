@@ -58,9 +58,21 @@ impl Metrics {
         completion_tokens: u64,
         cached_tokens: u64,
     ) {
-        self.record_local(role, duration, prompt_tokens, completion_tokens, cached_tokens);
+        self.record_local(
+            role,
+            duration,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+        );
         let _ = TASK_METRICS.try_with(|m| {
-            m.record_local(role, duration, prompt_tokens, completion_tokens, cached_tokens);
+            m.record_local(
+                role,
+                duration,
+                prompt_tokens,
+                completion_tokens,
+                cached_tokens,
+            );
         });
     }
 
