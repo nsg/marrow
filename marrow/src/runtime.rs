@@ -14,6 +14,7 @@ use crate::memory::{Memory, MemoryStore};
 use crate::memory_provider;
 use crate::memory_writer;
 use crate::metrics::{Metrics, TASK_METRICS, TaskMetrics};
+use crate::model::PROMPT_CACHE_KEY;
 use crate::model::ModelBackend;
 use crate::router::{ModelRouter, RouterConfig};
 use crate::schedule::ScheduleStore;
@@ -243,32 +244,37 @@ impl Runtime {
             fast_backend,
         )
         .await;
-        // Run the agent loop inside a TASK_METRICS scope so backend model
-        // calls automatically record into the per-task metrics instance.
+        // Run the agent loop inside TASK_METRICS + PROMPT_CACHE_KEY scopes so
+        // backend model calls automatically record into the per-task metrics
+        // and include the task ID as a prompt cache routing hint.
+        let cache_key = Arc::new(task_id.clone());
         let loop_result = TASK_METRICS
-            .scope(task_metrics, async {
-                agent::run_loop(
-                    description,
-                    &task_id,
-                    agent_backend,
-                    fast_backend,
-                    self.registry.clone(),
-                    self.client.clone(),
-                    &memories,
-                    self.skill_store.as_ref(),
-                    self.log.as_ref(),
-                    Some(self.secrets.as_ref()),
-                    progress,
-                    conversation,
-                    incoming,
-                    formatting_hint,
-                    Some(self.schedule_store.clone()),
-                    Some(self.memory_store.clone()),
-                    frontend_context,
-                    frontend,
-                )
-                .await
-            })
+            .scope(
+                task_metrics,
+                PROMPT_CACHE_KEY.scope(cache_key, async {
+                    agent::run_loop(
+                        description,
+                        &task_id,
+                        agent_backend,
+                        fast_backend,
+                        self.registry.clone(),
+                        self.client.clone(),
+                        &memories,
+                        self.skill_store.as_ref(),
+                        self.log.as_ref(),
+                        Some(self.secrets.as_ref()),
+                        progress,
+                        conversation,
+                        incoming,
+                        formatting_hint,
+                        Some(self.schedule_store.clone()),
+                        Some(self.memory_store.clone()),
+                        frontend_context,
+                        frontend,
+                    )
+                    .await
+                }),
+            )
             .await?;
 
         self.log

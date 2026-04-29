@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::metrics::Metrics;
-use crate::model::{CompletionResult, EmbedBackend, EmbedResult, ModelBackend};
+use crate::model::{CompletionResult, EmbedBackend, EmbedResult, ModelBackend, PROMPT_CACHE_KEY};
 use crate::retry::{BackendError, RetryConfig, parse_retry_after, retry_with_backoff};
 use crate::session::Message;
 
@@ -13,6 +13,10 @@ use crate::session::Message;
 struct ChatRequest {
     model: String,
     messages: Vec<ApiMessage>,
+    /// OpenAI routing hint — requests with the same key and prefix are more
+    /// likely to land on the same cache server, improving cache hit rates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -111,9 +115,14 @@ impl OpenAIBackend {
 
         let api_messages: Vec<ApiMessage> = messages.iter().map(ApiMessage::from).collect();
 
+        let cache_key = PROMPT_CACHE_KEY
+            .try_with(|k| (**k).clone())
+            .ok();
+
         let body = ChatRequest {
             model: self.model.clone(),
             messages: api_messages,
+            prompt_cache_key: cache_key,
         };
 
         let config = RetryConfig::default();
