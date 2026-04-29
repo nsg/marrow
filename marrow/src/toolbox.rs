@@ -70,6 +70,29 @@ impl Toolbox {
         self.dir.join(format!("{name}.lua"))
     }
 
+    fn validate_name(name: &str) -> Result<(), BoxError> {
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(c) if c.is_ascii_alphabetic() => {}
+            Some(_) => {
+                return Err(
+                    "invalid tool name: must start with an ASCII letter and contain only ASCII letters, digits, and underscores"
+                        .into(),
+                );
+            }
+            None => return Err("invalid tool name: name cannot be empty".into()),
+        }
+
+        if chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            Ok(())
+        } else {
+            Err(
+                "invalid tool name: must start with an ASCII letter and contain only ASCII letters, digits, and underscores"
+                    .into(),
+            )
+        }
+    }
+
     fn write_atomic(path: &Path, contents: &str) -> Result<(), BoxError> {
         let file_name = path
             .file_name()
@@ -98,6 +121,7 @@ impl Toolbox {
     }
 
     pub fn save_tool(&self, meta: &ToolMeta, lua_source: &str) -> Result<(), BoxError> {
+        Self::validate_name(&meta.name)?;
         self.with_lock(|| self.save_tool_inner(meta, lua_source))
     }
 
@@ -114,6 +138,7 @@ impl Toolbox {
     }
 
     pub fn delete_tool(&self, name: &str) -> Result<(), BoxError> {
+        Self::validate_name(name)?;
         self.with_lock(|| self.delete_tool_inner(name))
     }
 
@@ -123,6 +148,10 @@ impl Toolbox {
         new_meta: &ToolMeta,
         lua_source: &str,
     ) -> Result<(), BoxError> {
+        Self::validate_name(&new_meta.name)?;
+        if let Some(old_name) = old_name {
+            Self::validate_name(old_name)?;
+        }
         self.with_lock(|| {
             self.save_tool_inner(new_meta, lua_source)?;
             if let Some(old_name) = old_name.filter(|name| *name != new_meta.name) {
@@ -133,6 +162,7 @@ impl Toolbox {
     }
 
     pub fn load_provider(&self, name: &str) -> Result<LuaProvider, BoxError> {
+        Self::validate_name(name)?;
         self.with_lock(|| {
             let source = std::fs::read_to_string(self.lua_path(name))?;
             Ok(LuaProvider::new(name, source))
@@ -140,9 +170,19 @@ impl Toolbox {
     }
 
     pub fn load_meta(&self, name: &str) -> Result<ToolMeta, BoxError> {
+        Self::validate_name(name)?;
         self.with_lock(|| {
             let content = std::fs::read_to_string(self.meta_path(name))?;
-            Ok(toml::from_str(&content)?)
+            let meta: ToolMeta = toml::from_str(&content)?;
+            Self::validate_name(&meta.name)?;
+            if meta.name != name {
+                return Err(format!(
+                    "tool metadata name mismatch: requested '{name}', found '{}'",
+                    meta.name
+                )
+                .into());
+            }
+            Ok(meta)
         })
     }
 
@@ -158,7 +198,9 @@ impl Toolbox {
                 let path = entry.path();
                 if path.extension().is_some_and(|e| e == "toml") {
                     let content = std::fs::read_to_string(&path)?;
-                    if let Ok(meta) = toml::from_str::<ToolMeta>(&content) {
+                    if let Ok(meta) = toml::from_str::<ToolMeta>(&content)
+                        && Self::validate_name(&meta.name).is_ok()
+                    {
                         tools.push(meta);
                     }
                 }
@@ -169,10 +211,14 @@ impl Toolbox {
     }
 
     pub fn load_source(&self, name: &str) -> Result<String, BoxError> {
+        Self::validate_name(name)?;
         self.with_lock(|| Ok(std::fs::read_to_string(self.lua_path(name))?))
     }
 
     pub fn extract_params(&self, name: &str) -> Vec<String> {
+        if Self::validate_name(name).is_err() {
+            return Vec::new();
+        }
         let source = match self.load_source(name) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -205,6 +251,9 @@ impl Toolbox {
     }
 
     pub fn extract_return_fields(&self, name: &str) -> Vec<String> {
+        if Self::validate_name(name).is_err() {
+            return Vec::new();
+        }
         let source = match self.load_source(name) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -323,5 +372,54 @@ mod tests {
             toolbox.load_meta("new_tool").unwrap().description,
             "New tool"
         );
+    }
+
+    #[test]
+    fn rejects_path_traversal_tool_names() {
+        let dir = temp_dir("marrow_toolbox");
+        let toolbox = Toolbox::new(dir.path());
+        let meta = ToolMeta {
+            name: "../outside".to_string(),
+            description: "Bad tool".to_string(),
+            provides: vec![],
+            validated: false,
+        };
+
+        assert!(toolbox.save_tool(&meta, "return {}").is_err());
+        assert!(toolbox.delete_tool("../outside").is_err());
+        assert!(toolbox.load_source("../outside").is_err());
+        assert!(!dir.path().join("../outside.lua").exists());
+    }
+
+    #[test]
+    fn rejects_separator_empty_and_hidden_tool_names() {
+        let dir = temp_dir("marrow_toolbox");
+        let toolbox = Toolbox::new(dir.path());
+
+        for name in ["", ".hidden", "nested/tool", "1tool", "tool-name"] {
+            let meta = ToolMeta {
+                name: name.to_string(),
+                description: "Bad tool".to_string(),
+                provides: vec![],
+                validated: false,
+            };
+            assert!(toolbox.save_tool(&meta, "return {}").is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn allows_ascii_identifier_tool_names() {
+        let dir = temp_dir("marrow_toolbox");
+        let toolbox = Toolbox::new(dir.path());
+        let meta = ToolMeta {
+            name: "Weather_tool_2".to_string(),
+            description: "Valid tool".to_string(),
+            provides: vec!["Weather_tool_2".to_string()],
+            validated: false,
+        };
+
+        toolbox.save_tool(&meta, "return {}").unwrap();
+
+        assert!(toolbox.load_source("Weather_tool_2").is_ok());
     }
 }
