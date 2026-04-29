@@ -9,7 +9,11 @@ use crate::state::AppState;
 async fn list_schedules(
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<crate::data::schedules::ScheduleInfo>> {
-    let schedules = state.schedules.read().unwrap().clone();
+    let schedules = state
+        .schedules
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     Json(schedules)
 }
 

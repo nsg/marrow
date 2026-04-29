@@ -9,7 +9,11 @@ use crate::state::AppState;
 async fn list_skills(
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<crate::data::skills::SkillInfo>> {
-    let skills = state.skills.read().unwrap().clone();
+    let skills = state
+        .skills
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     Json(skills)
 }
 

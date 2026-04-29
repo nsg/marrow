@@ -31,7 +31,7 @@ async fn list_events(
     State(state): State<Arc<AppState>>,
     Query(params): Query<EventQuery>,
 ) -> Json<EventsResponse> {
-    let events = state.events.read().unwrap();
+    let events = state.events.read().unwrap_or_else(|e| e.into_inner());
     let (page, total) = events.events_page(params.limit, params.offset, params.r#type.as_deref());
     Json(EventsResponse {
         events: page,

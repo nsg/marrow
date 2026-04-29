@@ -41,9 +41,13 @@ struct ScheduleOverview {
 }
 
 async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> {
-    let stats = state.events.read().unwrap().overview();
+    let stats = state
+        .events
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .overview();
 
-    let mem = state.memory.read().unwrap();
+    let mem = state.memory.read().unwrap_or_else(|e| e.into_inner());
     let memory = MemoryOverview {
         total: mem.total,
         auto_count: mem.auto_count,
@@ -51,7 +55,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
         embedded_count: mem.embedded_count,
     };
 
-    let tb = state.toolbox.read().unwrap();
+    let tb = state.toolbox.read().unwrap_or_else(|e| e.into_inner());
     let validated = tb.iter().filter(|t| t.validated).count();
     let toolbox = ToolboxOverview {
         total: tb.len(),
@@ -59,7 +63,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
         unvalidated: tb.len() - validated,
     };
 
-    let sc = state.schedules.read().unwrap();
+    let sc = state.schedules.read().unwrap_or_else(|e| e.into_inner());
     let enabled = sc.iter().filter(|s| s.enabled).count();
     let schedules_overview = ScheduleOverview {
         total: sc.len(),
@@ -67,7 +71,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
         disabled: sc.len() - enabled,
     };
 
-    let skills_count = state.skills.read().unwrap().len();
+    let skills_count = state.skills.read().unwrap_or_else(|e| e.into_inner()).len();
 
     // Clone config for serialization
     let config = crate::data::config::ConfigInfo {

@@ -14,8 +14,16 @@ struct ToolsResponse {
 }
 
 async fn list_tools(State(state): State<Arc<AppState>>) -> Json<ToolsResponse> {
-    let tools = state.toolbox.read().unwrap().clone();
-    let janitor_history = state.events.read().unwrap().janitor_history();
+    let tools = state
+        .toolbox
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let janitor_history = state
+        .events
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .janitor_history();
     Json(ToolsResponse {
         tools,
         janitor_history,

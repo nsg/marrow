@@ -29,7 +29,7 @@ async fn list_tasks(
     State(state): State<Arc<AppState>>,
     Query(params): Query<Pagination>,
 ) -> Json<TasksResponse> {
-    let events = state.events.read().unwrap();
+    let events = state.events.read().unwrap_or_else(|e| e.into_inner());
     let (tasks, total) = events.tasks(params.limit, params.offset);
     Json(TasksResponse { tasks, total })
 }
@@ -38,7 +38,7 @@ async fn get_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
 ) -> Json<serde_json::Value> {
-    let events = state.events.read().unwrap();
+    let events = state.events.read().unwrap_or_else(|e| e.into_inner());
     match events.task_detail(&task_id) {
         Some(detail) => Json(serde_json::to_value(detail).unwrap_or_default()),
         None => Json(serde_json::json!({"error": "task not found"})),

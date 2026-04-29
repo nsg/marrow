@@ -44,7 +44,7 @@ async fn list_memories(
 ) -> Json<MemoriesResponse> {
     // Grab stats snapshot without holding lock across awaits
     let (stats, search_mode, page, total) = {
-        let mem = state.memory.read().unwrap();
+        let mem = state.memory.read().unwrap_or_else(|e| e.into_inner());
         let stats = MemoryStatsResponse {
             total: mem.total,
             auto_count: mem.auto_count,

@@ -61,23 +61,23 @@ impl AppState {
         skills: &Path,
     ) {
         {
-            let mut ev = self.events.write().unwrap();
+            let mut ev = self.events.write().unwrap_or_else(|e| e.into_inner());
             ev.refresh(log);
         }
         {
-            let mut mem = self.memory.write().unwrap();
+            let mut mem = self.memory.write().unwrap_or_else(|e| e.into_inner());
             *mem = data::memory::MemoryStats::load(memory);
         }
         {
-            let mut tb = self.toolbox.write().unwrap();
+            let mut tb = self.toolbox.write().unwrap_or_else(|e| e.into_inner());
             *tb = data::toolbox::load(toolbox);
         }
         {
-            let mut sc = self.schedules.write().unwrap();
+            let mut sc = self.schedules.write().unwrap_or_else(|e| e.into_inner());
             *sc = data::schedules::load(schedules);
         }
         {
-            let mut sk = self.skills.write().unwrap();
+            let mut sk = self.skills.write().unwrap_or_else(|e| e.into_inner());
             *sk = data::skills::load(skills);
         }
     }
