@@ -8,7 +8,7 @@
 
 Marrow is my take on a simple agent. It starts off quite bare with only a basic understanding of the world. It has a few built-in tools, but most will be written by itself during its lifetime. It learns from your conversation, building up a searchable memory of facts and a set of skills it can reuse.
 
-Marrow is built as three components: the library that contains most of the core logic, the CLI that you can use for one-off queries, scripting, or for agents to try Marrow out, and the Discord binary that is a Discord bot.
+Marrow is built as four components: the library that contains most of the core logic, the CLI for one-off queries and agent scripting, the Discord bot for daily use, and a read-only web dashboard for observing what the agent is doing.
 
 **PROJECT STATUS**: My personal playground, not ready for other people to use but if you like to try it out ... feel free. Expect a lot of breaking changes.
 
@@ -18,7 +18,7 @@ It started with [OpenClaw](https://github.com/openclaw/openclaw). I installed it
 
 ## Agent Loop
 
-Here is a basic overview of the agent loop that is triggered when a message is sent in. Relevant memories and skills are pulled into context. The agent has access to built-in tools and tools created by previous agent loops written in Lua. The agent always has the option to write and run inline Lua code to execute logic. If the result is reusable, it may save it for future loops.
+Here is a basic overview of the agent loop that is triggered when a message is sent in. Relevant memories are pulled into context, and the agent sees a lightweight catalog of available skills it can load on demand. The agent has access to built-in tools and tools created by previous agent loops written in Lua. It can execute multiple actions in parallel within a single step. The agent always has the option to write and run inline Lua code to execute logic. If the result is reusable, it may save it for future loops.
 
 ![Agent Loop](docs/agent-loop.excalidraw.png)
 
@@ -38,7 +38,7 @@ During the agent loop, relevant memories are retrieved from the database and inj
 
 ### Skills
 
-Skills are documents created from memories, like "this is how to read the user's calendar". Skills are managed by the janitor process. Relevant skills are retrieved and included in the context.
+Skills are documents created from memories, like "this is how to read the user's calendar". Skills are managed by the janitor process. The agent sees a lightweight catalog (name + one-liner) and can load a skill's full content on demand during the loop.
 
 ### Tools
 
@@ -57,6 +57,10 @@ Schedules are recurring (or one-shot) prompts that re-enter the agent loop on th
 ## CLI
 
 Run with `--prompt` for one-shot use, or without it to drop into an interactive REPL that keeps conversation history and auto-summarizes once it grows. `cargo run -p marrow-cli -- --help` for the full list of flags. stdout is the response, stderr is progress and diagnostics.
+
+## Dashboard
+
+`marrow-dash` is a read-only web dashboard that shows what the agent has been doing. It reads event logs, memory, tools, skills, and schedules — never writes to any data source. Run it with `cargo run -p marrow-dash` and open `localhost:3000`.
 
 ## Discord Bot
 
