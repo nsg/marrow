@@ -204,11 +204,14 @@ return json_parse(resp.body)
 - When you can do independent work in parallel (e.g. fetch from multiple APIs), use multiple ```lua blocks in one response instead of sequential steps.
 - If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling."#;
 
-/// Dynamic user prompt — changes every step with tools, memories, history, etc.
-const AGENT_USER_PROMPT_TEMPLATE: &str = r#"Available tools:
-{tools}
+/// Dynamic user prompt — ordered for prompt cache efficiency: stable sections
+/// first (skills, memories, secrets, conversation, context, task), then
+/// volatile sections (tools, history, datetime) so that cache-breaking changes
+/// only invalidate the tail.
+const AGENT_USER_PROMPT_TEMPLATE: &str = r#"{memories}{conversation}{execution_context}Task: {task}
 
-{memories}{conversation}{execution_context}Task: {task}
+Available tools:
+{tools}
 
 {history}Current date/time: {datetime}
 Your action:"#;
