@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
@@ -210,19 +211,67 @@ async fn resolve_upload_source(params: &HashMap<String, String>) -> Result<Uploa
         Some(f) if !f.is_empty() => f,
         _ => return Err("upload requires CONTENT or LOCAL_FILE parameter".to_string()),
     };
+    let root = upload_root()?;
+    resolve_upload_source_from_root(local_file, &root).await
+}
 
-    let file_bytes = tokio::fs::read(local_file)
+async fn resolve_upload_source_from_root(
+    local_file: &str,
+    root: &Path,
+) -> Result<UploadSource, String> {
+    let local_path = resolve_local_upload_path(local_file, root)?;
+
+    let file_bytes = tokio::fs::read(&local_path)
         .await
-        .map_err(|e| format!("failed to read file {local_file}: {e}"))?;
+        .map_err(|e| format!("failed to read file {}: {e}", local_path.display()))?;
 
     Ok(UploadSource { bytes: file_bytes })
+}
+
+fn upload_root() -> Result<PathBuf, String> {
+    let current_dir =
+        std::env::current_dir().map_err(|e| format!("failed to resolve current dir: {e}"))?;
+    upload_root_in(&current_dir)
+}
+
+fn upload_root_in(base: &Path) -> Result<PathBuf, String> {
+    let root = base.join("uploads");
+    std::fs::create_dir_all(&root)
+        .map_err(|e| format!("failed to create upload root {}: {e}", root.display()))?;
+    root.canonicalize()
+        .map_err(|e| format!("failed to resolve upload root {}: {e}", root.display()))
+}
+
+fn resolve_local_upload_path(local_file: &str, root: &Path) -> Result<PathBuf, String> {
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve upload root {}: {e}", root.display()))?;
+    let requested = Path::new(local_file);
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    let path = candidate
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve file {local_file}: {e}"))?;
+
+    if !path.starts_with(&root) {
+        return Err(format!(
+            "LOCAL_FILE must be inside upload root {}",
+            root.display()
+        ));
+    }
+    if !path.is_file() {
+        return Err(format!("LOCAL_FILE must be a file: {}", path.display()));
+    }
+
+    Ok(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn sanitize_base_url_removes_trailing_slashes() {
@@ -278,22 +327,15 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_upload_source_reads_local_file() {
-        let path = std::env::temp_dir().join(format!(
-            "marrow-stathost-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::write(&path, b"test").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = upload_root_in(dir.path()).unwrap();
+        let path = root.join("upload.txt");
+        std::fs::write(&path, b"test").unwrap();
 
-        let mut params = HashMap::new();
-        params.insert("LOCAL_FILE".to_string(), path.to_str().unwrap().to_string());
-
-        let upload = resolve_upload_source(&params).await.unwrap();
+        let upload = resolve_upload_source_from_root("upload.txt", &root)
+            .await
+            .unwrap();
         assert_eq!(upload.bytes, b"test");
-
-        fs::remove_file(path).unwrap();
     }
 
     #[tokio::test]
@@ -308,17 +350,44 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_upload_source_reports_missing_file() {
-        let missing = format!(
-            "/tmp/marrow-stathost-missing-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let mut params = HashMap::new();
-        params.insert("LOCAL_FILE".to_string(), missing.clone());
+        let dir = tempfile::tempdir().unwrap();
+        let root = upload_root_in(dir.path()).unwrap();
 
-        let error = resolve_upload_source(&params).await.unwrap_err();
-        assert!(error.starts_with(&format!("failed to read file {missing}: ")));
+        let error = resolve_upload_source_from_root("missing.txt", &root)
+            .await
+            .unwrap_err();
+        assert!(error.starts_with("failed to resolve file missing.txt: "));
+    }
+
+    #[test]
+    fn resolve_local_upload_path_rejects_paths_outside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+
+        let error = resolve_local_upload_path(outside.path().to_str().unwrap(), root.path())
+            .expect_err("outside path should be rejected");
+
+        assert!(error.starts_with("LOCAL_FILE must be inside upload root "));
+    }
+
+    #[test]
+    fn resolve_local_upload_path_rejects_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let subdir = root.path().join("nested");
+        std::fs::create_dir(&subdir).unwrap();
+
+        let error = resolve_local_upload_path(subdir.to_str().unwrap(), root.path())
+            .expect_err("directory path should be rejected");
+
+        assert!(error.starts_with("LOCAL_FILE must be a file: "));
+    }
+
+    #[test]
+    fn upload_root_creates_uploads_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = upload_root_in(dir.path()).unwrap();
+
+        assert_eq!(root.file_name().and_then(|n| n.to_str()), Some("uploads"));
+        assert!(root.is_dir());
     }
 }
