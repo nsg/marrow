@@ -1,8 +1,75 @@
 use std::error::Error;
+use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 
 use tokio::time::sleep;
+
+/// What the retry loop should do after a failed attempt.
+pub enum Retry {
+    /// Not retryable — fail immediately.
+    Fail,
+    /// Retryable — use exponential backoff.
+    Backoff,
+    /// Retryable — wait a specific duration (e.g. from a Retry-After header).
+    After(Duration),
+}
+
+/// Structured error from a backend HTTP call.
+#[derive(Debug)]
+pub enum BackendError {
+    /// Network-level failure (connection refused, DNS, TLS, timeout, etc.)
+    Network(Box<dyn Error + Send + Sync>),
+    /// HTTP response with a non-success status code.
+    Http {
+        status: u16,
+        body: String,
+        retry_after: Option<Duration>,
+    },
+}
+
+impl fmt::Display for BackendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Network(e) => write!(f, "network error: {e}"),
+            Self::Http { status, body, .. } => write!(f, "HTTP {status}: {body}"),
+        }
+    }
+}
+
+impl Error for BackendError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Network(e) => Some(e.as_ref()),
+            Self::Http { .. } => None,
+        }
+    }
+}
+
+impl BackendError {
+    /// How the retry loop should handle this error.
+    pub fn should_retry(&self) -> Retry {
+        match self {
+            Self::Network(_) => Retry::Backoff,
+            Self::Http {
+                status,
+                retry_after,
+                ..
+            } => {
+                if *status == 429 {
+                    match retry_after {
+                        Some(d) => Retry::After(*d),
+                        None => Retry::Backoff,
+                    }
+                } else if (500..600).contains(status) {
+                    Retry::Backoff
+                } else {
+                    Retry::Fail
+                }
+            }
+        }
+    }
+}
 
 /// Configuration for retry with exponential backoff.
 pub struct RetryConfig {
@@ -31,14 +98,15 @@ impl Default for RetryConfig {
 ///
 /// Returns immediately on success or on a non-retryable error.
 /// Logs each retry attempt to stderr.
-pub async fn retry_with_backoff<F, Fut, T>(
+pub async fn retry_with_backoff<F, Fut, T, E>(
     config: &RetryConfig,
-    should_retry: impl Fn(&str) -> bool,
+    should_retry: impl Fn(&E) -> Retry,
     mut operation: F,
-) -> Result<T, Box<dyn Error + Send + Sync>>
+) -> Result<T, E>
 where
     F: FnMut() -> Fut,
-    Fut: Future<Output = Result<T, Box<dyn Error + Send + Sync>>>,
+    Fut: Future<Output = Result<T, E>>,
+    E: fmt::Display,
 {
     let mut delay = config.initial_delay;
 
@@ -47,19 +115,22 @@ where
             Ok(value) => return Ok(value),
             Err(e) => {
                 let is_last = attempt == config.max_retries;
-                if is_last || !should_retry(&e.to_string()) {
-                    return Err(e);
-                }
+                let wait = match should_retry(&e) {
+                    Retry::Fail => return Err(e),
+                    _ if is_last => return Err(e),
+                    Retry::Backoff => delay,
+                    Retry::After(d) => d,
+                };
 
                 eprintln!(
                     "[marrow] retry {}/{} after: {}, waiting {}s",
                     attempt + 1,
                     config.max_retries,
                     e,
-                    delay.as_secs_f32(),
+                    wait.as_secs_f32(),
                 );
 
-                sleep(delay).await;
+                sleep(wait).await;
                 delay = (delay * config.multiplier).min(config.max_delay);
             }
         }
@@ -68,35 +139,9 @@ where
     unreachable!()
 }
 
-/// Returns `true` if the error message indicates a transient failure worth
-/// retrying (HTTP 5xx, 429 rate-limit, or network-level errors).
-pub fn is_retryable_error(error_msg: &str) -> bool {
-    // Match HTTP 5xx status codes from the backends' error format:
-    //   "openai returned 500 Internal Server Error: ..."
-    //   "ollama returned 502 Bad Gateway: ..."
-    if let Some(pos) = error_msg.find("returned ") {
-        let after = &error_msg[pos + 9..];
-        if after.starts_with('5') {
-            return true;
-        }
-        // 429 Too Many Requests — backoff gives the server time to recover.
-        if after.starts_with("429") {
-            return true;
-        }
-    }
-
-    // Network-level errors from reqwest (connection refused, timeout, DNS
-    // failure, etc.) are propagated via `?` before the status check.
-    let lower = error_msg.to_lowercase();
-    let network_indicators = [
-        "connection refused",
-        "timed out",
-        "timeout",
-        "dns error",
-        "connection reset",
-        "broken pipe",
-    ];
-    network_indicators.iter().any(|ind| lower.contains(ind))
+/// Parse a `Retry-After` header value as a number of seconds.
+pub fn parse_retry_after(value: &str) -> Option<Duration> {
+    value.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
 #[cfg(test)]
@@ -111,11 +156,11 @@ mod tests {
         let calls_clone = calls.clone();
 
         let config = RetryConfig::default();
-        let result = retry_with_backoff(&config, is_retryable_error, || {
+        let result = retry_with_backoff(&config, BackendError::should_retry, || {
             let c = calls_clone.clone();
             async move {
                 c.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, Box<dyn Error + Send + Sync>>("ok".to_string())
+                Ok::<_, BackendError>("ok".to_string())
             }
         })
         .await;
@@ -126,7 +171,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_retry_then_success() {
+    async fn test_retry_on_server_error() {
         let calls = Arc::new(AtomicU32::new(0));
         let calls_clone = calls.clone();
 
@@ -137,16 +182,18 @@ mod tests {
             max_delay: Duration::from_secs(1),
         };
 
-        let result = retry_with_backoff(&config, is_retryable_error, || {
+        let result = retry_with_backoff(&config, BackendError::should_retry, || {
             let c = calls_clone.clone();
             async move {
                 let n = c.fetch_add(1, Ordering::SeqCst);
                 if n < 2 {
-                    Err("openai returned 500 Internal Server Error: overloaded"
-                        .to_string()
-                        .into())
+                    Err(BackendError::Http {
+                        status: 500,
+                        body: "overloaded".into(),
+                        retry_after: None,
+                    })
                 } else {
-                    Ok::<_, Box<dyn Error + Send + Sync>>("ok".to_string())
+                    Ok::<_, BackendError>("ok".to_string())
                 }
             }
         })
@@ -166,14 +213,19 @@ mod tests {
             ..RetryConfig::default()
         };
 
-        let result: Result<String, _> = retry_with_backoff(&config, is_retryable_error, || {
-            let c = calls_clone.clone();
-            async move {
-                c.fetch_add(1, Ordering::SeqCst);
-                Err("openai returned 401 Unauthorized: bad key".into())
-            }
-        })
-        .await;
+        let result: Result<String, _> =
+            retry_with_backoff(&config, BackendError::should_retry, || {
+                let c = calls_clone.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err(BackendError::Http {
+                        status: 401,
+                        body: "bad key".into(),
+                        retry_after: None,
+                    })
+                }
+            })
+            .await;
 
         assert!(result.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 1); // no retries
@@ -191,14 +243,19 @@ mod tests {
             max_delay: Duration::from_secs(1),
         };
 
-        let result: Result<String, _> = retry_with_backoff(&config, is_retryable_error, || {
-            let c = calls_clone.clone();
-            async move {
-                c.fetch_add(1, Ordering::SeqCst);
-                Err("openai returned 503 Service Unavailable: try later".into())
-            }
-        })
-        .await;
+        let result: Result<String, _> =
+            retry_with_backoff(&config, BackendError::should_retry, || {
+                let c = calls_clone.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err(BackendError::Http {
+                        status: 503,
+                        body: "try later".into(),
+                        retry_after: None,
+                    })
+                }
+            })
+            .await;
 
         assert!(result.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 4); // 1 initial + 3 retries
@@ -216,14 +273,14 @@ mod tests {
             max_delay: Duration::from_secs(1),
         };
 
-        let result = retry_with_backoff(&config, is_retryable_error, || {
+        let result = retry_with_backoff(&config, BackendError::should_retry, || {
             let c = calls_clone.clone();
             async move {
                 let n = c.fetch_add(1, Ordering::SeqCst);
                 if n == 0 {
-                    Err("connection refused".into())
+                    Err(BackendError::Network("connection refused".into()))
                 } else {
-                    Ok::<_, Box<dyn Error + Send + Sync>>("recovered".to_string())
+                    Ok::<_, BackendError>("recovered".to_string())
                 }
             }
         })
@@ -233,43 +290,104 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
+    #[tokio::test]
+    async fn test_retry_429_uses_retry_after() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = calls.clone();
+
+        let config = RetryConfig {
+            max_retries: 2,
+            initial_delay: Duration::from_millis(1),
+            multiplier: 2,
+            max_delay: Duration::from_secs(1),
+        };
+
+        let start = std::time::Instant::now();
+        let result = retry_with_backoff(&config, BackendError::should_retry, || {
+            let c = calls_clone.clone();
+            async move {
+                let n = c.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Err(BackendError::Http {
+                        status: 429,
+                        body: "slow down".into(),
+                        // Server says wait 100ms — not the backoff's 1ms
+                        retry_after: Some(Duration::from_millis(100)),
+                    })
+                } else {
+                    Ok::<_, BackendError>("ok".to_string())
+                }
+            }
+        })
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        // Should have waited ~100ms (the Retry-After), not ~1ms (the backoff)
+        assert!(start.elapsed() >= Duration::from_millis(80));
+    }
+
     #[test]
-    fn test_is_retryable_error() {
-        // 5xx errors — retryable
-        assert!(is_retryable_error(
-            "openai returned 500 Internal Server Error: overloaded"
-        ));
-        assert!(is_retryable_error(
-            "ollama returned 502 Bad Gateway: upstream down"
-        ));
-        assert!(is_retryable_error(
-            "openai returned 503 Service Unavailable: try later"
+    fn test_should_retry() {
+        // Network errors — always backoff
+        assert!(matches!(
+            BackendError::Network("connection refused".into()).should_retry(),
+            Retry::Backoff
         ));
 
-        // 429 rate limit — retryable
-        assert!(is_retryable_error(
-            "openai returned 429 Too Many Requests: slow down"
+        // 5xx — backoff
+        assert!(matches!(
+            BackendError::Http {
+                status: 502,
+                body: "bad gateway".into(),
+                retry_after: None,
+            }
+            .should_retry(),
+            Retry::Backoff
         ));
 
-        // 4xx client errors — not retryable
-        assert!(!is_retryable_error(
-            "openai returned 401 Unauthorized: bad key"
-        ));
-        assert!(!is_retryable_error(
-            "openai returned 400 Bad Request: invalid model"
-        ));
-        assert!(!is_retryable_error(
-            "openai returned 404 Not Found: no such model"
+        // 429 without Retry-After — backoff
+        assert!(matches!(
+            BackendError::Http {
+                status: 429,
+                body: "slow down".into(),
+                retry_after: None,
+            }
+            .should_retry(),
+            Retry::Backoff
         ));
 
-        // Network errors — retryable
-        assert!(is_retryable_error("connection refused"));
-        assert!(is_retryable_error("request timed out"));
-        assert!(is_retryable_error("Connection reset by peer"));
-        assert!(is_retryable_error("DNS error: name not resolved"));
+        // 429 with Retry-After — use the specified delay
+        let retry = BackendError::Http {
+            status: 429,
+            body: "slow down".into(),
+            retry_after: Some(Duration::from_secs(5)),
+        }
+        .should_retry();
+        match retry {
+            Retry::After(d) => assert_eq!(d, Duration::from_secs(5)),
+            _ => panic!("expected Retry::After"),
+        }
 
-        // Unrelated errors — not retryable
-        assert!(!is_retryable_error("no choices in response"));
-        assert!(!is_retryable_error("invalid JSON"));
+        // 4xx — fail
+        assert!(matches!(
+            BackendError::Http {
+                status: 401,
+                body: "bad key".into(),
+                retry_after: None,
+            }
+            .should_retry(),
+            Retry::Fail
+        ));
+    }
+
+    #[test]
+    fn test_parse_retry_after() {
+        assert_eq!(parse_retry_after("5"), Some(Duration::from_secs(5)));
+        assert_eq!(parse_retry_after(" 30 "), Some(Duration::from_secs(30)));
+        assert_eq!(parse_retry_after("0"), Some(Duration::from_secs(0)));
+        // HTTP-date format — not supported, returns None (falls back to backoff)
+        assert_eq!(parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT"), None);
+        assert_eq!(parse_retry_after("garbage"), None);
     }
 }

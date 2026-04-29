@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::metrics::Metrics;
 use crate::model::{CompletionResult, EmbedBackend, EmbedResult, ModelBackend};
-use crate::retry::{RetryConfig, is_retryable_error, retry_with_backoff};
+use crate::retry::{BackendError, RetryConfig, parse_retry_after, retry_with_backoff};
 use crate::session::Message;
 
 #[derive(Debug, Serialize)]
@@ -92,19 +92,33 @@ impl OllamaBackend {
         let config = RetryConfig::default();
 
         let start = Instant::now();
-        let resp_text = retry_with_backoff(&config, is_retryable_error, || {
+        let resp_text = retry_with_backoff(&config, BackendError::should_retry, || {
             let mut req = self.client.post(&url).json(&body);
             if let Some(key) = &self.api_key {
                 req = req.bearer_auth(key);
             }
             async move {
-                let resp = req.send().await?;
+                let resp = req
+                    .send()
+                    .await
+                    .map_err(|e| BackendError::Network(e.into()))?;
                 if !resp.status().is_success() {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    return Err(format!("ollama returned {status}: {text}").into());
+                    let status = resp.status().as_u16();
+                    let retry_after = resp
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(parse_retry_after);
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(BackendError::Http {
+                        status,
+                        body,
+                        retry_after,
+                    });
                 }
-                resp.text().await.map_err(|e| e.into())
+                resp.text()
+                    .await
+                    .map_err(|e| BackendError::Network(e.into()))
             }
         })
         .await?;
@@ -181,19 +195,33 @@ impl OllamaEmbedBackend {
             input: texts,
         };
         let config = RetryConfig::default();
-        let resp_text = retry_with_backoff(&config, is_retryable_error, || {
+        let resp_text = retry_with_backoff(&config, BackendError::should_retry, || {
             let mut req = self.client.post(&url).json(&body);
             if let Some(key) = &self.api_key {
                 req = req.bearer_auth(key);
             }
             async move {
-                let resp = req.send().await?;
+                let resp = req
+                    .send()
+                    .await
+                    .map_err(|e| BackendError::Network(e.into()))?;
                 if !resp.status().is_success() {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    return Err(format!("ollama embed returned {status}: {text}").into());
+                    let status = resp.status().as_u16();
+                    let retry_after = resp
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(parse_retry_after);
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(BackendError::Http {
+                        status,
+                        body,
+                        retry_after,
+                    });
                 }
-                resp.text().await.map_err(|e| e.into())
+                resp.text()
+                    .await
+                    .map_err(|e| BackendError::Network(e.into()))
             }
         })
         .await?;
