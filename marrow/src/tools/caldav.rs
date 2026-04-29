@@ -298,6 +298,103 @@ fn normalize_date(input: &str) -> String {
     input.replace(['-', ':'], "")
 }
 
+fn normalize_date_param(name: &str, input: &str) -> Result<String, String> {
+    let normalized = normalize_date(input);
+    if normalized.chars().all(|c| c.is_ascii_alphanumeric()) {
+        Ok(normalized)
+    } else {
+        Err(format!("{name} contains unsupported characters"))
+    }
+}
+
+fn normalize_priority(input: &str) -> Result<Option<String>, String> {
+    if input.is_empty() {
+        return Ok(None);
+    }
+    let priority: u8 = input
+        .parse()
+        .map_err(|_| "PRIORITY must be a number from 0 to 9".to_string())?;
+    if priority > 9 {
+        return Err("PRIORITY must be a number from 0 to 9".to_string());
+    }
+    Ok(Some(priority.to_string()))
+}
+
+fn xml_text_escape(s: &str) -> String {
+    let mut escaped = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn xml_attr_escape(s: &str) -> String {
+    let mut escaped = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn ical_text_escape(s: &str) -> String {
+    let mut escaped = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            ';' => escaped.push_str("\\;"),
+            ',' => escaped.push_str("\\,"),
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                escaped.push_str("\\n");
+            }
+            '\n' => escaped.push_str("\\n"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn status_filter_match(status_filter: &str) -> Result<String, String> {
+    let status = status_filter.trim().to_ascii_uppercase();
+    if status == "ALL" {
+        return Ok(String::new());
+    }
+    if !status.is_empty() {
+        let allowed = ["NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED"];
+        if !allowed.contains(&status.as_str()) {
+            return Err(format!(
+                "invalid STATUS_FILTER: {status_filter}. Use NEEDS-ACTION, IN-PROCESS, COMPLETED, CANCELLED, or ALL"
+            ));
+        }
+        let status = xml_text_escape(&status);
+        return Ok(format!(
+            r#"<C:prop-filter name="STATUS">
+          <C:text-match>{status}</C:text-match>
+        </C:prop-filter>"#
+        ));
+    }
+
+    Ok(r#"<C:prop-filter name="STATUS">
+          <C:text-match negate-condition="yes">COMPLETED</C:text-match>
+        </C:prop-filter>"#
+        .to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Calendar operations
 // ---------------------------------------------------------------------------
@@ -348,13 +445,21 @@ async fn list_events(
         let s = if start.is_empty() {
             "19700101T000000Z".to_string()
         } else {
-            normalize_date(start)
+            match normalize_date_param("START_DATE", start) {
+                Ok(value) => value,
+                Err(error) => return Ok(serde_json::json!({ "error": error })),
+            }
         };
         let e = if end.is_empty() {
             "20991231T235959Z".to_string()
         } else {
-            normalize_date(end)
+            match normalize_date_param("END_DATE", end) {
+                Ok(value) => value,
+                Err(error) => return Ok(serde_json::json!({ "error": error })),
+            }
         };
+        let s = xml_attr_escape(&s);
+        let e = xml_attr_escape(&e);
         format!(r#"<C:time-range start="{s}" end="{e}"/>"#)
     } else {
         String::new()
@@ -404,6 +509,7 @@ async fn get_event(
     auth: &Option<(String, String)>,
 ) -> ToolResult {
     let url = resolve_url(server_url, cal_path);
+    let uid = xml_text_escape(uid);
 
     let body = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -456,11 +562,17 @@ async fn create_event(
     let uid = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
 
-    let start_normalized = normalize_date(start);
+    let start_normalized = match normalize_date_param("START_DATE", start) {
+        Ok(value) => value,
+        Err(error) => return Ok(serde_json::json!({ "error": error })),
+    };
     let end_normalized = if end.is_empty() {
         start_normalized.clone()
     } else {
-        normalize_date(end)
+        match normalize_date_param("END_DATE", end) {
+            Ok(value) => value,
+            Err(error) => return Ok(serde_json::json!({ "error": error })),
+        }
     };
 
     // Determine if this is an all-day event (no T in the date) or timed
@@ -476,6 +588,7 @@ async fn create_event(
         )
     };
 
+    let summary = ical_text_escape(summary);
     let mut vcal = format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
@@ -489,6 +602,7 @@ async fn create_event(
     );
 
     if !description.is_empty() {
+        let description = ical_text_escape(description);
         vcal.push_str(&format!("DESCRIPTION:{description}\r\n"));
     }
 
@@ -540,22 +654,13 @@ async fn list_tasks(
 ) -> ToolResult {
     let url = resolve_url(server_url, cal_path);
 
-    // Default: exclude COMPLETED tasks (the common case — agents want active tasks).
-    // Pass STATUS_FILTER=ALL to get everything, or a specific status to filter to it.
-    let status_match = if status_filter.eq_ignore_ascii_case("ALL") {
-        String::new()
-    } else if !status_filter.is_empty() {
-        format!(
-            r#"<C:prop-filter name="STATUS">
-          <C:text-match>{status_filter}</C:text-match>
-        </C:prop-filter>"#
-        )
-    } else {
-        // No filter specified — exclude completed tasks by default
-        r#"<C:prop-filter name="STATUS">
-          <C:text-match negate-condition="yes">COMPLETED</C:text-match>
-        </C:prop-filter>"#
-            .to_string()
+    let status_match = match status_filter_match(status_filter) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(serde_json::json!({
+                "error": error
+            }));
+        }
     };
 
     let body = format!(
@@ -608,6 +713,7 @@ async fn create_task(
     let uid = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
 
+    let summary = ical_text_escape(summary);
     let mut vcal = format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
@@ -621,17 +727,24 @@ async fn create_task(
     );
 
     if !description.is_empty() {
+        let description = ical_text_escape(description);
         vcal.push_str(&format!("DESCRIPTION:{description}\r\n"));
     }
     if !due.is_empty() {
-        let due_normalized = normalize_date(due);
+        let due_normalized = match normalize_date_param("DUE", due) {
+            Ok(value) => value,
+            Err(error) => return Ok(serde_json::json!({ "error": error })),
+        };
         if due_normalized.contains('T') {
             vcal.push_str(&format!("DUE:{due_normalized}\r\n"));
         } else {
             vcal.push_str(&format!("DUE;VALUE=DATE:{due_normalized}\r\n"));
         }
     }
-    if !priority.is_empty() {
+    if let Some(priority) = match normalize_priority(priority) {
+        Ok(value) => value,
+        Err(error) => return Ok(serde_json::json!({ "error": error })),
+    } {
         vcal.push_str(&format!("PRIORITY:{priority}\r\n"));
     }
 
@@ -679,6 +792,7 @@ async fn complete_task(
 ) -> ToolResult {
     // Fetch the existing task via REPORT
     let url = resolve_url(server_url, cal_path);
+    let escaped_uid = xml_text_escape(uid);
     let query_body = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <C:calendar-query xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:D="DAV:">
@@ -690,7 +804,7 @@ async fn complete_task(
     <C:comp-filter name="VCALENDAR">
       <C:comp-filter name="VTODO">
         <C:prop-filter name="UID">
-          <C:text-match>{uid}</C:text-match>
+          <C:text-match>{escaped_uid}</C:text-match>
         </C:prop-filter>
       </C:comp-filter>
     </C:comp-filter>
@@ -1072,6 +1186,52 @@ mod tests {
     fn truncate_handles_non_ascii() {
         assert_eq!(truncate("åäö🙂abcd", 4), "åäö🙂...");
         assert_eq!(truncate("åäö🙂", 4), "åäö🙂");
+    }
+
+    #[test]
+    fn xml_escapes_text_and_attributes() {
+        assert_eq!(
+            xml_text_escape("a & b < c > d \"quote\" 'apos'"),
+            "a &amp; b &lt; c &gt; d \"quote\" 'apos'"
+        );
+        assert_eq!(
+            xml_attr_escape("a & b < c > d \"quote\" 'apos'"),
+            "a &amp; b &lt; c &gt; d &quot;quote&quot; &apos;apos&apos;"
+        );
+    }
+
+    #[test]
+    fn ical_text_escape_prevents_property_injection() {
+        assert_eq!(
+            ical_text_escape("Task, one; backslash\\\r\nSTATUS:COMPLETED"),
+            "Task\\, one\\; backslash\\\\\\nSTATUS:COMPLETED"
+        );
+    }
+
+    #[test]
+    fn normalize_date_param_rejects_injection_text() {
+        let err = normalize_date_param("DUE", "2026-04-20\r\nSTATUS:COMPLETED").unwrap_err();
+        assert_eq!(err, "DUE contains unsupported characters");
+    }
+
+    #[test]
+    fn status_filter_match_validates_known_values() {
+        assert!(status_filter_match("").unwrap().contains("COMPLETED"));
+        assert_eq!(status_filter_match("ALL").unwrap(), "");
+        assert!(
+            status_filter_match("completed")
+                .unwrap()
+                .contains("COMPLETED")
+        );
+        assert!(status_filter_match("COMPLETED</C:text-match>").is_err());
+    }
+
+    #[test]
+    fn normalize_priority_validates_range() {
+        assert_eq!(normalize_priority("").unwrap(), None);
+        assert_eq!(normalize_priority("5").unwrap(), Some("5".to_string()));
+        assert!(normalize_priority("10").is_err());
+        assert!(normalize_priority("1\r\nSTATUS:COMPLETED").is_err());
     }
 
     #[test]
