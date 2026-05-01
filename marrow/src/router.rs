@@ -9,6 +9,7 @@ use crate::backends::ollama::{OllamaBackend, OllamaEmbedBackend};
 use crate::backends::openai::{OpenAIBackend, OpenAIEmbedBackend};
 use crate::metrics::Metrics;
 use crate::model::{EmbedBackend, ModelBackend};
+use crate::raw_log::RawLog;
 
 #[derive(Debug, Deserialize, Default)]
 pub struct DiscordConfig {
@@ -50,6 +51,26 @@ impl SchedulerConfig {
     }
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct DashConfig {
+    #[serde(default)]
+    pub bind: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub debug_token: Option<String>,
+}
+
+impl DashConfig {
+    pub fn bind_addr(&self) -> &str {
+        self.bind.as_deref().unwrap_or("127.0.0.1")
+    }
+
+    pub fn port_number(&self) -> u16 {
+        self.port.unwrap_or(3000)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RouterConfig {
     pub roles: HashMap<String, RoleConfig>,
@@ -57,6 +78,8 @@ pub struct RouterConfig {
     pub discord: Option<DiscordConfig>,
     #[serde(default)]
     pub scheduler: Option<SchedulerConfig>,
+    #[serde(default)]
+    pub dash: Option<DashConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,7 +103,7 @@ impl RouterConfig {
         &self,
         role: &str,
     ) -> Result<Box<dyn ModelBackend>, Box<dyn Error + Send + Sync>> {
-        self.build_backend_with_metrics(role, None)
+        self.build_backend_with_metrics(role, None, None)
     }
 
     pub fn build_embed_backend(
@@ -126,6 +149,7 @@ impl RouterConfig {
         &self,
         role: &str,
         metrics: Option<Arc<Metrics>>,
+        raw_log: Option<Arc<RawLog>>,
     ) -> Result<Box<dyn ModelBackend>, Box<dyn Error + Send + Sync>> {
         let role_config = self
             .roles
@@ -146,6 +170,9 @@ impl RouterConfig {
                 if let Some(m) = metrics {
                     backend = backend.with_metrics(m);
                 }
+                if let Some(rl) = raw_log {
+                    backend = backend.with_raw_log(rl);
+                }
                 Ok(Box::new(backend))
             }
             "openai" => {
@@ -162,6 +189,9 @@ impl RouterConfig {
                 if let Some(m) = metrics {
                     backend = backend.with_metrics(m);
                 }
+                if let Some(rl) = raw_log {
+                    backend = backend.with_raw_log(rl);
+                }
                 Ok(Box::new(backend))
             }
             other => Err(format!("unknown provider: {other}").into()),
@@ -176,12 +206,13 @@ pub struct ModelRouter {
 
 impl ModelRouter {
     pub fn from_config(config: &RouterConfig) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        Self::from_config_with_metrics(config, None)
+        Self::from_config_with_metrics(config, None, None)
     }
 
     pub fn from_config_with_metrics(
         config: &RouterConfig,
         metrics: Option<Arc<Metrics>>,
+        raw_log: Option<Arc<RawLog>>,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut backends: HashMap<String, Box<dyn ModelBackend>> = HashMap::new();
         let mut embed_backends: HashMap<String, Box<dyn EmbedBackend>> = HashMap::new();
@@ -206,6 +237,9 @@ impl ModelRouter {
                     if let Some(ref m) = metrics {
                         backend = backend.with_metrics(m.clone());
                     }
+                    if let Some(ref rl) = raw_log {
+                        backend = backend.with_raw_log(rl.clone());
+                    }
                     Box::new(backend)
                 }
                 "openai" => {
@@ -217,6 +251,9 @@ impl ModelRouter {
                             .with_role(role);
                     if let Some(ref m) = metrics {
                         backend = backend.with_metrics(m.clone());
+                    }
+                    if let Some(ref rl) = raw_log {
+                        backend = backend.with_raw_log(rl.clone());
                     }
                     Box::new(backend)
                 }

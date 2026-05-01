@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::metrics::Metrics;
 use crate::model::{CompletionResult, EmbedBackend, EmbedResult, ModelBackend, PROMPT_CACHE_KEY};
+use crate::raw_log::RawLog;
 use crate::retry::{BackendError, RetryConfig, parse_retry_after, retry_with_backoff};
 use crate::session::Message;
 
@@ -89,6 +90,7 @@ pub struct OpenAIBackend {
     model: String,
     role: String,
     metrics: Option<Arc<Metrics>>,
+    raw_log: Option<Arc<RawLog>>,
 }
 
 impl OpenAIBackend {
@@ -107,6 +109,7 @@ impl OpenAIBackend {
             model: model.into(),
             role: String::new(),
             metrics: None,
+            raw_log: None,
         }
     }
 
@@ -117,6 +120,11 @@ impl OpenAIBackend {
 
     pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
         self.metrics = Some(metrics);
+        self
+    }
+
+    pub fn with_raw_log(mut self, raw_log: Arc<RawLog>) -> Self {
+        self.raw_log = Some(raw_log);
         self
     }
 
@@ -143,10 +151,15 @@ impl OpenAIBackend {
             prompt_cache_retention: cache_retention,
         };
 
+        if let Some(ref raw_log) = self.raw_log {
+            let body_str = serde_json::to_string(&body).unwrap_or_default();
+            raw_log.log_request(&self.role, &url, &body_str).await;
+        }
+
         let config = RetryConfig::default();
 
         let start = Instant::now();
-        let resp_text = retry_with_backoff(&config, BackendError::should_retry, || {
+        let result = retry_with_backoff(&config, BackendError::should_retry, || {
             let req = self
                 .client
                 .post(&url)
@@ -176,7 +189,16 @@ impl OpenAIBackend {
                     .map_err(|e| BackendError::Network(e.into()))
             }
         })
-        .await?;
+        .await;
+
+        if let Some(ref raw_log) = self.raw_log {
+            match &result {
+                Ok(text) => raw_log.log_response(&self.role, &url, text).await,
+                Err(e) => raw_log.log_response(&self.role, &url, &e.to_string()).await,
+            }
+        }
+
+        let resp_text = result?;
         let duration = start.elapsed();
 
         let chat_resp: ChatResponse = serde_json::from_str(&resp_text)?;

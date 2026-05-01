@@ -437,6 +437,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 toolbox_path,
                 memory_path,
                 log_path,
+                raw_log_path: "raw_requests.log".to_string(),
                 verbose,
                 secrets_path: "secrets.toml".to_string(),
                 spawn_janitor: true,

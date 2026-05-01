@@ -16,6 +16,7 @@ use crate::memory_writer;
 use crate::metrics::{Metrics, TASK_METRICS, TaskMetrics};
 use crate::model::ModelBackend;
 use crate::model::PROMPT_CACHE_KEY;
+use crate::raw_log::RawLog;
 use crate::router::{ModelRouter, RouterConfig};
 use crate::schedule::ScheduleStore;
 use crate::secrets::Secrets;
@@ -35,6 +36,7 @@ pub struct RuntimeOptions {
     pub toolbox_path: String,
     pub memory_path: String,
     pub log_path: String,
+    pub raw_log_path: String,
     pub verbose: bool,
     pub secrets_path: String,
     pub spawn_janitor: bool,
@@ -91,9 +93,11 @@ impl Runtime {
         }
 
         let metrics = Arc::new(Metrics::new());
+        let raw_log = Arc::new(RawLog::new(Some(PathBuf::from(&options.raw_log_path))).await?);
         let router = Arc::new(ModelRouter::from_config_with_metrics(
             config,
             Some(metrics.clone()),
+            Some(raw_log),
         )?);
         let client = Arc::new(
             Client::builder()

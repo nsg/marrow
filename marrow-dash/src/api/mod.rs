@@ -4,6 +4,7 @@ use axum::Router;
 
 use crate::state::AppState;
 
+pub mod debug;
 mod events;
 mod memories;
 mod overview;

@@ -9,6 +9,7 @@ pub mod memory_provider;
 pub mod memory_writer;
 pub mod metrics;
 pub mod model;
+pub mod raw_log;
 pub mod retry;
 pub mod router;
 pub mod runtime;

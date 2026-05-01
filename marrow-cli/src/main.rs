@@ -41,6 +41,10 @@ struct Cli {
     #[arg(long, default_value = "events.jsonl")]
     log: String,
 
+    /// Path to raw request/response log file
+    #[arg(long, default_value = "raw_requests.log")]
+    raw_log: String,
+
     /// Run a single janitor pass (review + cleanup) and exit
     #[arg(long)]
     janitor: bool,
@@ -164,6 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             toolbox_path: cli.toolbox.clone(),
             memory_path: cli.memory.clone(),
             log_path: cli.log.clone(),
+            raw_log_path: cli.raw_log.clone(),
             verbose: cli.verbose,
             secrets_path: "secrets.toml".to_string(),
             spawn_janitor,

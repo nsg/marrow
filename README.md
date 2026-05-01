@@ -62,6 +62,17 @@ Run with `--prompt` for one-shot use, or without it to drop into an interactive 
 
 `marrow-dash` is a read-only web dashboard that shows what the agent has been doing. It reads event logs, memory, tools, skills, and schedules — never writes to any data source. Run it with `cargo run -p marrow-dash` and open `localhost:3000`.
 
+### Debug Endpoints
+
+When a `debug_token` is set in the `[dash]` config section, two debug endpoints become available:
+
+- `GET /debug/events?token=<token>` — tail of the event log (`events.jsonl`)
+- `GET /debug/raw?token=<token>` — tail of the raw request/response log (`raw_requests.log`)
+
+Both return plain text (last ~2 MB of the file), designed for `curl` download and local analysis. If no token is configured, the endpoints are not mounted. A wrong or missing token returns 403.
+
+The raw request log captures every HTTP request sent to and response received from LLM providers across all backends and roles. This is useful for debugging production issues without reproducing them locally.
+
 ## Discord Bot
 
 Marrow runs as a Discord bot that responds to @mentions and DMs. See [DISCORD.md](DISCORD.md) for full setup instructions.
