@@ -6,6 +6,8 @@ mod memory_update;
 mod rss;
 mod schedule;
 mod sl_transit;
+mod state_get;
+mod state_set;
 mod stathost;
 
 use crate::tool::ToolRegistry;
@@ -24,4 +26,6 @@ pub fn register_all(registry: &mut ToolRegistry) {
     registry.register(memory_update::MemoryUpdateTool);
     registry.register(memory_delete::MemoryDeleteTool);
     registry.register(memory_search::MemorySearchTool);
+    registry.register(state_get::StateGetTool);
+    registry.register(state_set::StateSetTool);
 }

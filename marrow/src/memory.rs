@@ -8,6 +8,13 @@ use uuid::Uuid;
 
 const DEFAULT_EMBEDDING_DIMENSIONS: usize = 768;
 
+#[derive(Debug, Clone)]
+pub struct KvEntry {
+    pub key: String,
+    pub value: String,
+    pub updated: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memory {
     pub id: Uuid,
@@ -139,6 +146,14 @@ fn open_db(path: &Path) -> Result<Connection, Box<dyn Error + Send + Sync>> {
         "CREATE TABLE IF NOT EXISTS metadata (
             key   TEXT PRIMARY KEY NOT NULL,
             value TEXT NOT NULL
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS kv_state (
+            key     TEXT PRIMARY KEY NOT NULL,
+            value   TEXT NOT NULL,
+            updated TEXT NOT NULL
         )",
         [],
     )?;
@@ -407,6 +422,59 @@ impl MemoryStore {
         )?;
         let results = stmt
             .query_map([], row_to_memory)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(results)
+    }
+
+    // -- Key-value state store --
+
+    pub fn kv_set(&self, key: &str, value: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO kv_state (key, value, updated) VALUES (?1, ?2, ?3)",
+            rusqlite::params![key, value, now_iso()],
+        )?;
+        Ok(())
+    }
+
+    pub fn kv_get(
+        &self,
+        key: &str,
+    ) -> Result<Option<(String, String)>, Box<dyn Error + Send + Sync>> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT value, updated FROM kv_state WHERE key = ?1",
+            rusqlite::params![key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        );
+        match result {
+            Ok(pair) => Ok(Some(pair)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn kv_delete(&self, key: &str) -> Result<bool, Box<dyn Error + Send + Sync>> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "DELETE FROM kv_state WHERE key = ?1",
+            rusqlite::params![key],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn kv_list(&self) -> Result<Vec<KvEntry>, Box<dyn Error + Send + Sync>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT key, value, updated FROM kv_state ORDER BY key")?;
+        let results = stmt
+            .query_map([], |row| {
+                Ok(KvEntry {
+                    key: row.get(0)?,
+                    value: row.get(1)?,
+                    updated: row.get(2)?,
+                })
+            })?
             .filter_map(|r| r.ok())
             .collect();
         Ok(results)
@@ -799,5 +867,65 @@ mod tests {
 
         assert!(store.list().unwrap().is_empty());
         assert!(store.nearest(&emb, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn kv_set_get_roundtrip() {
+        let dir = temp_dir("kv_test");
+        let store = MemoryStore::new(dir.path()).unwrap();
+        store.kv_set("last_id", "42").unwrap();
+
+        let (value, _updated) = store.kv_get("last_id").unwrap().unwrap();
+        assert_eq!(value, "42");
+    }
+
+    #[test]
+    fn kv_overwrite() {
+        let dir = temp_dir("kv_test");
+        let store = MemoryStore::new(dir.path()).unwrap();
+        store.kv_set("counter", "1").unwrap();
+        store.kv_set("counter", "2").unwrap();
+
+        let (value, _) = store.kv_get("counter").unwrap().unwrap();
+        assert_eq!(value, "2");
+    }
+
+    #[test]
+    fn kv_delete_existing() {
+        let dir = temp_dir("kv_test");
+        let store = MemoryStore::new(dir.path()).unwrap();
+        store.kv_set("temp", "value").unwrap();
+
+        assert!(store.kv_delete("temp").unwrap());
+        assert!(store.kv_get("temp").unwrap().is_none());
+    }
+
+    #[test]
+    fn kv_delete_missing() {
+        let dir = temp_dir("kv_test");
+        let store = MemoryStore::new(dir.path()).unwrap();
+        assert!(!store.kv_delete("nonexistent").unwrap());
+    }
+
+    #[test]
+    fn kv_get_missing() {
+        let dir = temp_dir("kv_test");
+        let store = MemoryStore::new(dir.path()).unwrap();
+        assert!(store.kv_get("no_such_key").unwrap().is_none());
+    }
+
+    #[test]
+    fn kv_list_ordered() {
+        let dir = temp_dir("kv_test");
+        let store = MemoryStore::new(dir.path()).unwrap();
+        store.kv_set("bravo", "2").unwrap();
+        store.kv_set("alpha", "1").unwrap();
+        store.kv_set("charlie", "3").unwrap();
+
+        let entries = store.kv_list().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].key, "alpha");
+        assert_eq!(entries[1].key, "bravo");
+        assert_eq!(entries[2].key, "charlie");
     }
 }
