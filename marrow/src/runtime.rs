@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use reqwest::Client;
 
 use crate::agent;
-use crate::agent::{IncomingRx, ProgressTx, ProgressUpdate};
+use crate::agent::{IncomingRx, Outcome, ProgressTx, ProgressUpdate};
 use crate::events::{Event, EventLog};
 use crate::janitor;
 use crate::memory::{Memory, MemoryStore};
@@ -25,10 +25,10 @@ use crate::skills::SkillStore;
 use crate::tool::{FrontendContext, ToolRegistry};
 use crate::toolbox::Toolbox;
 
-/// Result of a single task execution, including the answer and performance metrics.
+/// Result of a single task execution, including the outcome and performance metrics.
 #[derive(Debug, Clone)]
 pub struct TaskResult {
-    pub answer: String,
+    pub outcome: Outcome,
     pub metrics: TaskMetrics,
 }
 
@@ -294,10 +294,14 @@ impl Runtime {
         let mem_store = self.memory_store.clone();
         let mem_router = self.router.clone();
         let mem_description = description.to_string();
-        let mem_answer = loop_result.answer.clone();
+        let mem_answer = match &loop_result.outcome {
+            Outcome::Answer(text) => Some(text.clone()),
+            Outcome::Dismissed => None,
+        };
         let mem_progress = progress.cloned();
         let mem_changed = self.memory_changed.clone();
         tokio::spawn(async move {
+            let Some(mem_answer) = mem_answer else { return };
             let fast = mem_router.backend("fast");
             let Ok(fast) = fast else { return };
 
@@ -358,7 +362,7 @@ impl Runtime {
         });
 
         Ok(TaskResult {
-            answer: loop_result.answer,
+            outcome: loop_result.outcome,
             metrics: TaskMetrics {
                 wall_time: task_start.elapsed(),
                 steps: loop_result.steps,

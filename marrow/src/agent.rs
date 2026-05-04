@@ -15,10 +15,20 @@ use crate::session::Message;
 use crate::skills::SkillStore;
 use crate::tool::{FrontendContext, ToolContext, ToolRegistry};
 
+/// The outcome of an agent loop: either a user-facing answer or a silent dismissal.
+#[derive(Debug, Clone)]
+pub enum Outcome {
+    /// The agent produced a response for the user.
+    Answer(String),
+    /// The agent completed its work with nothing to report (e.g. a monitoring
+    /// task where the condition was not met).
+    Dismissed,
+}
+
 /// Result of a single agent loop run, returned to the runtime layer.
 #[derive(Debug, Clone)]
 pub struct LoopResult {
-    pub answer: String,
+    pub outcome: Outcome,
     pub steps: u32,
     pub tool_calls: u32,
     pub code_runs: u32,
@@ -173,9 +183,13 @@ Available actions:
 {"action": "done", "text": "your complete answer to the user"}
 IMPORTANT: done MUST be the only action in a response. If you combine done with other actions (Lua blocks, tool calls, etc.), the done will be IGNORED and all other actions will execute. You will be asked to resubmit done on its own.
 
+**dismiss** — exit silently with NO message to the user:
+{"action": "dismiss"}
+dismiss vs done: done always sends a message to the user. dismiss exits the loop without sending anything — the user sees nothing. Use dismiss when the task is complete but there is genuinely nothing to tell the user. Typical case: a scheduled or monitoring task checked a condition and the condition was not met (e.g. "notify me if the deploy fails" — the deploy succeeded, so there is nothing to report). Do NOT use dismiss to avoid answering a direct question from the user — if a human asked something, they expect a response via done. Like done, dismiss must be the only action in a response.
+
 ## Mixing actions
 
-You can freely combine ```lua blocks with JSON actions (call_tool, save_tool, remove_tool, progress) in a single response. Everything executes in parallel. The only exception is done, which must appear alone.
+You can freely combine ```lua blocks with JSON actions (call_tool, save_tool, remove_tool, progress) in a single response. Everything executes in parallel. The only exceptions are done and dismiss, which must appear alone.
 
 Example — fetch data and save a previous block in the same response:
 ```lua
@@ -248,6 +262,8 @@ pub enum Action {
         /// response.
         fallback: bool,
     },
+    /// Silent exit — the agent completed its work with nothing to report.
+    Dismiss,
     UserMessage {
         text: String,
     },
@@ -272,6 +288,7 @@ impl Action {
             Action::LoadSkill { .. } => "load_skill",
             Action::Progress { .. } => "progress",
             Action::Done { .. } => "done",
+            Action::Dismiss => "dismiss",
             Action::UserMessage { .. } => "user_message",
         }
     }
@@ -735,6 +752,7 @@ fn parse_json_action(json_str: &str) -> Result<Action, String> {
                 fallback: false,
             })
         }
+        "dismiss" => Ok(Action::Dismiss),
         // Unknown action name — if it has a tool field or params, treat as call_tool.
         // Models sometimes use the tool name as the action (e.g. "action": "remove_schedule").
         unknown => {
@@ -747,7 +765,7 @@ fn parse_json_action(json_str: &str) -> Result<Action, String> {
             } else {
                 Err(format!(
                     "Unknown action \"{unknown}\". Available actions: call_tool, save_tool, \
-                     remove_tool, progress, load_skill, done. To call a tool, use: \
+                     remove_tool, progress, load_skill, done, dismiss. To call a tool, use: \
                      {{\"action\": \"call_tool\", \"tool\": \"{unknown}\", \"params\": {{}}}}"
                 ))
             }
@@ -954,6 +972,7 @@ fn format_action_short(action: &Action) -> String {
                 "Done".to_string()
             }
         }
+        Action::Dismiss => "Dismissed (nothing to report)".to_string(),
         Action::UserMessage { text } => format!("User: \"{text}\""),
     }
 }
@@ -1274,18 +1293,57 @@ pub async fn run_loop(
                         let tag = if *fallback { "fallback done" } else { "done" };
                         eprintln!("[agent] step {step}:   {tag} — {preview}");
                     }
+                    Action::Dismiss => {
+                        eprintln!("[agent] step {step}:   dismiss — nothing to report");
+                    }
                     Action::UserMessage { .. } => {}
                 }
             }
         }
 
-        // Check for done exclusivity: if done is mixed with other actions,
-        // drop the done and inform the model.
-        let has_done = actions.iter().any(|a| matches!(a, Action::Done { .. }));
-        let has_other = actions.iter().any(|a| !matches!(a, Action::Done { .. }));
+        // Check for done/dismiss exclusivity: if done/dismiss is mixed with
+        // other actions, drop the done/dismiss and inform the model.
+        let is_terminal = |a: &Action| matches!(a, Action::Done { .. } | Action::Dismiss);
+        let has_done = actions.iter().any(is_terminal);
+        let has_other = actions.iter().any(|a| !is_terminal(a));
         if has_done && has_other {
-            actions.retain(|a| !matches!(a, Action::Done { .. }));
+            actions.retain(|a| !is_terminal(a));
             // We'll append a system message after executing the other actions
+        }
+
+        // If the only action is Dismiss, exit silently
+        if actions.len() == 1 && matches!(actions[0], Action::Dismiss) {
+            log.emit(Event::AgentAction {
+                task_id: task_id.to_string(),
+                step,
+                action_type: "dismiss".to_string(),
+                detail: String::new(),
+            })
+            .await;
+
+            let step_dur = step_start.elapsed();
+            step_timings.push(StepTiming {
+                step,
+                action: "dismiss".to_string(),
+                duration: step_dur,
+            });
+            log.emit(Event::StepCompleted {
+                task_id: task_id.to_string(),
+                step,
+                action_type: "dismiss".to_string(),
+                duration_ms: step_dur.as_millis() as u64,
+                success: true,
+            })
+            .await;
+            let (tool_calls, code_runs) = loop_stats(&history);
+            return Ok(LoopResult {
+                outcome: Outcome::Dismissed,
+                steps: step,
+                tool_calls,
+                code_runs,
+                hit_step_limit: false,
+                step_timings,
+            });
         }
 
         // If the only action is a single Done, handle it directly (with nudging)
@@ -1368,7 +1426,7 @@ pub async fn run_loop(
                     .await;
                     let (tool_calls, code_runs) = loop_stats(&history);
                     return Ok(LoopResult {
-                        answer: text.clone(),
+                        outcome: Outcome::Answer(text.clone()),
                         steps: step,
                         tool_calls,
                         code_runs,
@@ -1406,7 +1464,7 @@ pub async fn run_loop(
                 .await;
                 let (tool_calls, code_runs) = loop_stats(&history);
                 return Ok(LoopResult {
-                    answer,
+                    outcome: Outcome::Answer(answer),
                     steps: step,
                     tool_calls,
                     code_runs,
@@ -1669,7 +1727,7 @@ pub async fn run_loop(
                     });
                 }
 
-                Action::Done { .. } | Action::UserMessage { .. } => {}
+                Action::Done { .. } | Action::Dismiss | Action::UserMessage { .. } => {}
             }
         }
 
@@ -1738,7 +1796,7 @@ pub async fn run_loop(
                 action: Action::UserMessage {
                     text: String::new(),
                 },
-                output: "SYSTEM: Your done action was ignored because it was combined with other actions. The done action must be the only action in a response. Continue working or submit done on its own.".to_string(),
+                output: "SYSTEM: Your done/dismiss action was ignored because it was combined with other actions. done and dismiss must be the only action in a response. Continue working or submit done/dismiss on its own.".to_string(),
                 success: false,
                 finding: None,
             });
@@ -1805,7 +1863,7 @@ pub async fn run_loop(
     .await;
     let (tool_calls, code_runs) = loop_stats(&history);
     Ok(LoopResult {
-        answer,
+        outcome: Outcome::Answer(answer),
         steps: MAX_AGENT_STEPS,
         tool_calls,
         code_runs,
@@ -1931,6 +1989,15 @@ mod tests {
             }
             other => panic!("expected Done, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_dismiss_action() {
+        let input = r#"{"action": "dismiss"}"#;
+        assert!(
+            matches!(parse_action(input), Action::Dismiss),
+            "expected Dismiss"
+        );
     }
 
     #[test]

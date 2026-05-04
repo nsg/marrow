@@ -28,7 +28,7 @@ The message is simply the message you wrote, in Discord or at the CLI. If you ha
 
 It can create long chains of model calls like this. There is a cap of 25 calls, but hitting it is rare. If the model has everything it needs in context (typically from memory), it may respond directly (`Message -> Model -> Answer`). This is of course rare with tools like this. I try to guide the system to generate tools and skills to make the chain as short as possible.
 
-There are two ways into the agent loop. One is a message initiated by the user. The other is a scheduled task created by an earlier agent loop. The only way to break the loop is with a message back to the user. If we hit 25 steps, an answer is forced.
+There are two ways into the agent loop. One is a message initiated by the user. The other is a scheduled task created by an earlier agent loop. The loop can exit in two ways: with an answer back to the user (`done`), or silently (`dismiss`) when the agent completed its work but has nothing to report — useful for monitoring and conditional notification tasks. If we hit 25 steps, an answer is forced.
 
 ### Memories
 

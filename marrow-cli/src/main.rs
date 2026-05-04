@@ -1,5 +1,5 @@
 use clap::Parser;
-use marrow::agent::ProgressUpdate;
+use marrow::agent::{Outcome, ProgressUpdate};
 use marrow::heartbeat;
 use marrow::memory::MemoryStore;
 use marrow::router::RouterConfig;
@@ -201,14 +201,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let (schedule_tx, mut schedule_rx) = mpsc::unbounded_channel::<heartbeat::ScheduleResult>();
 
-        // Result receiver — prints to stdout
+        // Result receiver — prints to stdout (skips dismissed results)
         tokio::spawn(async move {
             while let Some(result) = schedule_rx.recv().await {
-                let status = if result.success { "ok" } else { "err" };
-                println!(
-                    "[schedule:{status}] {} — {}",
-                    result.description, result.answer
-                );
+                if let Outcome::Answer(ref answer) = result.outcome {
+                    let status = if result.success { "ok" } else { "err" };
+                    println!("[schedule:{status}] {} — {answer}", result.description);
+                }
             }
         });
 
@@ -250,7 +249,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Ok(result) => {
                 drop(progress_tx);
                 let _ = progress_handle.await;
-                println!("{}", result.answer);
+                if let Outcome::Answer(answer) = &result.outcome {
+                    println!("{answer}");
+                }
                 if verbose {
                     result.metrics.display();
                 }
@@ -311,13 +312,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(result) => {
                     drop(progress_tx);
                     let _ = progress_handle.await;
-                    println!("\n{}\n", result.answer);
+                    match &result.outcome {
+                        Outcome::Answer(answer) => {
+                            println!("\n{answer}\n");
+                            session.append(Message::user(input));
+                            session.append(Message::assistant(answer));
+                        }
+                        Outcome::Dismissed => {
+                            // Nothing to show — don't pollute session history
+                        }
+                    }
                     if verbose {
                         result.metrics.display();
                     }
-
-                    session.append(Message::user(input));
-                    session.append(Message::assistant(&result.answer));
 
                     if session.needs_summarization()
                         && let Err(e) = session.summarize(fast_backend).await

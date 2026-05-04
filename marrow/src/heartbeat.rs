@@ -5,6 +5,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
+use crate::agent::Outcome;
 use crate::events::{Event, EventLog};
 use crate::memory::now_iso;
 use crate::runtime::Runtime;
@@ -15,7 +16,7 @@ use crate::tool::FrontendContext;
 pub struct ScheduleResult {
     pub schedule_id: Uuid,
     pub description: String,
-    pub answer: String,
+    pub outcome: Outcome,
     pub frontend: String,
     pub channel_id: Option<u64>,
     pub success: bool,
@@ -143,9 +144,9 @@ async fn execute_schedule(
         )
         .await;
 
-    let (answer, success) = match result {
-        Ok(result) => (result.answer, true),
-        Err(e) => (format!("Error: {e}"), false),
+    let (outcome, success) = match result {
+        Ok(result) => (result.outcome, true),
+        Err(e) => (Outcome::Answer(format!("Error: {e}")), false),
     };
 
     let status = if success { "succeeded" } else { "failed" };
@@ -173,7 +174,7 @@ async fn execute_schedule(
     let _ = result_tx.send(ScheduleResult {
         schedule_id: sched.id,
         description: sched.description.clone(),
-        answer,
+        outcome,
         frontend: sched.frontend.clone(),
         channel_id: sched.channel_id,
         success,

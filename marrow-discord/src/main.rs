@@ -11,7 +11,7 @@ use serenity::prelude::*;
 
 use tokio::sync::{RwLock, mpsc};
 
-use marrow::agent::{IncomingRx, ProgressUpdate};
+use marrow::agent::{IncomingRx, Outcome, ProgressUpdate};
 use marrow::heartbeat;
 use marrow::metrics::TaskMetrics;
 use marrow::router::RouterConfig;
@@ -199,7 +199,7 @@ impl EventHandler for Handler {
         }
 
         // Run the agent
-        let (answer, metrics) = match run_task(
+        let (outcome, metrics) = match run_task(
             content,
             runtime.as_ref(),
             &progress_tx,
@@ -209,8 +209,11 @@ impl EventHandler for Handler {
         )
         .await
         {
-            Ok(result) => (result.answer, result.metrics),
-            Err(e) => (format!("Error: {e}"), TaskMetrics::default()),
+            Ok(result) => (result.outcome, result.metrics),
+            Err(e) => (
+                Outcome::Answer(format!("Error: {e}")),
+                TaskMetrics::default(),
+            ),
         };
 
         // Unregister incoming channel and close progress
@@ -225,34 +228,37 @@ impl EventHandler for Handler {
         let _ = progress_handle.await;
         drop(typing);
 
-        // Append metrics footer as Discord subtext (-# renders as small text)
-        let response = if metrics.steps > 0 {
-            format!("{answer}\n-# {metrics}")
-        } else {
-            answer.clone()
-        };
+        // Only send a response if the agent produced an answer
+        if let Outcome::Answer(ref answer) = outcome {
+            // Append metrics footer as Discord subtext (-# renders as small text)
+            let response = if metrics.steps > 0 {
+                format!("{answer}\n-# {metrics}")
+            } else {
+                answer.clone()
+            };
 
-        // Send response, splitting if it exceeds Discord's 2000 char limit
-        for chunk in split_message(&response, 2000) {
-            if let Err(e) = msg.channel_id.say(&ctx.http, chunk).await {
-                eprintln!("[marrow-discord] failed to send message: {e}");
+            // Send response, splitting if it exceeds Discord's 2000 char limit
+            for chunk in split_message(&response, 2000) {
+                if let Err(e) = msg.channel_id.say(&ctx.http, chunk).await {
+                    eprintln!("[marrow-discord] failed to send message: {e}");
+                }
             }
-        }
 
-        // Track conversation history per channel (without metrics footer)
-        {
-            let mut sessions_map = sessions.write().await;
-            let session = sessions_map
-                .entry(msg.channel_id)
-                .or_insert_with(ChatSession::new);
-            session.append(Message::user(content));
-            session.append(Message::assistant(&answer));
-
-            if session.needs_summarization()
-                && let Ok(backend) = runtime.fast_backend()
-                && let Err(e) = session.summarize(backend).await
+            // Track conversation history per channel (without metrics footer)
             {
-                eprintln!("[marrow-discord] session summarize error: {e}");
+                let mut sessions_map = sessions.write().await;
+                let session = sessions_map
+                    .entry(msg.channel_id)
+                    .or_insert_with(ChatSession::new);
+                session.append(Message::user(content));
+                session.append(Message::assistant(answer));
+
+                if session.needs_summarization()
+                    && let Ok(backend) = runtime.fast_backend()
+                    && let Err(e) = session.summarize(backend).await
+                {
+                    eprintln!("[marrow-discord] session summarize error: {e}");
+                }
             }
         }
     }
@@ -467,12 +473,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let http_for_schedule = discord_client.http.clone();
         let (schedule_tx, mut schedule_rx) = mpsc::unbounded_channel::<heartbeat::ScheduleResult>();
 
-        // Result receiver — posts scheduled task answers to Discord
+        // Result receiver — posts scheduled task answers to Discord (skips dismissed)
         tokio::spawn(async move {
             while let Some(result) = schedule_rx.recv().await {
-                if let Some(cid) = result.channel_id {
+                if let Outcome::Answer(ref answer) = result.outcome
+                    && let Some(cid) = result.channel_id
+                {
                     let channel = ChannelId::new(cid);
-                    for chunk in split_message(&result.answer, 2000) {
+                    for chunk in split_message(answer, 2000) {
                         let _ = channel.say(&http_for_schedule, chunk).await;
                     }
                 }

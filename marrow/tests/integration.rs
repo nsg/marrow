@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use marrow::agent;
+use marrow::agent::{self, Outcome};
 use marrow::context::LuaProvider;
 use marrow::events::{Event, EventLog};
 use marrow::memory::{Memory, MemorySource, MemoryStore};
@@ -162,7 +162,10 @@ async fn agent_loop_call_tool_then_answer() {
     .await
     .unwrap();
 
-    assert!(result.answer.contains("hello world"));
+    let Outcome::Answer(ref answer) = result.outcome else {
+        panic!("expected Answer, got Dismissed");
+    };
+    assert!(answer.contains("hello world"));
 }
 
 #[tokio::test]
@@ -212,7 +215,10 @@ async fn agent_loop_save_tool_then_call_then_answer() {
     .await
     .unwrap();
 
-    assert!(result.answer.contains("Echo says"));
+    let Outcome::Answer(ref answer) = result.outcome else {
+        panic!("expected Answer, got Dismissed");
+    };
+    assert!(answer.contains("Echo says"));
     assert!(toolbox.load_meta("echo_tool").is_ok());
 }
 
@@ -252,7 +258,10 @@ async fn agent_loop_direct_answer() {
     .await
     .unwrap();
 
-    assert_eq!(result.answer, "2 + 2 = 4");
+    let Outcome::Answer(ref answer) = result.outcome else {
+        panic!("expected Answer, got Dismissed");
+    };
+    assert_eq!(answer, "2 + 2 = 4");
 }
 
 #[tokio::test]
@@ -296,8 +305,11 @@ async fn agent_loop_tool_failure_recovery() {
     .await
     .unwrap();
 
-    assert!(result.answer.contains("not available"));
-    assert!(result.answer.contains("could not complete"));
+    let Outcome::Answer(ref answer) = result.outcome else {
+        panic!("expected Answer, got Dismissed");
+    };
+    assert!(answer.contains("not available"));
+    assert!(answer.contains("could not complete"));
 }
 
 // ---------------------------------------------------------------------------
