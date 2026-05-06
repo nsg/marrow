@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -303,6 +304,99 @@ pub struct StepResult {
     /// One-line summary of what this step discovered or accomplished (for working context).
     pub finding: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Transition — unified guardrail state between loop iterations
+// ---------------------------------------------------------------------------
+
+/// A guardrail transition determined at the end of one iteration, whose system
+/// message is injected at the start of the next iteration. This unifies all
+/// loop-control mechanisms (repeat detection, fail blocking, nudging, budget
+/// warnings) into a single enum so the model sees one clear signal per issue
+/// and the history stays clean.
+#[derive(Debug, Clone)]
+enum Transition {
+    /// No guardrail fired — normal continuation.
+    None,
+    /// A tool returned output identical to a previous call. The duplicate
+    /// was NOT executed or added to history.
+    ToolRepeatBlocked { tool: String, original_step: u32 },
+    /// A tool has failed too many times and is now blocked.
+    ToolFailBlocked { tool: String, fail_count: u32 },
+    /// The step budget is running low.
+    StepBudgetWarning { remaining: u32 },
+}
+
+impl Transition {
+    /// Generate the system message to inject into history for this transition.
+    fn system_message(&self) -> Option<String> {
+        match self {
+            Transition::None => Option::None,
+            Transition::ToolRepeatBlocked {
+                tool,
+                original_step,
+            } => Some(format!(
+                "SYSTEM: Tool \"{tool}\" was already called and returned the same data at \
+                 step {original_step}. The duplicate call was blocked and NOT added to history. \
+                 Use the result from step {original_step} to proceed or finish the task."
+            )),
+            Transition::ToolFailBlocked { tool, fail_count } => Some(format!(
+                "SYSTEM: Tool \"{tool}\" has failed {fail_count} times and is now blocked. \
+                 You MUST use a different tool or create a new one."
+            )),
+            Transition::StepBudgetWarning { remaining } => Some(format!(
+                "SYSTEM: You have {remaining} steps remaining out of {MAX_AGENT_STEPS}. \
+                 Start wrapping up — prioritize answering the user's question with what \
+                 you have. If you need more data, make it your very next action."
+            )),
+        }
+    }
+
+    fn type_str(&self) -> &'static str {
+        match self {
+            Transition::None => "none",
+            Transition::ToolRepeatBlocked { .. } => "tool_repeat_blocked",
+            Transition::ToolFailBlocked { .. } => "tool_fail_blocked",
+            Transition::StepBudgetWarning { .. } => "step_budget_warning",
+        }
+    }
+
+    fn detail_str(&self) -> String {
+        match self {
+            Transition::None => String::new(),
+            Transition::ToolRepeatBlocked {
+                tool,
+                original_step,
+            } => format!("{tool} (duplicate of step {original_step})"),
+            Transition::ToolFailBlocked { tool, fail_count } => {
+                format!("{tool} ({fail_count} failures)")
+            }
+            Transition::StepBudgetWarning { remaining } => format!("{remaining} steps left"),
+        }
+    }
+}
+
+/// Compute a u64 hash of a string for output deduplication.
+fn hash_output(s: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Compute a u64 hash of sorted tool params for call signature deduplication.
+fn hash_params(params: &HashMap<String, String>) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut sorted: Vec<_> = params.iter().collect();
+    sorted.sort_by_key(|(k, _)| *k);
+    for (k, v) in &sorted {
+        k.hash(&mut hasher);
+        v.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Number of steps remaining before we warn the model about the budget.
+const BUDGET_WARNING_THRESHOLD: u32 = 5;
 
 #[allow(clippy::too_many_arguments)]
 pub fn build_agent_prompt(
@@ -1145,6 +1239,13 @@ pub async fn run_loop(
     let mut incomplete_nudges: u32 = 0;
     const MAX_INCOMPLETE_NUDGES: u32 = 2;
 
+    // Transition state: determined at end of iteration, injected at start of next.
+    let mut pending_transition = Transition::None;
+    // Track (tool_name, params_hash) -> step for pre-execution repeat blocking.
+    let mut tool_call_signatures: HashMap<(String, u64), u32> = HashMap::new();
+    // Track (tool_name, output_hash) -> step for post-execution output dedup.
+    let mut tool_output_seen: HashMap<(String, u64), u32> = HashMap::new();
+
     for step in 1..=MAX_AGENT_STEPS {
         let step_start = Instant::now();
 
@@ -1160,6 +1261,28 @@ pub async fn run_loop(
                 });
             }
         }
+
+        // Inject any pending transition message from the previous iteration
+        if let Some(msg) = pending_transition.system_message() {
+            history.push(StepResult {
+                step,
+                action: Action::UserMessage {
+                    text: String::new(),
+                },
+                output: msg,
+                success: false,
+                finding: None,
+            });
+            log.emit(Event::AgentTransition {
+                task_id: task_id.to_string(),
+                step,
+                transition_type: pending_transition.type_str().to_string(),
+                detail: pending_transition.detail_str(),
+            })
+            .await;
+        }
+        pending_transition = Transition::None;
+
         let available_tools = registry.list_all();
         let tools_section = available_tools
             .iter()
@@ -1481,6 +1604,23 @@ pub async fn run_loop(
         for action in &actions {
             match action {
                 Action::CallTool { tool, params } => {
+                    // Pre-execution repeat detection: same tool + same params
+                    let params_hash = hash_params(params);
+                    let sig_key = (tool.clone(), params_hash);
+                    if let Some(&original_step) = tool_call_signatures.get(&sig_key) {
+                        if log.is_verbose() {
+                            eprintln!(
+                                "[agent] step {step}: BLOCKED tool \"{tool}\" — identical call already made at step {original_step}"
+                            );
+                        }
+                        // Don't execute, don't add to history — set transition for next iteration
+                        pending_transition = Transition::ToolRepeatBlocked {
+                            tool: tool.clone(),
+                            original_step,
+                        };
+                        continue;
+                    }
+
                     let fail_count = tool_fail_counts.get(tool.as_str()).copied().unwrap_or(0);
                     if fail_count >= 2 {
                         if log.is_verbose() {
@@ -1488,13 +1628,10 @@ pub async fn run_loop(
                                 "[agent] step {step}: BLOCKED tool \"{tool}\" — failed {fail_count} times already"
                             );
                         }
-                        sync_results.push(StepResult {
-                            step,
-                            action: action.clone(),
-                            output: format!("{{\"error\": \"tool '{tool}' has failed {fail_count} times already. You MUST use a different tool or create a new one.\"}}"),
-                            success: false,
-                            finding: None,
-                        });
+                        pending_transition = Transition::ToolFailBlocked {
+                            tool: tool.clone(),
+                            fail_count,
+                        };
                         continue;
                     }
 
@@ -1735,10 +1872,47 @@ pub async fn run_loop(
         while let Some(result) = join_set.join_next().await {
             match result {
                 Ok((action, output, success)) => {
-                    // Track tool fail counts
-                    if let Action::CallTool { ref tool, .. } = action {
+                    // Track tool fail counts and output dedup for CallTool
+                    if let Action::CallTool {
+                        ref tool,
+                        ref params,
+                    } = action
+                    {
                         if !success {
                             *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
+                        } else {
+                            // Track call signature for pre-execution repeat blocking
+                            let params_hash = hash_params(params);
+                            tool_call_signatures
+                                .entry((tool.clone(), params_hash))
+                                .or_insert(step);
+
+                            // Post-execution output dedup: if a different call to the
+                            // same tool produced identical output, suppress this result
+                            let out_hash = hash_output(&output);
+                            let out_key = (tool.clone(), out_hash);
+                            if let Some(&original_step) = tool_output_seen.get(&out_key) {
+                                if log.is_verbose() {
+                                    eprintln!(
+                                        "[agent] step {step}: tool \"{tool}\" returned identical output to step {original_step}, suppressing"
+                                    );
+                                }
+                                pending_transition = Transition::ToolRepeatBlocked {
+                                    tool: tool.clone(),
+                                    original_step,
+                                };
+                                emit(ProgressUpdate::ToolCallEnd);
+                                log.emit(Event::AgentToolResult {
+                                    task_id: task_id.to_string(),
+                                    step,
+                                    tool: tool.clone(),
+                                    success,
+                                    output_len: output.len(),
+                                })
+                                .await;
+                                continue; // skip adding to history
+                            }
+                            tool_output_seen.entry(out_key).or_insert(step);
                         }
                         emit(ProgressUpdate::ToolCallEnd);
                         log.emit(Event::AgentToolResult {
@@ -1754,6 +1928,32 @@ pub async fn run_loop(
                         if success {
                             successful_blocks.insert(name.clone(), code.clone());
                             last_successful_code = Some(code.clone());
+
+                            // Post-execution output dedup for Lua blocks too
+                            let out_hash = hash_output(&output);
+                            let out_key = (name.clone(), out_hash);
+                            if let Some(&original_step) = tool_output_seen.get(&out_key) {
+                                if log.is_verbose() {
+                                    eprintln!(
+                                        "[agent] step {step}: code block \"{name}\" returned identical output to step {original_step}, suppressing"
+                                    );
+                                }
+                                pending_transition = Transition::ToolRepeatBlocked {
+                                    tool: name.clone(),
+                                    original_step,
+                                };
+                                emit(ProgressUpdate::CodeRunEnd);
+                                log.emit(Event::AgentToolResult {
+                                    task_id: task_id.to_string(),
+                                    step,
+                                    tool: name.clone(),
+                                    success,
+                                    output_len: output.len(),
+                                })
+                                .await;
+                                continue; // skip adding to history
+                            }
+                            tool_output_seen.entry(out_key).or_insert(step);
                         }
                         emit(ProgressUpdate::CodeRunEnd);
                         log.emit(Event::AgentToolResult {
@@ -1824,19 +2024,36 @@ pub async fn run_loop(
             success: step_success,
         })
         .await;
+
+        // Step budget warning: fire once when approaching the limit,
+        // but don't overwrite a more specific transition from this iteration.
+        let remaining = MAX_AGENT_STEPS.saturating_sub(step);
+        if remaining == BUDGET_WARNING_THRESHOLD && matches!(pending_transition, Transition::None) {
+            pending_transition = Transition::StepBudgetWarning { remaining };
+        }
     }
 
     // Max steps reached — force an answer with what we have
     let forced_start = Instant::now();
+    let forced_msg = "SYSTEM: You have run out of steps. Summarize what you accomplished \
+                      and what remains unfinished so the user knows where things stand."
+        .to_string();
     history.push(StepResult {
         step: MAX_AGENT_STEPS + 1,
         action: Action::UserMessage {
             text: String::new(),
         },
-        output: "SYSTEM: You have run out of steps. Summarize what you accomplished and what remains unfinished so the user knows where things stand.".to_string(),
+        output: forced_msg,
         success: false,
         finding: None,
     });
+    log.emit(Event::AgentTransition {
+        task_id: task_id.to_string(),
+        step: MAX_AGENT_STEPS + 1,
+        transition_type: "forced_done".to_string(),
+        detail: String::new(),
+    })
+    .await;
     let answer = format_answer(
         task,
         memories,

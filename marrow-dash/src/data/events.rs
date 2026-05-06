@@ -282,7 +282,8 @@ impl EventData {
                 | Event::AgentAction { task_id, .. }
                 | Event::AgentToolResult { task_id, .. }
                 | Event::AgentModelResponse { task_id, .. }
-                | Event::StepCompleted { task_id, .. } => Some(task_id.as_str()),
+                | Event::StepCompleted { task_id, .. }
+                | Event::AgentTransition { task_id, .. } => Some(task_id.as_str()),
                 _ => None,
             };
 
@@ -396,6 +397,7 @@ fn event_category(event: &Event) -> &'static str {
         | Event::AgentToolResult { .. }
         | Event::AgentModelResponse { .. }
         | Event::StepCompleted { .. } => "agent",
+        Event::AgentTransition { .. } => "transition",
         Event::ScheduleCreated { .. }
         | Event::ScheduleDeleted { .. }
         | Event::ScheduleTriggered { .. }

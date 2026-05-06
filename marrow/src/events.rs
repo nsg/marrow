@@ -83,6 +83,12 @@ pub enum Event {
         duration_ms: u64,
         success: bool,
     },
+    AgentTransition {
+        task_id: String,
+        step: u32,
+        transition_type: String,
+        detail: String,
+    },
     ScheduleCreated {
         schedule_id: String,
         description: String,
@@ -248,6 +254,19 @@ impl EventLog {
                 step, response_len, ..
             } if self.verbose => {
                 eprintln!("[agent] step {step}: model response received ({response_len} bytes)");
+            }
+            // Transitions — always shown
+            Event::AgentTransition {
+                step,
+                transition_type,
+                detail,
+                ..
+            } => {
+                if detail.is_empty() {
+                    eprintln!("[agent] step {step}: transition — {transition_type}");
+                } else {
+                    eprintln!("[agent] step {step}: transition — {transition_type} ({detail})");
+                }
             }
             // Step timing — always shown
             Event::StepCompleted {

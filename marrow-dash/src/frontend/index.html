@@ -491,6 +491,7 @@ tr.clickable:hover td:first-child {
 .badge-janitor { background: rgba(201, 168, 76, 0.15); color: var(--amber); }
 .badge-schedule { background: rgba(107, 159, 204, 0.15); color: var(--blue); }
 .badge-agent { background: rgba(155, 133, 181, 0.15); color: var(--purple); }
+.badge-transition { background: rgba(212, 133, 74, 0.15); color: var(--accent); }
 .badge-tool { background: rgba(107, 168, 158, 0.15); color: var(--teal); }
 
 /* Pagination */
@@ -935,6 +936,7 @@ tr.clickable:hover td:first-child {
           <option value="janitor">Janitor</option>
           <option value="schedule">Schedule</option>
           <option value="agent">Agent</option>
+          <option value="transition">Transition</option>
           <option value="tool">Tool</option>
         </select>
       </div>
@@ -1027,7 +1029,8 @@ tr.clickable:hover td:first-child {
     if (!type) return "";
     const t = String(type).toLowerCase();
     let cls = "";
-    if (t.startsWith("task") || t.includes("task")) cls = "badge-task";
+    if (t === "agent_transition") cls = "badge-transition";
+    else if (t.startsWith("task") || t.includes("task")) cls = "badge-task";
     else if (t.startsWith("janitor") || t.includes("janitor")) cls = "badge-janitor";
     else if (t.startsWith("schedule") || t.includes("schedule")) cls = "badge-schedule";
     else if (t.startsWith("agent") || t.includes("agent")) cls = "badge-agent";
@@ -1253,6 +1256,11 @@ tr.clickable:hover td:first-child {
   }
 
   function eventSummary(ev) {
+    if (ev.type === "agent_transition") {
+      let txt = ev.transition_type || "unknown";
+      if (ev.detail) txt += " — " + ev.detail;
+      return "step " + (ev.step || "?") + ": " + txt;
+    }
     const parts = [];
     for (const k of Object.keys(ev)) {
       if (k === "timestamp_ms" || k === "type") continue;
