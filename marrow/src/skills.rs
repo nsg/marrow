@@ -44,8 +44,9 @@ impl SkillStore {
         Ok(skills)
     }
 
-    /// Return a lightweight catalog: `(filename, first_heading)` for each skill.
-    /// Use this to show the agent what skills exist without injecting full content.
+    /// Return a lightweight catalog: `(filename, description)` for each skill.
+    /// Description is the heading + the first non-empty body line, giving the
+    /// model enough signal to decide whether to load the full skill.
     pub fn catalog(&self) -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>> {
         let mut entries = Vec::new();
         if !self.dir.exists() {
@@ -58,16 +59,30 @@ impl SkillStore {
                 && let Some(name) = path.file_name().and_then(|n| n.to_str())
             {
                 let content = std::fs::read_to_string(&path).unwrap_or_default();
-                let first_line = content
-                    .lines()
-                    .find(|l| !l.trim().is_empty())
+                let mut non_empty = content.lines().filter(|l| !l.trim().is_empty());
+
+                let heading = non_empty
+                    .next()
                     .unwrap_or("")
                     .trim_start_matches('#')
                     .trim()
                     .to_string();
-                if !first_line.is_empty() {
-                    entries.push((name.to_string(), first_line));
+                if heading.is_empty() {
+                    continue;
                 }
+
+                // Grab the first body line as a short description
+                let body_line = non_empty
+                    .next()
+                    .map(|l| l.trim().to_string())
+                    .unwrap_or_default();
+
+                let desc = if body_line.is_empty() {
+                    heading
+                } else {
+                    format!("{heading} — {body_line}")
+                };
+                entries.push((name.to_string(), desc));
             }
         }
         Ok(entries)
@@ -284,16 +299,15 @@ mod tests {
 
         let catalog = store.catalog().unwrap();
         assert_eq!(catalog.len(), 2);
-        // Check that we got first headings, not full content
+        // Check that we got heading + body description
         assert!(
-            catalog
-                .iter()
-                .any(|(n, l)| n == "check-calendar.md" && l == "Check Calendar")
+            catalog.iter().any(|(n, l)| n == "check-calendar.md"
+                && l == "Check Calendar — Fetches events from CalDAV")
         );
         assert!(
             catalog
                 .iter()
-                .any(|(n, l)| n == "check-weather.md" && l == "Check Weather")
+                .any(|(n, l)| n == "check-weather.md" && l == "Check Weather — Gets forecast data")
         );
     }
 

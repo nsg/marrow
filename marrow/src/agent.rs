@@ -206,6 +206,7 @@ return json_parse(resp.body)
 
 ## Rules
 
+- IMPORTANT: If a relevant skill exists (especially ones marked "suggested"), load it FIRST before calling the tool. Skills contain the correct URLs, credentials, parameter formats, and known workarounds. Guessing these values wastes steps.
 - After inline Lua succeeds: if the code is generally useful (API calls, data fetching, etc.), save it with save_tool. You can save a block in the same response as new work, or in a subsequent response.
 - CRITICAL: When a step already returned the data you need, do NOT rewrite the code. Use save_tool referencing the successful block. Rewriting working code risks regression.
 - If a tool or code fails, read the error carefully. Do NOT repeat the same approach — fix the specific issue.
@@ -423,12 +424,27 @@ pub fn build_agent_prompt(
     let skills_section = if skill_catalog.is_empty() {
         String::new()
     } else {
+        let task_lower = task.to_lowercase();
         let lines: Vec<String> = skill_catalog
             .iter()
-            .map(|(name, first_line)| format!("- {name}: {first_line}"))
+            .map(|(name, desc)| {
+                // Lightweight keyword match: check if the skill name or description
+                // shares words with the task. Tag matches as (suggested) so the
+                // model sees a hint without an extra model call.
+                let skill_lower = format!("{} {}", name.replace(".md", "").replace('-', " "), desc)
+                    .to_lowercase();
+                let suggested = skill_lower
+                    .split_whitespace()
+                    .any(|word| word.len() >= 4 && task_lower.contains(word));
+                if suggested {
+                    format!("- {name}: {desc}  ← suggested")
+                } else {
+                    format!("- {name}: {desc}")
+                }
+            })
             .collect();
         format!(
-            "Available skills (use load_skill to get full steps):\n{}\n\n",
+            "Available skills (load_skill to get full steps — always load a skill before using its tools):\n{}\n\n",
             lines.join("\n")
         )
     };
