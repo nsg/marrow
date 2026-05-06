@@ -18,7 +18,7 @@ It started with [OpenClaw](https://github.com/openclaw/openclaw). I installed it
 
 ## Agent Loop
 
-Here is a basic overview of the agent loop that is triggered when a message is sent in. Relevant memories are pulled into context, and the agent sees a lightweight catalog of available skills it can load on demand. The agent has access to built-in tools and tools created by previous agent loops written in Lua. It can execute multiple actions in parallel within a single step. The agent always has the option to write and run inline Lua code to execute logic. If the result is reusable, it may save it for future loops.
+Here is a basic overview of the agent loop that is triggered when a message is sent in. Relevant memories are pulled into context, and the agent sees a lightweight catalog of available skills it can load on demand. Skills that match keywords in the task are tagged as "suggested" so the model knows which to load first. The agent has access to built-in tools (called via `call_tool`) and tools created by previous agent loops written in Lua. It can execute multiple actions in parallel within a single step. The agent always has the option to write and run inline Lua code for custom HTTP calls and data processing. If the result is reusable, it may save it for future loops.
 
 ![Agent Loop](docs/agent-loop.excalidraw.png)
 
@@ -26,7 +26,7 @@ The message is simply the message you wrote, in Discord or at the CLI. If you ha
 
 ![Agent Loop](docs/agent-loop2.excalidraw.png)
 
-It can create long chains of model calls like this. There is a cap of 25 calls, but hitting it is rare. If the model has everything it needs in context (typically from memory), it may respond directly (`Message -> Model -> Answer`). This is of course rare with tools like this. I try to guide the system to generate tools and skills to make the chain as short as possible.
+It can create long chains of model calls like this. There is a cap of 25 steps, but a transition system keeps runs short in practice. When the agent calls the same tool twice and gets the same result, the duplicate is blocked and never added to history — the model sees a single message pointing it back to the original result. This prevents the agent from spinning on repeated calls and keeps the context clean. Other guardrails warn the model when the step budget is running low. If the model has everything it needs in context (typically from memory), it may respond directly (`Message -> Model -> Answer`).
 
 There are two ways into the agent loop. One is a message initiated by the user. The other is a scheduled task created by an earlier agent loop. The loop can exit in two ways: with an answer back to the user (`done`), or silently (`dismiss`) when the agent completed its work but has nothing to report — useful for monitoring and conditional notification tasks. If we hit 25 steps, an answer is forced.
 
@@ -38,11 +38,11 @@ During the agent loop, relevant memories are retrieved from the database and inj
 
 ### Skills
 
-Skills are documents created from memories, like "this is how to read the user's calendar". Skills are managed by the janitor process. The agent sees a lightweight catalog (name + one-liner) and can load a skill's full content on demand during the loop.
+Skills are documents created from memories, like "this is how to read the user's calendar". Skills are managed by the janitor process. The agent sees a lightweight catalog (name + short description) and can load a skill's full content on demand during the loop. Skills whose descriptions share keywords with the current task are tagged as suggested in the catalog, nudging the model to load them before guessing URLs or credentials.
 
 ### Tools
 
-We have a few built-in tools written in Rust. They work as building blocks for the agent to build more complex tools on, or to use directly. The agent can also write sandboxed tools in Lua (and optionally save them).
+We have a few built-in tools written in Rust. They work as building blocks for the agent to build more complex tools on, or to use directly. The agent can also write sandboxed tools in Lua (and optionally save them). Built-in tools include CalDAV calendar/task management, RSS feeds, HTTP fetching, Stockholm transit, file storage, memory management, schedule management, and a key-value state store for tracking transient data across scheduled runs.
 
 ## Janitor
 
@@ -102,7 +102,9 @@ local resp = http_get("https://api.github.com/user",
     { Authorization = "Bearer " .. token })
 ```
 
-The model never sees the secret value, only the name and description. Please note that there are always theoretical ways for them to leak. For example if the model generated a tool that prints the secret, it will be added to the conversation history, and potentially picked up as a memory. At the moment there is no special logic to try to block this.
+The model never sees the secret value, only the name and description. When a tool parameter starts with `secret:` (e.g. `secret:github_token`), the runtime resolves it before the tool executes. This also works for `secret:` references embedded inside values, so a URL like `https://host/users/secret:my_user/calendar` is resolved correctly.
+
+Please note that there are always theoretical ways for secrets to leak. For example if the model generated a tool that prints the secret, it will be added to the conversation history, and potentially picked up as a memory. At the moment there is no special logic to try to block this.
 
 ## License
 

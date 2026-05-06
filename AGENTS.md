@@ -43,6 +43,24 @@ Context that isn't obvious from the code:
   uses it daily). The CLI is primarily for agentic usage — Claude Code and other agents use
   it to test tools, verify behavior, and validate changes. The human may also use the CLI
   occasionally, but optimize CLI design decisions for automated/agentic workflows first
+- **Transition system for loop guardrails** — a `Transition` enum unifies all loop-control
+  mechanisms (repeat detection, fail blocking, budget warnings). When a guardrail fires, it
+  sets a pending transition; at the start of the next iteration, the transition's system
+  message is injected into history and the model sees one clear signal. Duplicate tool results
+  are never added to history — this prevents context poisoning where repeated outputs train the
+  model to keep repeating. Inspired by Hermes (state machine transitions) and ZeroClaw
+  (result-aware detection)
+- **call_tool for built-ins, Lua for custom logic** — the system prompt steers the model to
+  use `call_tool` for existing tools and Lua only for HTTP calls, data processing, or tool
+  composition. `run_tool()` inside Lua is for composition only. This prevents the common
+  failure pattern of wrapping a built-in in a Lua block that fails
+- **Secret resolution handles substrings** — `secret:NAME` references are resolved both as
+  whole param values and as substrings within values (e.g. URLs containing `secret:user` as
+  a path segment). This handles models that embed secret references inside constructed URLs
+- **Skill catalog with keyword suggestions** — the prompt shows skill heading + first body
+  line (not just the heading). A zero-latency keyword matcher tags skills as "suggested" when
+  they share words with the task description. No extra model call — the model decides whether
+  to load
 
 ---
 
