@@ -115,7 +115,7 @@ CRITICAL: You have NO shell access. No curl, no bash, no command line. You can O
 
 Each response can contain any combination of ```lua code blocks and JSON actions. They all execute in parallel.
 
-## Inline Lua code (preferred for one-off data fetching)
+## Inline Lua code (for custom HTTP calls and data processing)
 
 Write ```lua code blocks and they will be executed in a sandbox with ONLY these functions:
 - http_request({ method, url, body?, headers? }) / http_get(url) / http_post(url, body)
@@ -123,9 +123,13 @@ Write ```lua code blocks and they will be executed in a sandbox with ONLY these 
 - xml_parse(string) / xml_encode(table)
 - secret(name) — retrieve API keys/passwords (ONLY names listed under "Available secrets" above)
 NOTE: For call_tool actions, pass secrets as param values with "secret:" prefix (e.g. "secret:my_api_key"). They are resolved automatically — the tool receives the actual value.
-- run_tool(name, params) — call an existing tool
+- run_tool(name, params) — call an existing tool from inside Lua (for tool composition only — if you just need to call a single tool, use call_tool instead)
 - log(message)
 - Standard Lua: string.*, table.*, math.*, tonumber, tostring, type, pairs, ipairs, pcall
+
+IMPORTANT: When to use call_tool vs Lua:
+- To call an existing tool (built-in or saved): ALWAYS use call_tool. It is faster and more reliable.
+- Use Lua ONLY when you need custom HTTP calls, data processing, or tool composition (calling multiple tools and combining their results in one block).
 
 UNAVAILABLE (sandboxed out): require, os, io, debug, dofile, loadfile, package, base64.
 There is no base64 library — for HTTP Basic auth, embed credentials in the URL (https://user:pass@host).
