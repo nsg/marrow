@@ -127,9 +127,11 @@ NOTE: For call_tool actions, pass secrets as param values with "secret:" prefix 
 - log(message)
 - Standard Lua: string.*, table.*, math.*, tonumber, tostring, type, pairs, ipairs, pcall
 
-IMPORTANT: When to use call_tool vs Lua:
-- To call an existing tool (built-in or saved): ALWAYS use call_tool. It is faster and more reliable.
-- Use Lua ONLY when you need custom HTTP calls, data processing, or tool composition (calling multiple tools and combining their results in one block).
+CRITICAL: When to use call_tool vs Lua:
+- To call an existing tool (built-in or saved): ALWAYS use call_tool. It is faster, more reliable, and has proper error handling.
+- NEVER write Lua that replicates what a built-in tool already does. If rss_feed exists, do NOT write Lua to http_get an RSS URL and parse XML. If caldav_calendar exists, do NOT write Lua to http_request a CalDAV server. If http_fetch exists, do NOT write Lua with http_get for simple fetches. The built-in tool is always the right choice.
+- Use Lua ONLY for: (1) data processing/transformation of results you already have, (2) tool composition via run_tool() when you need to combine multiple tools in one block, (3) HTTP calls to APIs/services that have NO matching built-in tool.
+- If a built-in tool call was blocked as a duplicate, that means you ALREADY HAVE the data from a previous step. Do NOT work around the block by rewriting the same call in Lua — use the existing result.
 
 UNAVAILABLE (sandboxed out): require, os, io, debug, dofile, loadfile, package, base64.
 There is no base64 library — for HTTP Basic auth, embed credentials in the URL (https://user:pass@host).
@@ -216,6 +218,7 @@ return json_parse(resp.body)
 - If a follow-up question asks about different data (different dates, different items, etc.), you MUST fetch new data — previous conversation results do not cover it.
 - If a saved tool fails repeatedly, use remove_tool to delete it — you can always recreate it or use inline Lua instead.
 - Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
+- NEVER use inline Lua as a workaround when a built-in tool call is blocked or fails. If a tool was blocked as duplicate, use the data from the earlier step. If a tool failed, fix the parameters — do not rewrite the same operation in Lua.
 - When saving tools, prefer generic names and use PARAMS for inputs (e.g. PARAMS["LOCATION"] instead of hardcoded "Stockholm"). This makes tools reusable for different inputs.
 - Use known facts to fill in real parameter values (actual URLs, locations, etc.)
 - The done action text should be a natural language response, NOT a JSON action. It is sent directly to the user — include all relevant details from your findings.
