@@ -1268,6 +1268,8 @@ pub async fn run_loop(
     let mut tool_call_signatures: HashMap<(String, u64), u32> = HashMap::new();
     // Track (tool_name, output_hash) -> step for post-execution output dedup.
     let mut tool_output_seen: HashMap<(String, u64), u32> = HashMap::new();
+    // Track Lua error hash -> count for fail-blocking across differently-named blocks.
+    let mut lua_error_counts: HashMap<u64, u32> = HashMap::new();
 
     for step in 1..=MAX_AGENT_STEPS {
         let step_start = Instant::now();
@@ -1980,6 +1982,33 @@ pub async fn run_loop(
                                 continue; // skip adding to history
                             }
                             tool_output_seen.entry(out_key).or_insert(step);
+                        } else {
+                            // Track Lua failures by error hash so differently-named
+                            // blocks hitting the same error accumulate correctly.
+                            let err_hash = hash_output(&output);
+                            let count = lua_error_counts.entry(err_hash).or_insert(0);
+                            *count += 1;
+                            if *count >= 2 {
+                                if log.is_verbose() {
+                                    eprintln!(
+                                        "[agent] step {step}: code block \"{name}\" hit a repeated error ({count} times), suppressing"
+                                    );
+                                }
+                                pending_transition = Transition::ToolFailBlocked {
+                                    tool: name.clone(),
+                                    fail_count: *count,
+                                };
+                                emit(ProgressUpdate::CodeRunEnd);
+                                log.emit(Event::AgentToolResult {
+                                    task_id: task_id.to_string(),
+                                    step,
+                                    tool: name.clone(),
+                                    success,
+                                    output_len: output.len(),
+                                })
+                                .await;
+                                continue; // skip adding to history
+                            }
                         }
                         emit(ProgressUpdate::CodeRunEnd);
                         log.emit(Event::AgentToolResult {
