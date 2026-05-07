@@ -14,6 +14,7 @@ pub struct ScheduleInfo {
     pub last_status: Option<String>,
     pub next_run: Option<String>,
     pub frontend: String,
+    pub channel_id: Option<u64>,
 }
 
 pub fn load(dir: &Path) -> Vec<ScheduleInfo> {
@@ -40,6 +41,7 @@ pub fn load(dir: &Path) -> Vec<ScheduleInfo> {
                 last_status: sched.last_status,
                 next_run: next,
                 frontend: sched.frontend,
+                channel_id: sched.channel_id,
             });
         }
     }

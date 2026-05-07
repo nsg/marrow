@@ -863,6 +863,64 @@ tr.clickable:hover td:first-child {
   border-radius: 50%;
 }
 
+/* Schedule cards */
+.sched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sched-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green);
+  padding: 16px 20px;
+  transition: background 0.15s;
+}
+.sched-card:hover { background: var(--bg-raised); }
+.sched-card.sched-disabled { border-left-color: var(--text-muted); opacity: 0.7; }
+.sched-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.sched-header:hover { background: var(--bg-hover); margin: -8px -10px 4px -10px; padding: 8px 10px; border-radius: 2px; }
+.sched-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.sched-badges { display: flex; gap: 6px; flex-shrink: 0; }
+.sched-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px 24px;
+}
+.sched-meta-item { display: flex; flex-direction: column; gap: 2px; }
+.sched-meta-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.sched-meta-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.sched-expand {
+  display: none;
+  margin-top: 12px;
+}
+.sched-card.open .sched-expand { display: block; }
+.sched-card.open .skill-row-chevron { transform: rotate(90deg); }
+.sched-title { flex: 1; min-width: 0; }
+.sched-badges { flex-shrink: 0; }
+
 /* Theme toggle */
 .theme-toggle { border-left: none !important; }
 .theme-icon-sun { display: block; }
@@ -1174,6 +1232,24 @@ tr.clickable:hover td:first-child {
     if (s < 60) return s + "s";
     const m = Math.floor(s / 60);
     return m + "m " + (s % 60) + "s";
+  }
+
+  function formatRepeat(raw) {
+    if (!raw) return "--";
+    var m;
+    if ((m = raw.match(/Daily\s*\{\s*hour:\s*(\d+),\s*minute:\s*(\d+)/))) {
+      return "Daily at " + String(m[1]).padStart(2, "0") + ":" + String(m[2]).padStart(2, "0");
+    }
+    if ((m = raw.match(/EveryNHours\s*\{\s*interval:\s*(\d+)/))) {
+      return "Every " + m[1] + "h";
+    }
+    if ((m = raw.match(/Weekly\s*\{\s*day:\s*(\w+),\s*hour:\s*(\d+),\s*minute:\s*(\d+)/))) {
+      return m[1] + " at " + String(m[2]).padStart(2, "0") + ":" + String(m[3]).padStart(2, "0");
+    }
+    if ((m = raw.match(/Once\s*\{\s*at:\s*"?([^}"]+)/))) {
+      return "Once at " + m[1];
+    }
+    return raw;
   }
 
   function statusBadge(status) {
@@ -1572,22 +1648,40 @@ tr.clickable:hover td:first-child {
         setContent("schedules-content", emptyMsg("No schedules configured."));
         return;
       }
-      let html = '<div class="table-wrap"><table>';
-      html += '<tr><th>Description</th><th>Repeat</th><th>Enabled</th><th>Last Run</th><th>Last Status</th><th>Next Run</th><th>Frontend</th></tr>';
+      let html = '<div class="sched-list">';
       for (const s of schedules) {
-        html += '<tr>';
-        html += '<td>' + esc(s.description || "--") + '</td>';
-        html += '<td class="mono">' + esc(s.repeat || "--") + '</td>';
-        html += '<td>' + (s.enabled
-          ? '<span class="badge badge-enabled">enabled</span>'
-          : '<span class="badge badge-disabled">disabled</span>') + '</td>';
-        html += '<td class="mono">' + esc(formatTime(s.last_run)) + '</td>';
-        html += '<td>' + statusBadge(s.last_status) + '</td>';
-        html += '<td class="mono">' + esc(formatTime(s.next_run)) + '</td>';
-        html += '<td>' + esc(s.frontend || "--") + '</td>';
-        html += '</tr>';
+        var desc = s.description || "";
+        var lines = desc.split("\n");
+        var title = "";
+        for (var i = 0; i < lines.length; i++) {
+          var stripped = lines[i].replace(/^#+\s*/, "").trim();
+          if (stripped) { title = stripped; break; }
+        }
+        if (!title) title = "--";
+        var hasBody = desc.replace(/^#[^\n]*\n?/, "").trim().length > 0;
+        var disabledCls = s.enabled ? "" : " sched-disabled";
+        html += '<div class="sched-card' + disabledCls + '">';
+        html += '<div class="sched-header" onclick="this.parentElement.classList.toggle(\'open\')">';
+        html += '<span class="sched-title">' + esc(title) + '</span>';
+        html += '<div class="sched-badges">';
+        if (!s.enabled) html += '<span class="badge badge-disabled">disabled</span>';
+        if (s.last_status) html += statusBadge(s.last_status);
+        html += '</div>';
+        if (hasBody) html += '<svg class="skill-row-chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>';
+        html += '</div>';
+        html += '<div class="sched-meta">';
+        html += '<div class="sched-meta-item"><span class="sched-meta-label">Repeat</span><span class="sched-meta-value">' + esc(formatRepeat(s.repeat)) + '</span></div>';
+        html += '<div class="sched-meta-item"><span class="sched-meta-label">Next run</span><span class="sched-meta-value">' + esc(formatTime(s.next_run)) + '</span></div>';
+        html += '<div class="sched-meta-item"><span class="sched-meta-label">Last run</span><span class="sched-meta-value">' + esc(formatTime(s.last_run)) + '</span></div>';
+        html += '<div class="sched-meta-item"><span class="sched-meta-label">Frontend</span><span class="sched-meta-value">' + esc(s.frontend || "--") + '</span></div>';
+        if (s.channel_id) html += '<div class="sched-meta-item"><span class="sched-meta-label">Channel</span><span class="sched-meta-value">' + esc(s.channel_id) + '</span></div>';
+        html += '</div>';
+        if (hasBody) {
+          html += '<div class="sched-expand"><div class="skill-content md">' + renderMarkdown(desc) + '</div></div>';
+        }
+        html += '</div>';
       }
-      html += '</table></div>';
+      html += '</div>';
       setContent("schedules-content", html);
     } catch (e) {
       setContent("schedules-content", errorMsg(e));
