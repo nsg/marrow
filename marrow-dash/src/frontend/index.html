@@ -555,45 +555,52 @@ tr.clickable:hover td:first-child {
 }
 .pg-btn:disabled { opacity: 0.3; cursor: default; }
 
-/* Tool cards */
-.tool-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 12px;
-  margin-bottom: 24px;
-}
-.tool-card {
+/* Tool list */
+.tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-top: 2px solid var(--teal);
-  padding: 18px 20px;
-  transition: background 0.2s;
+  margin-bottom: 24px;
 }
-.tool-card:hover {
-  background: var(--bg-raised);
+.tool-row {
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--teal);
+  transition: background 0.15s;
 }
-.tool-card-header {
+.tool-row:last-child { border-bottom: none; }
+.tool-row { min-width: 0; }
+.tool-row-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 14px;
+  padding: 14px 18px;
 }
-.tool-card-name {
+.tool-row-header:hover { background: var(--bg-hover); }
+.tool-row-name {
   font-family: var(--font-mono);
   font-size: 14px;
   font-weight: 600;
   color: var(--teal);
+  flex-shrink: 0;
 }
-.tool-card-desc {
+.tool-row-desc {
   font-size: 13px;
   color: var(--text-secondary);
-  margin-bottom: 10px;
-  line-height: 1.5;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
-.tool-card-provides {
+.tool-row-badges {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 .provides-tag {
   font-size: 10px;
@@ -603,6 +610,32 @@ tr.clickable:hover td:first-child {
   font-family: var(--font-mono);
   border-radius: 2px;
 }
+.tool-row-header { cursor: pointer; }
+.tool-row.open .skill-row-chevron { transform: rotate(90deg); }
+.tool-row.open .tool-row-header { background: var(--bg-hover); }
+.tool-expand {
+  display: none;
+  padding: 0 18px 16px 18px;
+  background: var(--bg-raised);
+  min-width: 0;
+  overflow: hidden;
+}
+.tool-row.open .tool-expand { display: block; }
+.tool-source {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  padding: 16px 20px;
+  margin-top: 12px;
+  overflow: auto;
+  max-height: 500px;
+  white-space: pre;
+  max-width: calc(100vw - var(--sidebar-width) - 100px);
+}
+.tool-source code { color: var(--text-secondary); }
 
 /* Skills */
 .skills-list {
@@ -1526,24 +1559,27 @@ tr.clickable:hover td:first-child {
         html += emptyMsg("No tools in toolbox.");
       } else {
         html += '<div class="section-title fade-child">Tools</div>';
-        html += '<div class="tool-grid fade-child">';
+        html += '<div class="tool-list fade-child">';
         for (const t of tools) {
-          html += '<div class="tool-card">';
-          html += '<div class="tool-card-header">';
-          html += '<span class="tool-card-name">' + esc(t.name) + '</span>';
-          html += t.validated
-            ? '<span class="badge badge-validated">validated</span>'
-            : '<span class="badge badge-unvalidated">unvalidated</span>';
-          html += '</div>';
-          if (t.description) {
-            html += '<div class="tool-card-desc">' + esc(t.description) + '</div>';
-          }
+          var hasSource = t.source && t.source.trim().length > 0;
+          html += '<div class="tool-row">';
+          html += '<div class="tool-row-header"' + (hasSource ? ' onclick="this.parentElement.classList.toggle(\'open\')"' : '') + '>';
+          html += '<span class="tool-row-name">' + esc(t.name) + '</span>';
+          if (t.description) html += '<span class="tool-row-desc">' + esc(t.description) + '</span>';
+          html += '<div class="tool-row-badges">';
           if (t.provides && t.provides.length > 0) {
-            html += '<div class="tool-card-provides">';
             for (const p of t.provides) {
               html += '<span class="provides-tag">' + esc(p) + '</span>';
             }
-            html += '</div>';
+          }
+          html += t.validated
+            ? '<span class="badge badge-validated">validated</span>'
+            : '<span class="badge badge-unvalidated">unvalidated</span>';
+          if (hasSource) html += '<svg class="skill-row-chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>';
+          html += '</div>';
+          html += '</div>';
+          if (hasSource) {
+            html += '<div class="tool-expand"><pre class="tool-source"><code>' + esc(t.source) + '</code></pre></div>';
           }
           html += '</div>';
         }
