@@ -1952,13 +1952,16 @@ pub async fn run_loop(
                             successful_blocks.insert(name.clone(), code.clone());
                             last_successful_code = Some(code.clone());
 
-                            // Post-execution output dedup for Lua blocks too
+                            // Name-agnostic output dedup: use a fixed key so
+                            // differently-named Lua blocks producing identical
+                            // output are caught (e.g. fetch_rss vs fetch_full_rss
+                            // both returning the same RSS data).
                             let out_hash = hash_output(&output);
-                            let out_key = (name.clone(), out_hash);
+                            let out_key = ("__lua__".to_string(), out_hash);
                             if let Some(&original_step) = tool_output_seen.get(&out_key) {
                                 if log.is_verbose() {
                                     eprintln!(
-                                        "[agent] step {step}: code block \"{name}\" returned identical output to step {original_step}, suppressing"
+                                        "[agent] step {step}: code block \"{name}\" returned identical output to a block at step {original_step}, suppressing"
                                     );
                                 }
                                 pending_transition = Transition::ToolRepeatBlocked {
