@@ -30,8 +30,8 @@ Context that isn't obvious from the code:
   design because it was simpler to share across frontends and drifted less in practice
 - **Janitor uses code role** — reviews and regenerates using the code model, not analytical.
   It's reviewing code, so the code model is the right fit
-- **Test before save** — generated Lua is test-run in the sandbox before persisting to toolbox.
-  Prevents broken tools from polluting the toolbox
+- **Run before save** — the model executes Lua inline first, then persists working code via
+  save_tool. The janitor reviews saved tools afterward
 - **Janitor deletes unfixable tools** — after 3 failed fix attempts, the janitor escalates
   (logged as event) and deletes the tool from the toolbox. Auto-generated tools are disposable;
   they'll be regenerated fresh if needed again
