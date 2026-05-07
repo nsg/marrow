@@ -1282,6 +1282,8 @@ pub async fn run_loop(
     let mut tool_output_seen: HashMap<(String, u64), u32> = HashMap::new();
     // Track Lua error hash -> count for fail-blocking across differently-named blocks.
     let mut lua_error_counts: HashMap<u64, u32> = HashMap::new();
+    // Track loaded skills to avoid re-loading the same skill multiple times.
+    let mut loaded_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for step in 1..=MAX_AGENT_STEPS {
         let step_start = Instant::now();
@@ -1854,6 +1856,24 @@ pub async fn run_loop(
                         format!("{name}.md")
                     };
 
+                    if loaded_skills.contains(&normalized) {
+                        if log.is_verbose() {
+                            eprintln!(
+                                "[agent] step {step}: skill \"{normalized}\" already loaded, skipping"
+                            );
+                        }
+                        sync_results.push(StepResult {
+                            step,
+                            action: action.clone(),
+                            output: format!(
+                                "Skill \"{normalized}\" is already loaded. Refer to the earlier step where it was loaded."
+                            ),
+                            success: true,
+                            finding: None,
+                        });
+                        continue;
+                    }
+
                     log.emit(Event::AgentAction {
                         task_id: task_id.to_string(),
                         step,
@@ -1863,7 +1883,10 @@ pub async fn run_loop(
                     .await;
 
                     let (output, success) = match skill_store.load(&normalized) {
-                        Ok(content) => (content, true),
+                        Ok(content) => {
+                            loaded_skills.insert(normalized.clone());
+                            (content, true)
+                        }
                         Err(_) => (
                             format!(
                                 "Skill \"{normalized}\" not found. Check the catalog for available skill names."
