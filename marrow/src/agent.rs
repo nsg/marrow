@@ -97,6 +97,9 @@ const RECENT_STEPS: usize = 3;
 /// Create a checkpoint after this many steps since the last checkpoint.
 const CHECKPOINT_STEP_INTERVAL: u32 = 8;
 
+/// Maximum inline Lua blocks per model response. Excess blocks are dropped.
+const MAX_LUA_BLOCKS_PER_STEP: usize = 5;
+
 /// A compacted summary of all history up to a certain step. When present,
 /// the prompt shows the checkpoint text + only the steps that followed it.
 #[derive(Debug, Clone)]
@@ -998,12 +1001,21 @@ pub fn parse_response(response: &str) -> ParsedResponse {
     let trimmed = response.trim();
 
     let lua_blocks = extract_lua_blocks(trimmed);
-    let (json_actions, errors) = extract_json_actions(trimmed);
+    let (json_actions, mut errors) = extract_json_actions(trimmed);
 
+    let dropped_lua = lua_blocks.len().saturating_sub(MAX_LUA_BLOCKS_PER_STEP);
     let mut actions: Vec<Action> = lua_blocks
         .into_iter()
+        .take(MAX_LUA_BLOCKS_PER_STEP)
         .map(|(name, code)| Action::RunCode { name, code })
         .collect();
+    if dropped_lua > 0 {
+        errors.push(format!(
+            "You submitted {} Lua blocks but the limit is {MAX_LUA_BLOCKS_PER_STEP} per step. \
+             {dropped_lua} block(s) were dropped. Batch your work into fewer, more focused blocks.",
+            actions.len() + dropped_lua
+        ));
+    }
     actions.extend(json_actions);
 
     // If nothing was parsed, treat the whole response as a fallback done
