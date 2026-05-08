@@ -402,5 +402,9 @@ fn event_category(event: &Event) -> &'static str {
         | Event::ScheduleDeleted { .. }
         | Event::ScheduleTriggered { .. }
         | Event::ScheduleCompleted { .. } => "schedule",
+        Event::PlanTriageResult { .. }
+        | Event::PlanCreated { .. }
+        | Event::PlanItemStarted { .. }
+        | Event::PlanItemCompleted { .. } => "planner",
     }
 }

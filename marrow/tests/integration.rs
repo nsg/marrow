@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use marrow::agent::{self, Outcome};
+use marrow::agent::{self, LoopConfig, Outcome};
 use marrow::context::LuaProvider;
 use marrow::events::{Event, EventLog};
 use marrow::memory::{Memory, MemorySource, MemoryStore};
@@ -139,26 +139,28 @@ async fn agent_loop_call_tool_then_answer() {
     ]);
     let fast_backend = MockBackend::new(vec![]);
 
-    let result = agent::run_loop(
-        "say hello",
-        "test-task",
-        &agent_backend,
-        &fast_backend,
+    let result = agent::run_loop(LoopConfig {
+        task: "say hello",
+        task_id: "test-task",
+        backend: &agent_backend,
+        fast_backend: &fast_backend,
         registry,
         client,
-        &[],
-        &skill_store,
-        &log,
-        None,
-        None,
-        &[],
-        None,
-        None,
-        None,
-        None,
-        None,
-        "test",
-    )
+        memories: &[],
+        skill_store: &skill_store,
+        log: &log,
+        secrets: None,
+        progress: None,
+        conversation: &[],
+        incoming: None,
+        formatting_hint: None,
+        schedule_store: None,
+        memory_store: None,
+        frontend_context: None,
+        frontend: "test",
+        max_steps: None,
+        prior_context: None,
+    })
     .await
     .unwrap();
 
@@ -192,26 +194,28 @@ async fn agent_loop_save_tool_then_call_then_answer() {
 
     let fast_backend = MockBackend::new(vec![]);
 
-    let result = agent::run_loop(
-        "echo something",
-        "test-task",
-        &agent_backend,
-        &fast_backend,
+    let result = agent::run_loop(LoopConfig {
+        task: "echo something",
+        task_id: "test-task",
+        backend: &agent_backend,
+        fast_backend: &fast_backend,
         registry,
         client,
-        &[],
-        &skill_store,
-        &log,
-        None,
-        None,
-        &[],
-        None,
-        None,
-        None,
-        None,
-        None,
-        "test",
-    )
+        memories: &[],
+        skill_store: &skill_store,
+        log: &log,
+        secrets: None,
+        progress: None,
+        conversation: &[],
+        incoming: None,
+        formatting_hint: None,
+        schedule_store: None,
+        memory_store: None,
+        frontend_context: None,
+        frontend: "test",
+        max_steps: None,
+        prior_context: None,
+    })
     .await
     .unwrap();
 
@@ -235,26 +239,28 @@ async fn agent_loop_direct_answer() {
     let agent_backend = MockBackend::new(vec![r#"{"action": "done", "text": "2 + 2 = 4"}"#]);
     let fast_backend = MockBackend::new(vec![]);
 
-    let result = agent::run_loop(
-        "what is 2+2?",
-        "test-task",
-        &agent_backend,
-        &fast_backend,
+    let result = agent::run_loop(LoopConfig {
+        task: "what is 2+2?",
+        task_id: "test-task",
+        backend: &agent_backend,
+        fast_backend: &fast_backend,
         registry,
         client,
-        &[],
-        &skill_store,
-        &log,
-        None,
-        None,
-        &[],
-        None,
-        None,
-        None,
-        None,
-        None,
-        "test",
-    )
+        memories: &[],
+        skill_store: &skill_store,
+        log: &log,
+        secrets: None,
+        progress: None,
+        conversation: &[],
+        incoming: None,
+        formatting_hint: None,
+        schedule_store: None,
+        memory_store: None,
+        frontend_context: None,
+        frontend: "test",
+        max_steps: None,
+        prior_context: None,
+    })
     .await
     .unwrap();
 
@@ -282,26 +288,28 @@ async fn agent_loop_tool_failure_recovery() {
     ]);
     let fast_backend = MockBackend::new(vec![]);
 
-    let result = agent::run_loop(
-        "do something",
-        "test-task",
-        &agent_backend,
-        &fast_backend,
+    let result = agent::run_loop(LoopConfig {
+        task: "do something",
+        task_id: "test-task",
+        backend: &agent_backend,
+        fast_backend: &fast_backend,
         registry,
         client,
-        &[],
-        &skill_store,
-        &log,
-        None,
-        None,
-        &[],
-        None,
-        None,
-        None,
-        None,
-        None,
-        "test",
-    )
+        memories: &[],
+        skill_store: &skill_store,
+        log: &log,
+        secrets: None,
+        progress: None,
+        conversation: &[],
+        incoming: None,
+        formatting_hint: None,
+        schedule_store: None,
+        memory_store: None,
+        frontend_context: None,
+        frontend: "test",
+        max_steps: None,
+        prior_context: None,
+    })
     .await
     .unwrap();
 

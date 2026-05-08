@@ -110,6 +110,30 @@ pub struct Checkpoint {
     pub up_to_step: u32,
 }
 
+/// Configuration for a single agent loop invocation.
+pub struct LoopConfig<'a> {
+    pub task: &'a str,
+    pub task_id: &'a str,
+    pub backend: &'a dyn ModelBackend,
+    pub fast_backend: &'a dyn ModelBackend,
+    pub registry: Arc<ToolRegistry>,
+    pub client: Arc<Client>,
+    pub memories: &'a [Memory],
+    pub skill_store: &'a SkillStore,
+    pub log: &'a EventLog,
+    pub secrets: Option<&'a Secrets>,
+    pub progress: Option<&'a ProgressTx>,
+    pub conversation: &'a [Message],
+    pub incoming: Option<&'a mut IncomingRx>,
+    pub formatting_hint: Option<&'a str>,
+    pub schedule_store: Option<Arc<crate::schedule::ScheduleStore>>,
+    pub memory_store: Option<Arc<crate::memory::MemoryStore>>,
+    pub frontend_context: Option<FrontendContext>,
+    pub frontend: &'a str,
+    pub max_steps: Option<u32>,
+    pub prior_context: Option<String>,
+}
+
 /// Static system prompt — identical across all steps and tasks.
 /// Placed in the system message so API providers can cache it.
 const AGENT_SYSTEM_PROMPT: &str = r#"You are an agent that completes tasks step by step.
@@ -234,7 +258,7 @@ return json_parse(resp.body)
 /// first (skills, memories, secrets, conversation, context, task), then
 /// volatile sections (tools, history, datetime) so that cache-breaking changes
 /// only invalidate the tail.
-const AGENT_USER_PROMPT_TEMPLATE: &str = r#"{memories}{conversation}{execution_context}Task: {task}
+const AGENT_USER_PROMPT_TEMPLATE: &str = r#"{memories}{conversation}{execution_context}{prior_context}Task: {task}
 
 Available tools:
 {tools}
@@ -420,6 +444,7 @@ pub fn build_agent_prompt(
     secret_descriptions: &[(&str, &str)],
     conversation: &[Message],
     frontend: &str,
+    prior_context: Option<&str>,
 ) -> Vec<Message> {
     let tools_section = if tools_section.is_empty() {
         "(none available — create one if needed)"
@@ -528,6 +553,14 @@ pub fn build_agent_prompt(
 
     let history_section = build_history_section(history, checkpoint);
 
+    let prior_section = match prior_context {
+        Some(ctx) if !ctx.is_empty() => format!(
+            "Prior completed work:\n{ctx}\n\n\
+             Focus: You are working on one step of a larger task. Complete only the objective below.\n\n"
+        ),
+        _ => String::new(),
+    };
+
     let user_content = AGENT_USER_PROMPT_TEMPLATE
         .replace("{tools}", tools_section)
         .replace(
@@ -536,6 +569,7 @@ pub fn build_agent_prompt(
         )
         .replace("{conversation}", &conversation_section)
         .replace("{execution_context}", &execution_context)
+        .replace("{prior_context}", &prior_section)
         .replace("{datetime}", &datetime)
         .replace("{task}", task)
         .replace("{history}", &history_section);
@@ -1253,27 +1287,30 @@ fn loop_stats(history: &[StepResult]) -> (u32, u32) {
     (tool_calls, code_runs)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_loop(
-    task: &str,
-    task_id: &str,
-    backend: &dyn ModelBackend,
-    fast_backend: &dyn ModelBackend,
-    registry: Arc<ToolRegistry>,
-    client: Arc<Client>,
-    memories: &[Memory],
-    skill_store: &SkillStore,
-    log: &EventLog,
-    secrets: Option<&Secrets>,
-    progress: Option<&ProgressTx>,
-    conversation: &[Message],
-    mut incoming: Option<&mut IncomingRx>,
-    formatting_hint: Option<&str>,
-    schedule_store: Option<Arc<crate::schedule::ScheduleStore>>,
-    memory_store: Option<Arc<crate::memory::MemoryStore>>,
-    frontend_context: Option<FrontendContext>,
-    frontend: &str,
-) -> Result<LoopResult, Box<dyn Error + Send + Sync>> {
+pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Error + Send + Sync>> {
+    let LoopConfig {
+        task,
+        task_id,
+        backend,
+        fast_backend,
+        registry,
+        client,
+        memories,
+        skill_store,
+        log,
+        secrets,
+        progress,
+        conversation,
+        mut incoming,
+        formatting_hint,
+        schedule_store,
+        memory_store,
+        frontend_context,
+        frontend,
+        max_steps,
+        prior_context,
+    } = config;
+    let max_steps = max_steps.unwrap_or(MAX_AGENT_STEPS);
     let emit = |update: ProgressUpdate| {
         if let Some(tx) = progress {
             let _ = tx.send(update);
@@ -1309,7 +1346,7 @@ pub async fn run_loop(
     // Track loaded skills to avoid re-loading the same skill multiple times.
     let mut loaded_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    for step in 1..=MAX_AGENT_STEPS {
+    for step in 1..=max_steps {
         let step_start = Instant::now();
 
         // Drain any user messages that arrived since the last step
@@ -1369,6 +1406,7 @@ pub async fn run_loop(
             &secret_descs,
             conversation,
             frontend,
+            prior_context.as_deref(),
         );
 
         // Check if we need a checkpoint before sending
@@ -1387,6 +1425,7 @@ pub async fn run_loop(
                 &secret_descs,
                 conversation,
                 frontend,
+                prior_context.as_deref(),
             );
         }
 
@@ -2141,7 +2180,7 @@ pub async fn run_loop(
 
         // Step budget warning: fire once when approaching the limit,
         // but don't overwrite a more specific transition from this iteration.
-        let remaining = MAX_AGENT_STEPS.saturating_sub(step);
+        let remaining = max_steps.saturating_sub(step);
         if remaining == BUDGET_WARNING_THRESHOLD && matches!(pending_transition, Transition::None) {
             pending_transition = Transition::StepBudgetWarning { remaining };
         }
@@ -2153,7 +2192,7 @@ pub async fn run_loop(
                       and what remains unfinished so the user knows where things stand."
         .to_string();
     history.push(StepResult {
-        step: MAX_AGENT_STEPS + 1,
+        step: max_steps + 1,
         action: Action::UserMessage {
             text: String::new(),
         },
@@ -2163,7 +2202,7 @@ pub async fn run_loop(
     });
     log.emit(Event::AgentTransition {
         task_id: task_id.to_string(),
-        step: MAX_AGENT_STEPS + 1,
+        step: max_steps + 1,
         transition_type: "forced_done".to_string(),
         detail: String::new(),
     })
@@ -2180,13 +2219,13 @@ pub async fn run_loop(
     .await?;
     let forced_dur = forced_start.elapsed();
     step_timings.push(StepTiming {
-        step: MAX_AGENT_STEPS + 1,
+        step: max_steps + 1,
         action: "forced_done".to_string(),
         duration: forced_dur,
     });
     log.emit(Event::StepCompleted {
         task_id: task_id.to_string(),
-        step: MAX_AGENT_STEPS + 1,
+        step: max_steps + 1,
         action_type: "forced_done".to_string(),
         duration_ms: forced_dur.as_millis() as u64,
         success: true,
@@ -2195,7 +2234,7 @@ pub async fn run_loop(
     let (tool_calls, code_runs) = loop_stats(&history);
     Ok(LoopResult {
         outcome: Outcome::Answer(answer),
-        steps: MAX_AGENT_STEPS,
+        steps: max_steps,
         tool_calls,
         code_runs,
         hit_step_limit: true,

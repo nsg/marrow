@@ -256,26 +256,28 @@ impl Runtime {
             .scope(
                 task_metrics,
                 PROMPT_CACHE_KEY.scope(cache_key, async {
-                    agent::run_loop(
-                        description,
-                        &task_id,
-                        agent_backend,
+                    crate::planner::run_planned(agent::LoopConfig {
+                        task: description,
+                        task_id: &task_id,
+                        backend: agent_backend,
                         fast_backend,
-                        self.registry.clone(),
-                        self.client.clone(),
-                        &memories,
-                        self.skill_store.as_ref(),
-                        self.log.as_ref(),
-                        Some(self.secrets.as_ref()),
+                        registry: self.registry.clone(),
+                        client: self.client.clone(),
+                        memories: &memories,
+                        skill_store: self.skill_store.as_ref(),
+                        log: self.log.as_ref(),
+                        secrets: Some(self.secrets.as_ref()),
                         progress,
                         conversation,
                         incoming,
                         formatting_hint,
-                        Some(self.schedule_store.clone()),
-                        Some(self.memory_store.clone()),
+                        schedule_store: Some(self.schedule_store.clone()),
+                        memory_store: Some(self.memory_store.clone()),
                         frontend_context,
                         frontend,
-                    )
+                        max_steps: None,
+                        prior_context: None,
+                    })
                     .await
                 }),
             )

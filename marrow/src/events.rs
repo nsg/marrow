@@ -105,6 +105,25 @@ pub enum Event {
         schedule_id: String,
         status: String,
     },
+    PlanTriageResult {
+        task_id: String,
+        decision: String,
+    },
+    PlanCreated {
+        task_id: String,
+        item_count: u32,
+    },
+    PlanItemStarted {
+        task_id: String,
+        item_index: u32,
+        objective: String,
+    },
+    PlanItemCompleted {
+        task_id: String,
+        item_index: u32,
+        success: bool,
+        steps_used: u32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
