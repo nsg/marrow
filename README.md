@@ -30,6 +30,14 @@ It can create long chains of model calls like this. There is a cap of 25 steps, 
 
 There are two ways into the agent loop. One is a message initiated by the user. The other is a scheduled task created by an earlier agent loop. The loop can exit in two ways: with an answer back to the user (`done`), or silently (`dismiss`) when the agent completed its work but has nothing to report — useful for monitoring and conditional notification tasks. If we hit 25 steps, an answer is forced.
 
+### Planner
+
+Before the agent loop runs, a planner decides how to approach the task. The fast model triages the task as **simple** or **complex**. Simple tasks (a single tool call, a direct question) go straight into the agent loop unchanged. Complex tasks — those needing multiple data sources or sequential operations — get decomposed into a plan.
+
+The fast model breaks the task into 2–5 todo items, each with an objective and acceptance criteria. Each item then runs its own agent loop with a full 25-step budget and fresh history, so the model only needs to focus on one small thing at a time. Between items, the fast model evaluates whether the step succeeded and builds a summary (including actual result data) that gets injected as context for the next item. If an item fails, it gets one retry with the failure context before being skipped.
+
+This plan→todo→execute pattern is designed to work well with open-weight models that struggle when asked to reason about the full problem and execute simultaneously. Every fallback degrades to the existing single-loop behavior: if triage fails, planning fails, or the plan has only one item, the task runs through the normal agent loop.
+
 ### Memories
 
 Memories are facts. They can be manipulated via tools during the agent run, or via the post-process memory management logic, where a non-blocking background task asks the model "is there anything we should remember from this exchange?".
@@ -84,7 +92,7 @@ All configuration lives in `config.toml`. Copy [`config.example.toml`](config.ex
 | Role | Used for | Required |
 |---|---|---|
 | `agent` | Agent loop planner — drives task execution and inline Lua generation | Yes |
-| `fast` | Session summarization, memory retrieval, and lightweight post-processing | Yes |
+| `fast` | Task triage, plan generation, step evaluation, session summarization, and memory retrieval | Yes |
 | `janitor` | Lua tool review, regeneration, and toolbox/memory cleanup | If janitor enabled |
 | `embedding` | Vector memory retrieval | No |
 
