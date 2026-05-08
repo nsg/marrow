@@ -1018,10 +1018,18 @@ pub fn parse_response(response: &str) -> ParsedResponse {
     }
     actions.extend(json_actions);
 
-    // If nothing was parsed, treat the whole response as a fallback done
+    // If nothing was parsed, treat the whole response as a fallback done.
+    // Discard content that is just a bare JSON object/array with no action
+    // key — the model occasionally emits "{}" or similar non-action JSON
+    // which should not be forwarded as an answer.
     if actions.is_empty() {
+        let fallback_text = if is_bare_json(trimmed) {
+            String::new()
+        } else {
+            trimmed.to_string()
+        };
         actions.push(Action::Done {
-            text: trimmed.to_string(),
+            text: fallback_text,
             fallback: true,
         });
     }
@@ -1036,6 +1044,22 @@ pub fn parse_action(response: &str) -> Action {
         text: response.trim().to_string(),
         fallback: true,
     })
+}
+
+/// Returns true if the text is a bare JSON value with no `"action"` key —
+/// e.g. `{}`, `{"key": 1}`, `[]`. These are not valid answers.
+fn is_bare_json(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    let first = t.as_bytes()[0];
+    if first != b'{' && first != b'[' {
+        return false;
+    }
+    // Must parse as valid JSON and must NOT contain an action key (those
+    // would have been caught by the action parser already).
+    serde_json::from_str::<serde_json::Value>(t).is_ok()
 }
 
 /// Heuristic: does this text look like the model was mid-thought rather than
@@ -1567,7 +1591,7 @@ pub async fn run_loop(
                     task_id: task_id.to_string(),
                     step,
                     action_type: "done".to_string(),
-                    detail: String::new(),
+                    detail: text.clone(),
                 })
                 .await;
 
@@ -2406,6 +2430,24 @@ mod tests {
         assert!(!looks_incomplete("The weather in Tokyo is 22°C and sunny."));
         assert!(!looks_incomplete("Here are your results: done."));
         assert!(!looks_incomplete("No data found for that query."));
+    }
+
+    #[test]
+    fn bare_json_becomes_empty_fallback() {
+        // Model sometimes returns "{}" or bare JSON without an action key.
+        // These should become a fallback done with empty text so the agent
+        // falls through to format_answer instead of echoing JSON to the user.
+        for input in ["{}", r#"{"key": 1}"#, "[]", r#"[1, 2]"#] {
+            let parsed = parse_response(input);
+            assert_eq!(parsed.actions.len(), 1, "input: {input}");
+            match &parsed.actions[0] {
+                Action::Done { text, fallback } => {
+                    assert!(text.is_empty(), "expected empty text for input: {input}");
+                    assert!(fallback, "expected fallback=true for input: {input}");
+                }
+                other => panic!("expected Done for input {input}, got {other:?}"),
+            }
+        }
     }
 
     #[test]
