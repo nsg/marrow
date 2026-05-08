@@ -38,6 +38,7 @@
   --font-mono: "JetBrains Mono", monospace;
 
   --sidebar-width: 56px;
+  --content-pad: clamp(16px, 3vw, 32px);
 }
 
 [data-theme="light"] {
@@ -202,17 +203,20 @@ body {
   flex-direction: column;
   margin-left: var(--sidebar-width);
   min-height: 100vh;
+  min-width: 0;
 }
 
 /* Top bar */
 .top-bar {
-  padding: 24px 32px 0 32px;
+  padding: 24px var(--content-pad) 0 var(--content-pad);
   flex-shrink: 0;
 }
 .top-bar-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 .view-title {
   font-family: var(--font-display);
@@ -272,8 +276,9 @@ body {
 /* Main content */
 .main {
   flex: 1;
-  padding: 24px 32px;
+  padding: 24px var(--content-pad);
   overflow-y: auto;
+  min-width: 0;
 }
 .tab-panel {
   display: none;
@@ -288,7 +293,7 @@ body {
 /* Footer */
 .footer {
   border-top: 1px solid var(--border);
-  padding: 10px 32px;
+  padding: 10px var(--content-pad);
   font-size: 11px;
   color: var(--text-muted);
   text-align: right;
@@ -457,9 +462,14 @@ body {
 .table-wrap {
   overflow-x: auto;
   background: var(--bg-surface);
+  border: 1px solid var(--border);
+  max-width: 100%;
+  container-type: inline-size;
+  -webkit-overflow-scrolling: touch;
 }
 table {
   width: 100%;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -495,6 +505,72 @@ tr.clickable:hover td:first-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@container (max-width: 720px) {
+  .table-wrap.responsive table,
+  .table-wrap.responsive tbody {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+  .table-wrap.responsive tr:first-child {
+    display: none !important;
+  }
+  .table-wrap.responsive tr:not(.task-detail-row) {
+    display: grid;
+    gap: 2px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .table-wrap.responsive tr:not(.task-detail-row):last-child {
+    border-bottom: none;
+  }
+  .table-wrap.responsive td {
+    display: grid;
+    grid-template-columns: minmax(74px, 6rem) minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    justify-items: start;
+    padding: 4px 0;
+    border-bottom: none;
+    min-width: 0;
+  }
+  .table-wrap.responsive td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-family: var(--font-body);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+  }
+  .table-wrap.responsive td[data-label="Description"],
+  .table-wrap.responsive td[data-label="Fact"],
+  .table-wrap.responsive td[data-label="Details"],
+  .table-wrap.responsive td[data-label="Model"] {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .table-wrap.responsive .truncate {
+    max-width: none;
+    white-space: normal;
+  }
+  .table-wrap.responsive .mono {
+    overflow-wrap: anywhere;
+  }
+  .table-wrap.responsive .task-detail-row {
+    display: block;
+    padding: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .table-wrap.responsive .task-detail-row td {
+    display: block;
+    padding: 0;
+  }
+  .table-wrap.responsive .task-detail-row td::before {
+    content: none;
+  }
 }
 
 /* Badges */
@@ -576,6 +652,8 @@ tr.clickable:hover td:first-child {
   align-items: center;
   gap: 14px;
   padding: 14px 18px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .tool-row-header:hover { background: var(--bg-hover); }
 .tool-row-name {
@@ -584,6 +662,7 @@ tr.clickable:hover td:first-child {
   font-weight: 600;
   color: var(--teal);
   flex-shrink: 0;
+  overflow-wrap: anywhere;
 }
 .tool-row-desc {
   font-size: 13px;
@@ -593,14 +672,17 @@ tr.clickable:hover td:first-child {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 18rem;
 }
 .tool-row-badges {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
+  flex: 1 1 auto;
   margin-left: auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .provides-tag {
   font-size: 10px;
@@ -609,6 +691,8 @@ tr.clickable:hover td:first-child {
   color: var(--blue);
   font-family: var(--font-mono);
   border-radius: 2px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .tool-row-header { cursor: pointer; }
 .tool-row.open .skill-row-chevron { transform: rotate(90deg); }
@@ -633,7 +717,7 @@ tr.clickable:hover td:first-child {
   overflow: auto;
   max-height: 500px;
   white-space: pre;
-  max-width: calc(100vw - var(--sidebar-width) - 100px);
+  max-width: 100%;
 }
 .tool-source code { color: var(--text-secondary); }
 
@@ -657,6 +741,7 @@ tr.clickable:hover td:first-child {
   padding: 14px 18px;
   cursor: pointer;
   transition: background 0.15s;
+  flex-wrap: wrap;
 }
 .skill-row-header:hover { background: var(--bg-hover); }
 .skill-row-name {
@@ -675,6 +760,7 @@ tr.clickable:hover td:first-child {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  flex: 1 1 18rem;
 }
 .skill-row-chevron {
   margin-left: auto;
@@ -860,10 +946,11 @@ tr.clickable:hover td:first-child {
   color: var(--text-primary);
   user-select: none;
   transition: background 0.15s;
+  min-width: 0;
 }
 .wf-phase-hdr:hover { background: var(--bg-hover); }
 .wf-phase-hdr .wf-icon { flex-shrink: 0; width: 16px; text-align: center; }
-.wf-phase-hdr .wf-label { flex: 1; }
+.wf-phase-hdr .wf-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .wf-phase-hdr .wf-meta {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -900,10 +987,11 @@ tr.clickable:hover td:first-child {
   border-radius: 4px;
   transition: background 0.15s;
   user-select: none;
+  min-width: 0;
 }
 .wf-step-hdr:hover { background: var(--bg-hover); }
 .wf-step-hdr .wf-icon { flex-shrink: 0; width: 16px; text-align: center; }
-.wf-step-hdr .wf-label { flex: 1; font-weight: 500; color: var(--text-primary); }
+.wf-step-hdr .wf-label { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 500; color: var(--text-primary); }
 .wf-step-hdr .wf-meta {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -932,14 +1020,16 @@ tr.clickable:hover td:first-child {
   font-family: var(--font-mono);
   color: var(--text-secondary);
   border-radius: 3px;
+  min-width: 0;
 }
 .wf-action .wf-icon { flex-shrink: 0; width: 16px; text-align: center; font-style: normal; }
-.wf-action .wf-action-name { color: var(--text-primary); }
+.wf-action .wf-action-name { color: var(--text-primary); min-width: 0; overflow-wrap: anywhere; }
 .wf-action .wf-action-detail {
   color: var(--text-muted);
   font-size: 11px;
   margin-left: auto;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .wf-action.wf-fail .wf-action-name { color: var(--red); }
 
@@ -1096,6 +1186,8 @@ tr.clickable:hover td:first-child {
   margin-bottom: 12px;
   cursor: pointer;
   transition: background 0.15s;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .sched-header:hover { background: var(--bg-hover); margin: -8px -10px 4px -10px; padding: 8px 10px; border-radius: 2px; }
 .sched-title {
@@ -1104,7 +1196,7 @@ tr.clickable:hover td:first-child {
   font-size: 14px;
   color: var(--text-primary);
 }
-.sched-badges { display: flex; gap: 6px; flex-shrink: 0; }
+.sched-badges { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
 .sched-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -1176,19 +1268,14 @@ tr.clickable:hover td:first-child {
   .sidebar-footer { display: none; }
   .main-wrapper {
     margin-left: 0;
-    margin-bottom: 52px;
+    padding-bottom: calc(52px + env(safe-area-inset-bottom, 0px));
     max-width: 100vw;
     min-width: 0;
   }
-  .main { overflow: hidden; }
-  .top-bar { padding: 16px 16px 0 16px; }
-  .main { padding: 16px; }
-  .footer { padding: 10px 16px; }
   .view-title { font-size: 20px; }
   .stat-row { grid-template-columns: repeat(2, 1fr); }
   .tool-grid { grid-template-columns: 1fr; }
   .info-grid { grid-template-columns: 1fr; }
-  .truncate { max-width: 200px; }
   table { font-size: 12px; }
   th { padding: 8px 8px; font-size: 9px; }
   td { padding: 7px 8px; }
@@ -1610,10 +1697,10 @@ tr.clickable:hover td:first-child {
       const roles = (data.config && data.config.roles) || [];
       if (roles.length > 0) {
         html += '<div class="section-title fade-child">Model Configuration</div>';
-        html += '<div class="table-wrap fade-child"><table>';
+        html += '<div class="table-wrap responsive fade-child"><table>';
         html += '<tr><th>Role</th><th>Provider</th><th>Model</th></tr>';
         for (const r of roles) {
-          html += '<tr><td>' + esc(r.name) + '</td><td class="mono">' + esc(r.provider) + '</td><td class="mono">' + esc(r.model) + '</td></tr>';
+          html += '<tr><td data-label="Role">' + esc(r.name) + '</td><td data-label="Provider" class="mono">' + esc(r.provider) + '</td><td data-label="Model" class="mono">' + esc(r.model) + '</td></tr>';
         }
         html += '</table></div>';
       }
@@ -1677,17 +1764,17 @@ tr.clickable:hover td:first-child {
         setContent("tasks-content", emptyMsg("No tasks found."));
         return;
       }
-      let html = '<div class="table-wrap"><table id="tasks-table">';
+      let html = '<div class="table-wrap responsive"><table id="tasks-table">';
       html += '<tr><th>Time</th><th>Description</th><th>Role</th><th>Status</th><th>Steps</th><th>Duration</th></tr>';
       for (const t of tasks) {
         const rowId = "task-" + t.task_id;
         html += '<tr class="clickable" data-task-id="' + esc(t.task_id) + '">';
-        html += '<td class="mono">' + esc(formatTime(t.timestamp_ms)) + '</td>';
-        html += '<td class="truncate">' + esc(truncate(t.description, 80)) + '</td>';
-        html += '<td>' + esc(t.role || "") + '</td>';
-        html += '<td>' + statusBadge(t.status) + '</td>';
-        html += '<td class="mono">' + esc(t.steps != null ? t.steps : "--") + '</td>';
-        html += '<td class="mono">' + esc(formatDuration(t.total_duration_ms)) + '</td>';
+        html += '<td data-label="Time" class="mono">' + esc(formatTime(t.timestamp_ms)) + '</td>';
+        html += '<td data-label="Description" class="truncate">' + esc(truncate(t.description, 80)) + '</td>';
+        html += '<td data-label="Role">' + esc(t.role || "") + '</td>';
+        html += '<td data-label="Status">' + statusBadge(t.status) + '</td>';
+        html += '<td data-label="Steps" class="mono">' + esc(t.steps != null ? t.steps : "--") + '</td>';
+        html += '<td data-label="Duration" class="mono">' + esc(formatDuration(t.total_duration_ms)) + '</td>';
         html += '</tr>';
         html += '<tr class="task-detail-row" id="' + rowId + '" style="display:none"><td colspan="6"><div class="task-detail-inner"><span class="spinner"></span> Loading...</div></td></tr>';
       }
@@ -2094,7 +2181,7 @@ tr.clickable:hover td:first-child {
       if (memories.length === 0) {
         html += emptyMsg(search ? "No memories match your search." : "No memories stored.");
       } else {
-        html += '<div class="table-wrap"><table>';
+        html += '<div class="table-wrap responsive"><table>';
         html += '<tr><th>ID</th><th>Fact</th><th>Source</th><th>Embedded</th><th>Created</th></tr>';
         for (const m of memories) {
           const shortId = m.id ? String(m.id).slice(0, 8) : "--";
@@ -2102,11 +2189,11 @@ tr.clickable:hover td:first-child {
             ? '<span style="color:var(--green)" title="has embedding">&#x25cf;</span>'
             : '<span style="color:var(--text-muted)" title="no embedding">&#x25cb;</span>';
           html += '<tr>';
-          html += '<td class="mono">' + esc(shortId) + '</td>';
-          html += '<td>' + esc(m.fact) + '</td>';
-          html += '<td>' + sourceBadge(m.source) + '</td>';
-          html += '<td style="text-align:center">' + embeddedIcon + '</td>';
-          html += '<td class="mono">' + esc(formatDate(m.created)) + '</td>';
+          html += '<td data-label="ID" class="mono">' + esc(shortId) + '</td>';
+          html += '<td data-label="Fact">' + esc(m.fact) + '</td>';
+          html += '<td data-label="Source">' + sourceBadge(m.source) + '</td>';
+          html += '<td data-label="Embedded" style="text-align:center">' + embeddedIcon + '</td>';
+          html += '<td data-label="Created" class="mono">' + esc(formatDate(m.created)) + '</td>';
           html += '</tr>';
         }
         html += '</table></div>';
@@ -2225,13 +2312,13 @@ tr.clickable:hover td:first-child {
         setContent("events-content", emptyMsg("No events found."));
         return;
       }
-      let html = '<div class="table-wrap"><table>';
+      let html = '<div class="table-wrap responsive"><table>';
       html += '<tr><th>Time</th><th>Type</th><th>Details</th></tr>';
       for (const ev of events) {
         html += '<tr>';
-        html += '<td class="mono" style="white-space:nowrap">' + esc(formatTime(ev.timestamp_ms)) + '</td>';
-        html += '<td>' + eventTypeBadge(ev.type) + '</td>';
-        html += '<td style="word-break:break-word">' + esc(eventSummary(ev)) + '</td>';
+        html += '<td data-label="Time" class="mono" style="white-space:nowrap">' + esc(formatTime(ev.timestamp_ms)) + '</td>';
+        html += '<td data-label="Type">' + eventTypeBadge(ev.type) + '</td>';
+        html += '<td data-label="Details" style="word-break:break-word">' + esc(eventSummary(ev)) + '</td>';
         html += '</tr>';
       }
       html += '</table></div>';
