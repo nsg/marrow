@@ -1177,7 +1177,10 @@ tr.clickable:hover td:first-child {
   .main-wrapper {
     margin-left: 0;
     margin-bottom: 52px;
+    max-width: 100vw;
+    min-width: 0;
   }
+  .main { overflow: hidden; }
   .top-bar { padding: 16px 16px 0 16px; }
   .main { padding: 16px; }
   .footer { padding: 10px 16px; }
@@ -1186,6 +1189,12 @@ tr.clickable:hover td:first-child {
   .tool-grid { grid-template-columns: 1fr; }
   .info-grid { grid-template-columns: 1fr; }
   .truncate { max-width: 200px; }
+  table { font-size: 12px; }
+  th { padding: 8px 8px; font-size: 9px; }
+  td { padding: 7px 8px; }
+  .timeline-time { min-width: auto; font-size: 11px; }
+  .timeline-item { gap: 8px; }
+  .timeline-content { min-width: 0; overflow-wrap: break-word; word-break: break-word; }
 }
 </style>
 </head>
@@ -1497,6 +1506,28 @@ tr.clickable:hover td:first-child {
     else if (t.startsWith("agent") || t.includes("agent")) cls = "badge-agent";
     else if (t.startsWith("tool") || t.includes("tool")) cls = "badge-tool";
     return '<span class="badge ' + cls + '">' + esc(type) + '</span>';
+  }
+
+  function eventSummary(ev) {
+    switch (ev.type) {
+      case "task_created": return ev.description || ev.task_id;
+      case "task_executed": return (ev.status || "") + (ev.task_id ? " — " + ev.task_id.slice(0, 8) : "");
+      case "step_completed": return "step " + ev.step + " " + (ev.action_type || "") + (ev.duration_ms ? " (" + formatDuration(ev.duration_ms) + ")" : "");
+      case "agent_action": return (ev.action_type || "") + (ev.detail ? " — " + truncate(ev.detail, 60) : "");
+      case "agent_model_response": return "step " + ev.step + " — " + ev.response_len + " chars";
+      case "agent_tool_result": return (ev.tool || "") + (ev.success ? " ✓" : " ✗") + " — " + ev.output_len + " chars";
+      case "tool_generated": return (ev.name || "") + (ev.description ? " — " + ev.description : "");
+      case "tool_selected": return (ev.tools || []).join(", ");
+      case "context_assembled": return (ev.providers || []).join(", ");
+      case "plan_triage_result": return ev.decision || "";
+      case "plan_item_started": return "#" + ev.item_index + " " + (ev.objective || "");
+      case "plan_item_completed": return "#" + ev.item_index + (ev.success ? " ✓" : " ✗") + " — " + ev.steps_used + " steps";
+      case "janitor_review": return (ev.tool || "") + " attempt " + ev.attempt + (ev.passed ? " passed" : " failed") + (ev.issues ? " — " + ev.issues : "");
+      case "janitor_regenerate": return (ev.tool || "") + " attempt " + ev.attempt;
+      case "janitor_deleted": return (ev.tool || "") + (ev.reason ? " — " + truncate(ev.reason, 80) : "");
+      case "janitor_escalated": return (ev.tool || "") + (ev.reason ? " — " + truncate(ev.reason, 80) : "");
+      default: return JSON.stringify(ev).slice(0, 150);
+    }
   }
 
   function truncate(s, max) {
