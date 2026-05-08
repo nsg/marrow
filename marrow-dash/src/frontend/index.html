@@ -1680,6 +1680,11 @@ tr.clickable:hover td:first-child {
       const data = await apiFetch("/api/overview");
       let html = "";
 
+      // Version
+      if (data.version) {
+        html += '<div class="fade-child" style="margin-bottom:16px;font-size:13px;color:var(--text-secondary)">marrow <span class="mono" style="color:var(--accent)">' + esc(data.version) + '</span></div>';
+      }
+
       // Stat cards
       html += '<div class="stat-row fade-child">';
       html += statCard("Tasks", data.total_tasks, "blue");

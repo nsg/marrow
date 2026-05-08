@@ -9,6 +9,7 @@ use crate::state::AppState;
 
 #[derive(Serialize)]
 struct OverviewResponse {
+    version: &'static str,
     #[serde(flatten)]
     stats: crate::data::events::OverviewStats,
     memory: MemoryOverview,
@@ -88,6 +89,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
     };
 
     Json(OverviewResponse {
+        version: env!("CARGO_PKG_VERSION"),
         stats,
         memory,
         toolbox,

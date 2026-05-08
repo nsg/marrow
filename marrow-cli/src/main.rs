@@ -15,7 +15,8 @@ use tokio::sync::mpsc;
 #[derive(Parser)]
 #[command(
     name = "marrow",
-    about = "A lean agent framework for workflow automation"
+    about = "A lean agent framework for workflow automation",
+    version
 )]
 struct Cli {
     #[arg(short, long, default_value = "config.toml")]

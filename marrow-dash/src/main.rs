@@ -11,7 +11,7 @@ mod frontend;
 mod state;
 
 #[derive(Parser)]
-#[command(name = "marrow-dash", about = "Read-only dashboard for marrow")]
+#[command(name = "marrow-dash", about = "Read-only dashboard for marrow", version)]
 struct Args {
     #[arg(long, default_value = "config.toml")]
     config: PathBuf,
