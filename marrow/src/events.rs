@@ -63,6 +63,10 @@ pub enum Event {
         step: u32,
         action_type: String,
         detail: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        params_json: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
     },
     AgentToolResult {
         task_id: String,

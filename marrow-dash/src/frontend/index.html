@@ -834,27 +834,205 @@ tr.clickable:hover td:first-child {
   background: var(--bg-raised);
 }
 .task-detail-inner {
-  padding: 14px 18px;
-  max-height: 400px;
+  padding: 16px 20px;
+  max-height: 600px;
   overflow-y: auto;
-  border-left: 2px solid var(--accent);
   margin: 0;
 }
-.task-event {
+
+/* Workflow tree */
+.wf-phase {
+  margin-bottom: 2px;
+}
+.wf-phase:last-child { margin-bottom: 0; }
+.wf-phase-hdr {
   display: flex;
-  gap: 12px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: 12px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font-body);
+  font-weight: 500;
+  color: var(--text-primary);
+  user-select: none;
+  transition: background 0.15s;
 }
-.task-event:last-child { border-bottom: none; }
-.task-event-time {
+.wf-phase-hdr:hover { background: var(--bg-hover); }
+.wf-phase-hdr .wf-icon { flex-shrink: 0; width: 16px; text-align: center; }
+.wf-phase-hdr .wf-label { flex: 1; }
+.wf-phase-hdr .wf-meta {
   font-family: var(--font-mono);
+  font-size: 11px;
   color: var(--text-muted);
-  white-space: nowrap;
-  min-width: 80px;
+  font-weight: 400;
 }
-.task-event-content { flex: 1; word-break: break-word; }
+.wf-phase-hdr .wf-chevron {
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+.wf-phase.open > .wf-phase-hdr .wf-chevron { transform: rotate(90deg); }
+.wf-phase-body {
+  display: none;
+  padding-left: 20px;
+  border-left: 2px solid var(--border);
+  margin-left: 19px;
+  margin-top: 0;
+}
+.wf-phase.open > .wf-phase-body { display: block; }
+
+.wf-step {
+  margin: 0;
+}
+.wf-step-hdr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: var(--font-body);
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s;
+  user-select: none;
+}
+.wf-step-hdr:hover { background: var(--bg-hover); }
+.wf-step-hdr .wf-icon { flex-shrink: 0; width: 16px; text-align: center; }
+.wf-step-hdr .wf-label { flex: 1; font-weight: 500; color: var(--text-primary); }
+.wf-step-hdr .wf-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.wf-step-hdr .wf-chevron {
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+.wf-step.open > .wf-step-hdr .wf-chevron { transform: rotate(90deg); }
+.wf-step-body {
+  display: none;
+  padding-left: 18px;
+  border-left: 2px solid var(--border-subtle);
+  margin-left: 17px;
+}
+.wf-step.open > .wf-step-body { display: block; }
+
+.wf-action {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  border-radius: 3px;
+}
+.wf-action .wf-icon { flex-shrink: 0; width: 16px; text-align: center; font-style: normal; }
+.wf-action .wf-action-name { color: var(--text-primary); }
+.wf-action .wf-action-detail {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.wf-action.wf-fail .wf-action-name { color: var(--red); }
+
+.wf-parallel-group {
+  border-left: 2px solid var(--purple);
+  padding-left: 8px;
+  margin: 2px 0 2px 6px;
+  position: relative;
+}
+.wf-parallel-label {
+  font-size: 10px;
+  font-family: var(--font-body);
+  color: var(--purple);
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 0 0 2px 0;
+}
+
+.wf-transition {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-body);
+  color: var(--amber);
+  font-style: italic;
+}
+
+.wf-done-text {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: var(--font-body);
+  color: var(--text-secondary);
+  border-left: 2px solid var(--green);
+  margin: 4px 0 4px 6px;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+.wf-done-text h1, .wf-done-text h2, .wf-done-text h3,
+.wf-done-text h4, .wf-done-text h5, .wf-done-text h6 {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  margin: 6px 0 2px;
+}
+.wf-done-text h2 { font-size: 13px; }
+.wf-done-text strong { color: var(--text-primary); }
+.wf-done-text ul { margin: 2px 0; padding-left: 18px; }
+.wf-done-text li { margin: 1px 0; }
+.wf-done-text code {
+  background: var(--bg-base);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.wf-done-text pre {
+  background: var(--bg-base);
+  padding: 6px 8px;
+  border-radius: 4px;
+  margin: 4px 0;
+  overflow-x: auto;
+}
+.wf-done-text table { border-collapse: collapse; margin: 4px 0; font-size: 11px; }
+.wf-done-text th, .wf-done-text td { padding: 2px 8px; border: 1px solid var(--border); }
+.wf-done-text th { background: var(--bg-base); color: var(--text-primary); font-weight: 500; }
+
+/* Action detail expand (params / code) */
+.wf-action-expand {
+  margin: 2px 0 4px 24px;
+  padding: 6px 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+.wf-action-expand .wf-param-key { color: var(--teal); }
+.wf-action-expand .wf-param-val { color: var(--text-primary); }
+.wf-action-expand .wf-code-kw { color: var(--purple); }
+
+/* Status icons */
+.wf-ok { color: var(--green); }
+.wf-err { color: var(--red); }
+.wf-info { color: var(--blue); }
+.wf-plan { color: var(--purple); }
 
 /* Loading / empty / error states */
 .state-msg {
@@ -1195,6 +1373,8 @@ tr.clickable:hover td:first-child {
     var inList = false;
     var inCode = false;
     var codeBuf = "";
+    var inTable = false;
+    var tableRow = 0;
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
       if (line.startsWith("```")) {
@@ -1221,10 +1401,21 @@ tr.clickable:hover td:first-child {
         continue;
       }
       if (inList) { out += "</ul>"; inList = false; }
+      if (/^\|.+\|/.test(line)) {
+        if (!inTable) { out += "<table>"; inTable = true; tableRow = 0; }
+        if (/^\|\s*[-:]+/.test(line)) { continue; }
+        var cells = line.split("|").filter(function(c, idx, arr) { return idx > 0 && idx < arr.length - 1; });
+        var tag = tableRow === 0 ? "th" : "td";
+        out += "<tr>" + cells.map(function(c) { return "<" + tag + ">" + inline(esc(c.trim())) + "</" + tag + ">"; }).join("") + "</tr>";
+        tableRow++;
+        continue;
+      }
+      if (inTable) { out += "</table>"; inTable = false; }
       if (line.trim() === "") { out += '<div class="md-spacer"></div>'; continue; }
       out += '<p>' + inline(esc(line)) + '</p>';
     }
     if (inList) out += "</ul>";
+    if (inTable) out += "</table>";
     if (inCode) out += '<pre><code>' + esc(codeBuf) + '</code></pre>';
     return out;
   }
@@ -1496,7 +1687,6 @@ tr.clickable:hover td:first-child {
       state.tasks.expanded = null;
       return;
     }
-    // Collapse any previously expanded
     const allDetails = document.querySelectorAll(".task-detail-row");
     for (const d of allDetails) d.style.display = "none";
 
@@ -1511,40 +1701,270 @@ tr.clickable:hover td:first-child {
         inner.innerHTML = '<div style="color:var(--text-secondary);font-size:12px">No events for this task.</div>';
         return;
       }
-      let html = "";
-      for (const ev of events) {
-        html += '<div class="task-event">';
-        html += '<span class="task-event-time">' + esc(formatTimeShort(ev.timestamp_ms)) + '</span>';
-        html += '<span>' + eventTypeBadge(ev.type) + '</span>';
-        html += '<span class="task-event-content">' + esc(eventSummary(ev)) + '</span>';
-        html += '</div>';
-      }
-      inner.innerHTML = html;
+      inner.innerHTML = buildWorkflow(events);
+      inner.querySelectorAll(".wf-phase-hdr").forEach(function(h) {
+        h.addEventListener("click", function() { this.parentElement.classList.toggle("open"); });
+      });
+      inner.querySelectorAll(".wf-step-hdr").forEach(function(h) {
+        h.addEventListener("click", function(e) { e.stopPropagation(); this.parentElement.classList.toggle("open"); });
+      });
     } catch (e) {
       inner.innerHTML = '<div class="state-msg error">' + esc(e.message) + '</div>';
     }
   }
 
-  function eventSummary(ev) {
-    if (ev.type === "agent_transition") {
-      let txt = ev.transition_type || "unknown";
-      if (ev.detail) txt += " — " + ev.detail;
-      return "step " + (ev.step || "?") + ": " + txt;
+  function wfStatusIcon(success) {
+    return success ? '<span class="wf-icon wf-ok">✓</span>' : '<span class="wf-icon wf-err">✗</span>';
+  }
+
+  function actionIcon(type) {
+    if (type === "call_tool") return '<i class="wf-icon" style="color:var(--teal)">⚙</i>';
+    if (type === "run_code") return '<i class="wf-icon" style="color:var(--amber)">⚡</i>';
+    if (type === "save_tool") return '<i class="wf-icon" style="color:var(--blue)">💾</i>';
+    if (type === "remove_tool") return '<i class="wf-icon" style="color:var(--red)">🗑</i>';
+    if (type === "load_skill") return '<i class="wf-icon" style="color:var(--purple)">📖</i>';
+    if (type === "done") return '<i class="wf-icon wf-ok">✓</i>';
+    if (type === "dismiss") return '<i class="wf-icon wf-info">—</i>';
+    if (type === "progress") return '<i class="wf-icon" style="color:var(--blue)">💬</i>';
+    return '<i class="wf-icon">•</i>';
+  }
+
+  function buildWorkflow(events) {
+    // Extract plan-level info
+    var triage = null, planItems = [], phases = [];
+    for (var ev of events) {
+      if (ev.type === "plan_triage_result") triage = ev;
+      if (ev.type === "plan_item_started") planItems.push(ev);
     }
-    const parts = [];
-    for (const k of Object.keys(ev)) {
-      if (k === "timestamp_ms" || k === "type") continue;
-      const v = ev[k];
-      if (v == null) continue;
-      if (typeof v === "string" && v.length > 120) {
-        parts.push(k + ": " + v.slice(0, 120) + "…");
-      } else if (typeof v === "object") {
-        parts.push(k + ": " + JSON.stringify(v).slice(0, 120));
-      } else {
-        parts.push(k + ": " + v);
+
+    // Group events into phases based on plan items
+    if (planItems.length > 0) {
+      // Planned execution: each plan_item_started..plan_item_completed is a phase
+      var phaseIdx = 0;
+      var currentPhase = null;
+      for (var ev of events) {
+        if (ev.type === "plan_item_started") {
+          currentPhase = { objective: ev.objective || "Step " + (ev.item_index + 1), events: [], success: null, steps: 0, duration: 0 };
+          phases.push(currentPhase);
+        } else if (ev.type === "plan_item_completed" && currentPhase) {
+          currentPhase.success = ev.success;
+          currentPhase.steps = ev.steps_used || 0;
+        } else if (currentPhase && (ev.type || "").startsWith("agent") || (ev.type || "").startsWith("step")) {
+          if (currentPhase) currentPhase.events.push(ev);
+        }
+      }
+    } else {
+      // Direct execution: single phase with all agent events
+      var directEvents = events.filter(function(e) {
+        return (e.type || "").startsWith("agent") || (e.type || "").startsWith("step");
+      });
+      if (directEvents.length > 0) {
+        phases.push({ objective: "Execution", events: directEvents, success: null, steps: 0, duration: 0 });
       }
     }
-    return parts.join(" | ") || "(event)";
+
+    // Compute phase stats from step_completed events
+    for (var p of phases) {
+      var dur = 0, steps = 0, allOk = true;
+      for (var ev of p.events) {
+        if (ev.type === "step_completed") {
+          steps++;
+          dur += ev.duration_ms || 0;
+          if (!ev.success) allOk = false;
+        }
+      }
+      if (p.success === null) {
+        // Check final action for done/dismiss
+        var lastAction = null;
+        for (var ev of p.events) { if (ev.type === "agent_action") lastAction = ev; }
+        p.success = allOk;
+      }
+      p.steps = p.steps || steps;
+      p.duration = dur;
+    }
+
+    // Build HTML
+    var html = "";
+
+    // Triage row
+    if (triage) {
+      var triageIcon = triage.decision === "needs_plan"
+        ? '<span class="wf-icon wf-plan">◈</span>'
+        : '<span class="wf-icon wf-info">→</span>';
+      var triageLabel = triage.decision === "needs_plan" ? "Planned execution" : "Direct execution";
+      html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 12px;font-size:12px;color:var(--text-secondary);margin-bottom:4px;">';
+      html += triageIcon + ' <span>' + esc(triageLabel) + '</span>';
+      html += '</div>';
+    }
+
+    // Phases
+    for (var pi = 0; pi < phases.length; pi++) {
+      var p = phases[pi];
+      var phaseSteps = groupSteps(p.events);
+      var openClass = phases.length === 1 || pi === phases.length - 1 ? " open" : "";
+
+      html += '<div class="wf-phase' + openClass + '">';
+      html += '<div class="wf-phase-hdr">';
+      html += wfStatusIcon(p.success);
+      html += '<span class="wf-label">' + esc(p.objective) + '</span>';
+      html += '<span class="wf-meta">' + esc(p.steps + (p.steps === 1 ? " step" : " steps"));
+      if (p.duration) html += ' · ' + esc(formatDuration(p.duration));
+      html += '</span>';
+      html += '<span class="wf-chevron">▶</span>';
+      html += '</div>';
+      html += '<div class="wf-phase-body">';
+
+      for (var si = 0; si < phaseSteps.length; si++) {
+        var s = phaseSteps[si];
+        html += renderStep(s, si === phaseSteps.length - 1);
+      }
+
+      html += '</div></div>';
+    }
+
+    // Task-level events outside phases (task_created, task_executed)
+    if (!html) {
+      html = '<div style="color:var(--text-secondary);font-size:12px;padding:8px;">No workflow steps recorded.</div>';
+    }
+
+    return html;
+  }
+
+  function groupSteps(events) {
+    // Group events by step number into step objects
+    var steps = [], stepMap = {};
+    for (var ev of events) {
+      if (ev.type === "agent_action" || ev.type === "agent_tool_result" || ev.type === "step_completed" || ev.type === "agent_transition") {
+        var sn = ev.step || 0;
+        if (!stepMap[sn]) {
+          stepMap[sn] = { step: sn, actions: [], results: [], transitions: [], completed: null };
+          steps.push(stepMap[sn]);
+        }
+        var bucket = stepMap[sn];
+        if (ev.type === "agent_action") bucket.actions.push(ev);
+        else if (ev.type === "agent_tool_result") bucket.results.push(ev);
+        else if (ev.type === "step_completed") bucket.completed = ev;
+        else if (ev.type === "agent_transition") bucket.transitions.push(ev);
+      }
+    }
+    return steps;
+  }
+
+  function renderStep(s, isLast) {
+    var c = s.completed;
+    var ok = c ? c.success : true;
+    var dur = c ? c.duration_ms : 0;
+    var actionType = c ? (c.action_type || "") : "";
+    var isParallel = actionType.startsWith("parallel(");
+    var stepLabel = "Step " + s.step;
+    if (actionType === "done" || actionType === "done_nudge") stepLabel += " — done";
+    else if (actionType === "dismiss") stepLabel += " — dismiss";
+    else if (isParallel) stepLabel += " — " + esc(actionType);
+    var openClass = isLast ? " open" : "";
+
+    var html = '<div class="wf-step' + openClass + '">';
+    html += '<div class="wf-step-hdr">';
+    html += wfStatusIcon(ok);
+    html += '<span class="wf-label">' + stepLabel + '</span>';
+    if (dur) html += '<span class="wf-meta">' + esc(formatDuration(dur)) + '</span>';
+    html += '<span class="wf-chevron">▶</span>';
+    html += '</div>';
+    html += '<div class="wf-step-body">';
+
+    // Transitions (system messages)
+    for (var t of s.transitions) {
+      var msg = t.transition_type || "";
+      if (t.detail) msg += " — " + t.detail;
+      html += '<div class="wf-transition">⚠ ' + esc(msg) + '</div>';
+    }
+
+    // Actions
+    if (isParallel && s.actions.length > 1) {
+      html += '<div class="wf-parallel-group">';
+      html += '<div class="wf-parallel-label">parallel</div>';
+      for (var a of s.actions) {
+        html += renderAction(a, s.results);
+      }
+      html += '</div>';
+    } else {
+      for (var a of s.actions) {
+        html += renderAction(a, s.results);
+      }
+    }
+
+    html += '</div></div>';
+    return html;
+  }
+
+  function renderAction(a, results) {
+    var atype = a.action_type || "";
+    var name = a.detail || atype;
+    if (atype === "done" || atype === "dismiss") name = atype;
+    var icon = actionIcon(atype);
+
+    // Find matching result
+    var result = null;
+    for (var r of results) {
+      if (r.tool === a.detail || (atype === "run_code" && r.tool === a.detail)) {
+        result = r;
+        break;
+      }
+    }
+
+    var failClass = (result && !result.success) ? " wf-fail" : "";
+    var html = '<div class="wf-action' + failClass + '">';
+    html += icon;
+    html += '<span class="wf-action-name">' + esc(name) + '</span>';
+    if (result) {
+      var detail = result.success ? (result.output_len ? result.output_len + " chars" : "ok") : "failed";
+      html += '<span class="wf-action-detail">' + esc(detail) + '</span>';
+    }
+    html += '</div>';
+
+    // Show tool params
+    if (atype === "call_tool" && a.params_json) {
+      try {
+        var params = typeof a.params_json === "string" ? JSON.parse(a.params_json) : a.params_json;
+        if (params && Object.keys(params).length > 0) {
+          html += '<div class="wf-action-expand">';
+          for (var k of Object.keys(params).sort()) {
+            var v = params[k];
+            var display = (typeof v === "string" && v.length > 120) ? v.slice(0, 120) + "…" : v;
+            html += '<span class="wf-param-key">' + esc(k) + '</span>: <span class="wf-param-val">' + esc(display) + '</span>\n';
+          }
+          html += '</div>';
+        }
+      } catch(e) {}
+    }
+
+    // Show Lua code
+    if (atype === "run_code" && a.code) {
+      var code = a.code.length > 1000 ? a.code.slice(0, 1000) + "\n…" : a.code;
+      html += '<div class="wf-action-expand">' + highlightLua(code) + '</div>';
+    }
+
+    // Show done text preview
+    if (atype === "done" && a.detail && a.detail.length > 0) {
+      var preview = a.detail.length > 500 ? a.detail.slice(0, 500) + "\n…" : a.detail;
+      html += '<div class="wf-done-text">' + renderMarkdown(preview) + '</div>';
+    }
+
+    return html;
+  }
+
+  function highlightLua(code) {
+    var lines = code.split("\n");
+    var out = "";
+    var keywords = ["local","function","end","if","then","else","elseif","for","while","do","return","in","not","and","or","true","false","nil","repeat","until"];
+    for (var line of lines) {
+      var escaped = esc(line);
+      for (var kw of keywords) {
+        var re = new RegExp("\\b(" + kw + ")\\b", "g");
+        escaped = escaped.replace(re, '<span class="wf-code-kw">$1</span>');
+      }
+      out += escaped + "\n";
+    }
+    return out;
   }
 
   // --- Tools ---

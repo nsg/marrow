@@ -5,9 +5,14 @@ use std::path::Path;
 use marrow::events::{Event, LogEntry};
 use serde::Serialize;
 
+pub struct RawEntry {
+    pub parsed: LogEntry,
+    pub raw: serde_json::Value,
+}
+
 #[derive(Default)]
 pub struct EventData {
-    pub entries: Vec<LogEntry>,
+    pub entries: Vec<RawEntry>,
     byte_offset: u64,
 }
 
@@ -26,14 +31,7 @@ pub struct TaskSummary {
 pub struct TaskDetail {
     #[serde(flatten)]
     pub summary: TaskSummary,
-    pub events: Vec<TaskEvent>,
-}
-
-#[derive(Serialize)]
-pub struct TaskEvent {
-    pub timestamp_ms: u64,
-    #[serde(flatten)]
-    pub event: serde_json::Value,
+    pub events: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -64,9 +62,10 @@ impl EventData {
 
         for line in reader.lines() {
             let Ok(line) = line else { break };
-            offset += line.len() as u64 + 1; // +1 for newline
+            offset += line.len() as u64 + 1;
             if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
-                data.entries.push(entry);
+                let raw = serde_json::from_str::<serde_json::Value>(&line).unwrap_or_default();
+                data.entries.push(RawEntry { parsed: entry, raw });
             }
         }
 
@@ -101,7 +100,8 @@ impl EventData {
             let Ok(line) = line else { break };
             self.byte_offset += line.len() as u64 + 1;
             if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
-                self.entries.push(entry);
+                let raw = serde_json::from_str::<serde_json::Value>(&line).unwrap_or_default();
+                self.entries.push(RawEntry { parsed: entry, raw });
             }
         }
     }
@@ -115,7 +115,7 @@ impl EventData {
         let mut step_total = 0usize;
 
         for entry in &self.entries {
-            match &entry.event {
+            match &entry.parsed.event {
                 Event::TaskCreated { .. } => total_tasks += 1,
                 Event::StepCompleted {
                     action_type,
@@ -151,7 +151,7 @@ impl EventData {
             total_tool_calls = 0;
             total_code_runs = 0;
             for entry in &self.entries {
-                if let Event::StepCompleted { action_type, .. } = &entry.event {
+                if let Event::StepCompleted { action_type, .. } = &entry.parsed.event {
                     if action_type.contains("call_tool") {
                         total_tool_calls += 1;
                     }
@@ -178,8 +178,8 @@ impl EventData {
 
         let mut buckets: HashMap<u64, usize> = HashMap::new();
         for entry in &self.entries {
-            if entry.timestamp_ms >= window_start {
-                let bucket = (entry.timestamp_ms - window_start) / bucket_duration_ms;
+            if entry.parsed.timestamp_ms >= window_start {
+                let bucket = (entry.parsed.timestamp_ms - window_start) / bucket_duration_ms;
                 *buckets.entry(bucket).or_default() += 1;
             }
         }
@@ -196,8 +196,8 @@ impl EventData {
             None
         } else {
             Some((
-                self.entries.first().unwrap().timestamp_ms,
-                self.entries.last().unwrap().timestamp_ms,
+                self.entries.first().unwrap().parsed.timestamp_ms,
+                self.entries.last().unwrap().parsed.timestamp_ms,
             ))
         };
 
@@ -217,7 +217,7 @@ impl EventData {
         let mut task_order: Vec<String> = Vec::new();
 
         for entry in &self.entries {
-            match &entry.event {
+            match &entry.parsed.event {
                 Event::TaskCreated {
                     task_id,
                     description,
@@ -231,7 +231,7 @@ impl EventData {
                             description: description.clone(),
                             role: role.clone(),
                             status: None,
-                            timestamp_ms: entry.timestamp_ms,
+                            timestamp_ms: entry.parsed.timestamp_ms,
                             steps: 0,
                             total_duration_ms: 0,
                         },
@@ -271,10 +271,10 @@ impl EventData {
 
     pub fn task_detail(&self, target_id: &str) -> Option<TaskDetail> {
         let mut summary: Option<TaskSummary> = None;
-        let mut events: Vec<TaskEvent> = Vec::new();
+        let mut events: Vec<serde_json::Value> = Vec::new();
 
         for entry in &self.entries {
-            let task_id = match &entry.event {
+            let task_id = match &entry.parsed.event {
                 Event::TaskCreated { task_id, .. }
                 | Event::TaskExecuted { task_id, .. }
                 | Event::ToolSelected { task_id, .. }
@@ -283,7 +283,11 @@ impl EventData {
                 | Event::AgentToolResult { task_id, .. }
                 | Event::AgentModelResponse { task_id, .. }
                 | Event::StepCompleted { task_id, .. }
-                | Event::AgentTransition { task_id, .. } => Some(task_id.as_str()),
+                | Event::AgentTransition { task_id, .. }
+                | Event::PlanTriageResult { task_id, .. }
+                | Event::PlanCreated { task_id, .. }
+                | Event::PlanItemStarted { task_id, .. }
+                | Event::PlanItemCompleted { task_id, .. } => Some(task_id.as_str()),
                 _ => None,
             };
 
@@ -295,39 +299,33 @@ impl EventData {
                 task_id,
                 description,
                 role,
-            } = &entry.event
+            } = &entry.parsed.event
             {
                 summary = Some(TaskSummary {
                     task_id: task_id.clone(),
                     description: description.clone(),
                     role: role.clone(),
                     status: None,
-                    timestamp_ms: entry.timestamp_ms,
+                    timestamp_ms: entry.parsed.timestamp_ms,
                     steps: 0,
                     total_duration_ms: 0,
                 });
             }
 
-            if let Event::TaskExecuted { status, .. } = &entry.event
+            if let Event::TaskExecuted { status, .. } = &entry.parsed.event
                 && let Some(s) = &mut summary
             {
                 s.status = Some(status.clone());
             }
 
-            if let Event::StepCompleted { duration_ms, .. } = &entry.event
+            if let Event::StepCompleted { duration_ms, .. } = &entry.parsed.event
                 && let Some(s) = &mut summary
             {
                 s.steps += 1;
                 s.total_duration_ms += duration_ms;
             }
 
-            // Serialize the event to a generic JSON value for the frontend
-            if let Ok(val) = serde_json::to_value(&entry.event) {
-                events.push(TaskEvent {
-                    timestamp_ms: entry.timestamp_ms,
-                    event: val,
-                });
-            }
+            events.push(entry.raw.clone());
         }
 
         summary.map(|s| TaskDetail { summary: s, events })
@@ -339,7 +337,7 @@ impl EventData {
         offset: usize,
         type_filter: Option<&str>,
     ) -> (Vec<serde_json::Value>, usize) {
-        let filtered: Vec<&LogEntry> = self
+        let filtered: Vec<&RawEntry> = self
             .entries
             .iter()
             .rev()
@@ -347,7 +345,7 @@ impl EventData {
                 let Some(filter) = type_filter else {
                     return true;
                 };
-                event_category(&e.event) == filter
+                event_category(&e.parsed.event) == filter
             })
             .collect();
 
@@ -356,7 +354,7 @@ impl EventData {
             .into_iter()
             .skip(offset)
             .take(limit)
-            .filter_map(|e| serde_json::to_value(e).ok())
+            .map(|e| e.raw.clone())
             .collect();
 
         (page, total)
@@ -368,7 +366,7 @@ impl EventData {
             .rev()
             .filter(|e| {
                 matches!(
-                    e.event,
+                    e.parsed.event,
                     Event::JanitorReview { .. }
                         | Event::JanitorRegenerate { .. }
                         | Event::JanitorEscalated { .. }
@@ -376,7 +374,7 @@ impl EventData {
                         | Event::ToolGenerated { .. }
                 )
             })
-            .filter_map(|e| serde_json::to_value(e).ok())
+            .map(|e| e.raw.clone())
             .collect()
     }
 }

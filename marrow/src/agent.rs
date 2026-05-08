@@ -1543,6 +1543,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                 step,
                 action_type: "dismiss".to_string(),
                 detail: String::new(),
+                params_json: None,
+                code: None,
             })
             .await;
 
@@ -1631,6 +1633,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                     step,
                     action_type: "done".to_string(),
                     detail: text.clone(),
+                    params_json: None,
+                    code: None,
                 })
                 .await;
 
@@ -1742,6 +1746,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                         step,
                         action_type: "call_tool".to_string(),
                         detail: tool.clone(),
+                        params_json: Some(serde_json::to_string(params).unwrap_or_default()),
+                        code: None,
                     })
                     .await;
 
@@ -1793,6 +1799,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                         step,
                         action_type: "run_code".to_string(),
                         detail: name.clone(),
+                        params_json: None,
+                        code: Some(code.clone()),
                     })
                     .await;
 
@@ -1839,6 +1847,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                         step,
                         action_type: "save_tool".to_string(),
                         detail: name.clone(),
+                        params_json: None,
+                        code: None,
                     })
                     .await;
 
@@ -1890,6 +1900,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                         step,
                         action_type: "remove_tool".to_string(),
                         detail: name.clone(),
+                        params_json: None,
+                        code: None,
                     })
                     .await;
 
@@ -1942,6 +1954,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                         step,
                         action_type: "load_skill".to_string(),
                         detail: normalized.clone(),
+                        params_json: None,
+                        code: None,
                     })
                     .await;
 
@@ -1973,6 +1987,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                         step,
                         action_type: "progress".to_string(),
                         detail: truncate_preview(text, 80),
+                        params_json: None,
+                        code: None,
                     })
                     .await;
 
