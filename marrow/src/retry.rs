@@ -87,9 +87,9 @@ impl Default for RetryConfig {
     fn default() -> Self {
         Self {
             max_retries: 3,
-            initial_delay: Duration::from_secs(1),
-            multiplier: 2,
-            max_delay: Duration::from_secs(30),
+            initial_delay: Duration::from_secs(5),
+            multiplier: 3,
+            max_delay: Duration::from_secs(45),
         }
     }
 }
