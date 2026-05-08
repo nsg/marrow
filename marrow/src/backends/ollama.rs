@@ -103,18 +103,30 @@ impl OllamaBackend {
         }
 
         let config = RetryConfig::default();
+        let error_log = self.raw_log.clone();
+        let error_role = self.role.clone();
+        let error_url = url.clone();
 
         let start = Instant::now();
         let result = retry_with_backoff(&config, BackendError::should_retry, || {
+            let err_log = error_log.clone();
+            let err_role = error_role.clone();
+            let err_url = error_url.clone();
             let mut req = self.client.post(&url).json(&body);
             if let Some(key) = &self.api_key {
                 req = req.bearer_auth(key);
             }
             async move {
-                let resp = req
-                    .send()
-                    .await
-                    .map_err(|e| BackendError::Network(e.into()))?;
+                let resp = match req.send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let msg = e.to_string();
+                        if let Some(ref rl) = err_log {
+                            rl.log_error(&err_role, &err_url, 0, &msg).await;
+                        }
+                        return Err(BackendError::Network(e.into()));
+                    }
+                };
                 if !resp.status().is_success() {
                     let status = resp.status().as_u16();
                     let retry_after = resp
@@ -123,6 +135,9 @@ impl OllamaBackend {
                         .and_then(|v| v.to_str().ok())
                         .and_then(parse_retry_after);
                     let body = resp.text().await.unwrap_or_default();
+                    if let Some(ref rl) = err_log {
+                        rl.log_error(&err_role, &err_url, status, &body).await;
+                    }
                     return Err(BackendError::Http {
                         status,
                         body,
@@ -235,10 +250,10 @@ impl OllamaEmbedBackend {
                         .get(reqwest::header::RETRY_AFTER)
                         .and_then(|v| v.to_str().ok())
                         .and_then(parse_retry_after);
-                    let body = resp.text().await.unwrap_or_default();
+                    let body_text = resp.text().await.unwrap_or_default();
                     return Err(BackendError::Http {
                         status,
-                        body,
+                        body: body_text,
                         retry_after,
                     });
                 }

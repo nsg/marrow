@@ -1318,6 +1318,10 @@ tr.clickable:hover td:first-child {
       <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       <span class="nav-tooltip">Events</span>
     </button>
+    <button class="nav-btn" data-tab="backend" aria-label="Backend Errors">
+      <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span class="nav-tooltip">Backend</span>
+    </button>
   </div>
   <div class="sidebar-footer">
     <button class="nav-btn theme-toggle" id="theme-toggle" aria-label="Toggle light mode">
@@ -1401,6 +1405,30 @@ tr.clickable:hover td:first-child {
       </div>
       <div id="events-content"><div class="state-msg"><span class="spinner"></span> Loading events...</div></div>
     </div>
+
+    <!-- Backend Errors -->
+    <div class="tab-panel" id="panel-backend">
+      <div class="filter-bar">
+        <span class="filter-label">Status:</span>
+        <select class="filter-select" id="backend-status-filter">
+          <option value="">All</option>
+          <option value="0">Network</option>
+          <option value="400">400</option>
+          <option value="401">401</option>
+          <option value="403">403</option>
+          <option value="404">404</option>
+          <option value="429">429</option>
+          <option value="500">500</option>
+          <option value="502">502</option>
+          <option value="503">503</option>
+        </select>
+        <span class="filter-label" style="margin-left:12px">Role:</span>
+        <select class="filter-select" id="backend-role-filter">
+          <option value="">All</option>
+        </select>
+      </div>
+      <div id="backend-content"><div class="state-msg"><span class="spinner"></span> Loading backend errors...</div></div>
+    </div>
   </div>
 
   <!-- Footer -->
@@ -1422,7 +1450,8 @@ tr.clickable:hover td:first-child {
     tools: "Tools",
     memory: "Memory",
     schedules: "Schedules",
-    events: "Events"
+    events: "Events",
+    backend: "Backend Errors"
   };
 
   // --- State ---
@@ -1433,6 +1462,7 @@ tr.clickable:hover td:first-child {
     tasks: { offset: 0, limit: 50, total: 0, expanded: null },
     memory: { offset: 0, limit: 50, total: 0, search: "" },
     events: { offset: 0, limit: 100, total: 0, type: "" },
+    backend: { offset: 0, limit: 100, total: 0, status: "", role: "" },
     loaded: {}
   };
 
@@ -2329,6 +2359,141 @@ tr.clickable:hover td:first-child {
     }
   }
 
+  // --- Backend Errors ---
+  function httpStatusBadge(status) {
+    var s = Number(status);
+    var cls = s === 0 ? "badge-transition"
+      : s >= 500 ? "badge-failed"
+      : s === 429 ? "badge-schedule"
+      : s >= 400 ? "badge-janitor"
+      : "";
+    var label = s === 0 ? "network" : String(s);
+    return '<span class="badge ' + cls + '">' + esc(label) + '</span>';
+  }
+
+  async function loadBackendErrors() {
+    try {
+      var url = "/api/backend-errors?limit=" + state.backend.limit
+        + "&offset=" + state.backend.offset
+        + (state.backend.status ? "&status=" + state.backend.status : "")
+        + (state.backend.role ? "&role=" + encodeURIComponent(state.backend.role) : "");
+      var data = await apiFetch(url);
+      state.backend.total = data.total || 0;
+      var summary = data.summary || {};
+      var errors = data.errors || [];
+
+      var html = "";
+
+      // Stat cards row
+      html += '<div class="stat-row fade-child">';
+      html += statCard("Total Errors", summary.total_errors || 0, "red");
+      var statusCounts = summary.by_status || [];
+      var s5xx = 0, s4xx = 0, sNet = 0;
+      for (var i = 0; i < statusCounts.length; i++) {
+        var st = statusCounts[i].status;
+        if (st >= 500) s5xx += statusCounts[i].count;
+        else if (st >= 400) s4xx += statusCounts[i].count;
+        else if (st === 0) sNet += statusCounts[i].count;
+      }
+      html += statCard("5xx Errors", s5xx, "red");
+      html += statCard("4xx Errors", s4xx, "amber");
+      html += statCard("Network", sNet, "purple");
+      var roles = summary.by_role || [];
+      html += statCard("Roles Affected", roles.length, "blue");
+      html += '</div>';
+
+      // Error timeline chart (48h)
+      var hourly = summary.hourly || [];
+      if (hourly.length > 0) {
+        var maxCount = 1;
+        for (var i = 0; i < hourly.length; i++) {
+          if (hourly[i].count > maxCount) maxCount = hourly[i].count;
+        }
+        html += '<div class="card fade-child" style="margin-bottom:20px">';
+        html += '<div class="card-title">Error Timeline (48h)</div>';
+        html += '<div class="activity-chart">';
+        for (var i = 0; i < hourly.length; i++) {
+          var pct = Math.max(2, Math.round((hourly[i].count / maxCount) * 100));
+          var hourLabel = hourly[i].hour.length >= 13 ? hourly[i].hour.slice(11, 13) + ":00" : hourly[i].hour;
+          html += '<div class="chart-bar" style="height:' + pct + '%" title="' + esc(hourLabel) + ': ' + hourly[i].count + ' errors"></div>';
+        }
+        html += '</div></div>';
+      }
+
+      // Errors by status code + body (grouped)
+      var byBody = summary.by_body || [];
+      if (byBody.length > 0) {
+        html += '<div class="card fade-child" style="margin-bottom:20px">';
+        html += '<div class="card-title">Errors by Response</div>';
+        html += '<div class="table-wrap responsive"><table>';
+        html += '<tr><th>Status</th><th>Response Body</th><th>Count</th><th>Latest</th></tr>';
+        for (var i = 0; i < byBody.length; i++) {
+          var g = byBody[i];
+          html += '<tr>';
+          html += '<td data-label="Status">' + httpStatusBadge(g.status) + '</td>';
+          html += '<td data-label="Body" style="word-break:break-all;max-width:500px;font-size:12px" class="mono">' + esc(g.body) + '</td>';
+          html += '<td data-label="Count" class="mono">' + g.count + '</td>';
+          html += '<td data-label="Latest" class="mono" style="white-space:nowrap">' + esc(g.latest.replace("T", " ").replace("Z", "").slice(0, 19)) + '</td>';
+          html += '</tr>';
+        }
+        html += '</table></div></div>';
+
+        // Populate role filter dropdown dynamically
+        var roleSelect = document.getElementById("backend-role-filter");
+        if (roleSelect && roles.length > 0) {
+          var currentVal = state.backend.role;
+          var opts = '<option value="">All</option>';
+          for (var i = 0; i < roles.length; i++) {
+            var sel = roles[i].role === currentVal ? " selected" : "";
+            opts += '<option value="' + esc(roles[i].role) + '"' + sel + '>' + esc(roles[i].role) + ' (' + roles[i].count + ')</option>';
+          }
+          roleSelect.innerHTML = opts;
+        }
+      }
+
+      // By role breakdown
+      if (roles.length > 0) {
+        html += '<div class="card fade-child" style="margin-bottom:20px">';
+        html += '<div class="card-title">Errors by Role</div>';
+        html += '<div class="table-wrap responsive"><table>';
+        html += '<tr><th>Role</th><th>Errors</th></tr>';
+        for (var i = 0; i < roles.length; i++) {
+          html += '<tr><td data-label="Role">' + esc(roles[i].role) + '</td>';
+          html += '<td data-label="Errors" class="mono">' + roles[i].count + '</td></tr>';
+        }
+        html += '</table></div></div>';
+      }
+
+      // Recent errors table
+      if (errors.length === 0) {
+        html += emptyMsg("No backend errors recorded.");
+      } else {
+        html += '<div class="card fade-child">';
+        html += '<div class="card-title">Recent Errors</div>';
+        html += '<div class="table-wrap responsive"><table>';
+        html += '<tr><th>Time</th><th>Status</th><th>Role</th><th>URL</th><th>Response Body</th></tr>';
+        for (var i = 0; i < errors.length; i++) {
+          var e = errors[i];
+          var ts = e.ts.replace("T", " ").replace("Z", "").slice(0, 19);
+          var urlShort = e.url.replace(/^https?:\/\//, "").replace(/\/api\/.*/, "/api/…");
+          html += '<tr>';
+          html += '<td data-label="Time" class="mono" style="white-space:nowrap">' + esc(ts) + '</td>';
+          html += '<td data-label="Status">' + httpStatusBadge(e.status) + '</td>';
+          html += '<td data-label="Role">' + esc(e.role) + '</td>';
+          html += '<td data-label="URL" class="mono" style="font-size:12px">' + esc(urlShort) + '</td>';
+          html += '<td data-label="Body" style="word-break:break-all;max-width:400px;font-size:12px" class="mono">' + esc(e.body) + '</td>';
+          html += '</tr>';
+        }
+        html += '</table></div></div>';
+        html += renderPagination(state.backend, "backend");
+      }
+
+      setContent("backend-content", html);
+    } catch (e) {
+      setContent("backend-content", errorMsg(e));
+    }
+  }
+
   // --- Pagination ---
   function renderPagination(s, section) {
     const total = s.total;
@@ -2373,6 +2538,7 @@ tr.clickable:hover td:first-child {
       case "schedules": loadSchedules(); break;
       case "skills": loadSkills(); break;
       case "events": loadEvents(); break;
+      case "backend": loadBackendErrors(); break;
     }
     updateLastRefreshed();
   }
@@ -2428,6 +2594,18 @@ tr.clickable:hover td:first-child {
       state.events.type = this.value;
       state.events.offset = 0;
       if (state.activeTab === "events") loadEvents();
+    });
+
+    // Backend error filters
+    document.getElementById("backend-status-filter").addEventListener("change", function() {
+      state.backend.status = this.value;
+      state.backend.offset = 0;
+      if (state.activeTab === "backend") loadBackendErrors();
+    });
+    document.getElementById("backend-role-filter").addEventListener("change", function() {
+      state.backend.role = this.value;
+      state.backend.offset = 0;
+      if (state.activeTab === "backend") loadBackendErrors();
     });
 
     // Expose pagination for inline onclick

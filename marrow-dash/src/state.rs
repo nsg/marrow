@@ -11,6 +11,7 @@ pub struct AppState {
     pub toolbox: RwLock<Vec<data::toolbox::ToolInfo>>,
     pub schedules: RwLock<Vec<data::schedules::ScheduleInfo>>,
     pub skills: RwLock<Vec<data::skills::SkillInfo>>,
+    pub backend_errors: RwLock<data::backend_errors::BackendErrorData>,
     pub config: data::config::ConfigInfo,
     pub memory_dir: PathBuf,
     pub embed_backend: Option<Box<dyn EmbedBackend>>,
@@ -24,6 +25,7 @@ impl AppState {
         schedules: &Path,
         skills: &Path,
         config: &Path,
+        error_log: &Path,
     ) -> Self {
         let events = data::events::EventData::load(log);
         let memory_stats = data::memory::MemoryStats::load(memory);
@@ -31,6 +33,7 @@ impl AppState {
         let schedule_items = data::schedules::load(schedules);
         let skill_items = data::skills::load(skills);
         let config_info = data::config::ConfigInfo::load(config);
+        let backend_errors = data::backend_errors::BackendErrorData::load(error_log);
 
         let embed_backend = marrow::router::RouterConfig::from_file(config)
             .ok()
@@ -46,6 +49,7 @@ impl AppState {
             toolbox: RwLock::new(toolbox_items),
             schedules: RwLock::new(schedule_items),
             skills: RwLock::new(skill_items),
+            backend_errors: RwLock::new(backend_errors),
             config: config_info,
             memory_dir: memory.to_path_buf(),
             embed_backend,
@@ -59,6 +63,7 @@ impl AppState {
         memory: &Path,
         schedules: &Path,
         skills: &Path,
+        error_log: &Path,
     ) {
         {
             let mut ev = self.events.write().unwrap_or_else(|e| e.into_inner());
@@ -79,6 +84,13 @@ impl AppState {
         {
             let mut sk = self.skills.write().unwrap_or_else(|e| e.into_inner());
             *sk = data::skills::load(skills);
+        }
+        {
+            let mut be = self
+                .backend_errors
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            be.refresh(error_log);
         }
     }
 }

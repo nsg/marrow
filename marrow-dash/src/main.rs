@@ -75,6 +75,19 @@ async fn main() {
         .unwrap_or_else(|| dash_config.as_ref().and_then(|d| d.port).unwrap_or(3000));
     let debug_token = dash_config.as_ref().and_then(|d| d.debug_token.clone());
 
+    // Derive error log path: raw_requests.log -> raw_requests.errors.jsonl
+    let error_log_path = {
+        let stem = args
+            .raw_log
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let mut p = args.raw_log.clone();
+        p.set_file_name(format!("{stem}.errors.jsonl"));
+        p
+    };
+
     let state = Arc::new(state::AppState::load(
         &args.log,
         &args.toolbox,
@@ -82,6 +95,7 @@ async fn main() {
         &args.schedules,
         &args.skills,
         &args.config,
+        &error_log_path,
     ));
     let mut app = Router::new()
         .merge(frontend::routes())
@@ -106,6 +120,7 @@ async fn main() {
     let memory_path = args.memory.clone();
     let schedules_path = args.schedules.clone();
     let skills_path = args.skills.clone();
+    let refresh_error_log = error_log_path.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         loop {
@@ -116,6 +131,7 @@ async fn main() {
                 &memory_path,
                 &schedules_path,
                 &skills_path,
+                &refresh_error_log,
             );
         }
     });

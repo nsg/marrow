@@ -4,6 +4,7 @@ use axum::Router;
 
 use crate::state::AppState;
 
+mod backend_errors;
 pub mod debug;
 mod events;
 mod memories;
@@ -22,4 +23,5 @@ pub fn routes() -> Router<Arc<AppState>> {
         .merge(schedules::routes())
         .merge(skills::routes())
         .merge(events::routes())
+        .merge(backend_errors::routes())
 }

@@ -1,3 +1,4 @@
+pub mod backend_errors;
 pub mod config;
 pub mod events;
 pub mod memory;
