@@ -109,6 +109,10 @@ pub enum Event {
         schedule_id: String,
         status: String,
     },
+    ScheduleReviewed {
+        schedule_id: String,
+        updated: bool,
+    },
     PlanTriageResult {
         task_id: String,
         decision: String,
@@ -335,6 +339,13 @@ impl EventLog {
             }
             Event::ScheduleDeleted { schedule_id } if self.verbose => {
                 eprintln!("[heartbeat] deleted schedule {schedule_id}");
+            }
+            Event::ScheduleReviewed {
+                schedule_id,
+                updated,
+            } if self.verbose => {
+                let action = if *updated { "updated" } else { "ok" };
+                eprintln!("[janitor] schedule {schedule_id}: {action}");
             }
             Event::ScheduleCompleted {
                 schedule_id,

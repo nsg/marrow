@@ -17,6 +17,8 @@ impl Tool for ScheduleTaskTool {
         ToolMeta {
             name: "schedule_task".to_string(),
             description: "Create or update a scheduled task. Actions: create, update. \
+                 DESCRIPTION: first line is a short title (shown in dashboard), \
+                 then a blank line, then full instructions. \
                  REPEAT types: daily (HOUR+MINUTE), every_n_hours (INTERVAL in hours), \
                  weekly (DAY+HOUR+MINUTE), once (AT as ISO datetime). \
                  TIMEZONE_OFFSET: hours from UTC (e.g. 1 for CET, 2 for CEST)"
