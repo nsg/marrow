@@ -368,8 +368,7 @@ impl Runtime {
             metrics: TaskMetrics {
                 wall_time: task_start.elapsed(),
                 steps: loop_result.steps,
-                tool_calls: loop_result.tool_calls,
-                code_runs: loop_result.code_runs,
+                lua_runs: loop_result.lua_runs,
                 model_roles: task_metrics_ref.summary(),
                 hit_step_limit: loop_result.hit_step_limit,
                 step_timings: loop_result.step_timings,

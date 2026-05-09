@@ -119,8 +119,7 @@ pub async fn run_planned(
     let item_count = plan.items.len();
     let mut item_results: Vec<ItemResult> = Vec::new();
     let mut total_steps: u32 = 0;
-    let mut total_tool_calls: u32 = 0;
-    let mut total_code_runs: u32 = 0;
+    let mut total_lua_runs: u32 = 0;
     let mut all_timings = Vec::new();
 
     for (i, item) in plan.items.iter().enumerate() {
@@ -185,8 +184,7 @@ pub async fn run_planned(
         let loop_result = agent::run_loop(item_config).await?;
 
         total_steps += loop_result.steps;
-        total_tool_calls += loop_result.tool_calls;
-        total_code_runs += loop_result.code_runs;
+        total_lua_runs += loop_result.lua_runs;
         all_timings.extend(loop_result.step_timings.clone());
 
         let outcome_text = match &loop_result.outcome {
@@ -231,8 +229,7 @@ pub async fn run_planned(
             return Ok(LoopResult {
                 outcome: final_outcome,
                 steps: total_steps,
-                tool_calls: total_tool_calls,
-                code_runs: total_code_runs,
+                lua_runs: total_lua_runs,
                 hit_step_limit: false,
                 step_timings: all_timings,
             });
@@ -281,8 +278,7 @@ pub async fn run_planned(
 
             let retry_result = agent::run_loop(retry_config).await?;
             total_steps += retry_result.steps;
-            total_tool_calls += retry_result.tool_calls;
-            total_code_runs += retry_result.code_runs;
+            total_lua_runs += retry_result.lua_runs;
             all_timings.extend(retry_result.step_timings.clone());
 
             let retry_outcome = match &retry_result.outcome {
@@ -326,8 +322,7 @@ pub async fn run_planned(
     Ok(LoopResult {
         outcome: Outcome::Answer(final_answer),
         steps: total_steps,
-        tool_calls: total_tool_calls,
-        code_runs: total_code_runs,
+        lua_runs: total_lua_runs,
         hit_step_limit: false,
         step_timings: all_timings,
     })

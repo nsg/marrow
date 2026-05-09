@@ -7,10 +7,12 @@ use std::sync::atomic::AtomicU32;
 use mlua::LuaSerdeExt;
 use reqwest::Client;
 
+use crate::memory::MemoryStore;
 use crate::sandbox::create_sandbox;
 use crate::sandbox_host::{HostConfig, register_host_functions};
+use crate::schedule::ScheduleStore;
 use crate::secrets::Secrets;
-use crate::tool::Tool;
+use crate::tool::{FrontendContext, Tool};
 
 pub struct LuaProvider {
     pub name: String,
@@ -45,10 +47,14 @@ impl LuaProvider {
             None,
             None,
             Arc::new(HashMap::new()),
+            None,
+            None,
+            None,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_with_params(
         &self,
         task_description: &str,
@@ -57,6 +63,9 @@ impl LuaProvider {
         toolbox_dir: Option<PathBuf>,
         secrets: Option<&Secrets>,
         builtins: Arc<HashMap<String, Arc<dyn Tool>>>,
+        schedule_store: Option<Arc<ScheduleStore>>,
+        memory_store: Option<Arc<MemoryStore>>,
+        frontend_context: Option<FrontendContext>,
     ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
         let secrets_map: HashMap<String, String> = secrets
             .map(|s| {
@@ -74,6 +83,9 @@ impl LuaProvider {
             recursion_depth: Arc::new(AtomicU32::new(0)),
             secrets: Arc::new(secrets_map),
             builtins,
+            schedule_store,
+            memory_store,
+            frontend_context,
         };
 
         self.execute_with_host_config(&config, params).await

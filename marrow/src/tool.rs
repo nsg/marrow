@@ -65,22 +65,49 @@ pub trait Tool: Send + Sync {
 pub struct ToolInfo {
     pub name: String,
     pub description: String,
-    pub params: Vec<String>,
+    pub params: Vec<(String, bool)>,
     pub returns: Vec<String>,
     pub builtin: bool,
 }
 
 impl ToolInfo {
+    pub fn lua_name(&self) -> String {
+        if self.builtin {
+            self.name.clone()
+        } else {
+            format!("tool_{}", self.name)
+        }
+    }
+
     pub fn usage_line(&self) -> String {
-        let marker = if self.builtin { " [built-in]" } else { "" };
-        let mut line = format!("- {}: {}{marker}", self.name, self.description);
-        if !self.params.is_empty() {
-            line.push_str(&format!(" (params: {})", self.params.join(", ")));
-        }
-        if !self.returns.is_empty() {
-            line.push_str(&format!(" (returns: {})", self.returns.join(", ")));
-        }
-        line
+        let params_str = if self.params.is_empty() {
+            String::new()
+        } else {
+            let inner: Vec<String> = self
+                .params
+                .iter()
+                .map(|(name, required)| {
+                    if *required {
+                        name.clone()
+                    } else {
+                        format!("{name}?")
+                    }
+                })
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        };
+        let returns_str = if self.returns.is_empty() {
+            String::new()
+        } else {
+            format!(" -> {{{}}}", self.returns.join(", "))
+        };
+        format!(
+            "  {}({}){} — {}",
+            self.lua_name(),
+            params_str,
+            returns_str,
+            self.description
+        )
     }
 }
 
@@ -113,7 +140,11 @@ impl ToolRegistry {
             tools.push(ToolInfo {
                 name: meta.name,
                 description: meta.description,
-                params: tool.params().iter().map(|p| p.name.clone()).collect(),
+                params: tool
+                    .params()
+                    .iter()
+                    .map(|p| (p.name.clone(), p.required))
+                    .collect(),
                 returns: tool.returns(),
                 builtin: true,
             });
@@ -127,7 +158,12 @@ impl ToolRegistry {
                 tools.push(ToolInfo {
                     name: meta.name.clone(),
                     description: meta.description.clone(),
-                    params: self.toolbox.extract_params(&meta.name),
+                    params: self
+                        .toolbox
+                        .extract_params(&meta.name)
+                        .into_iter()
+                        .map(|n| (n, true))
+                        .collect(),
                     returns: self.toolbox.extract_return_fields(&meta.name),
                     builtin: false,
                 });
@@ -159,6 +195,9 @@ impl ToolRegistry {
                 Some(self.toolbox_path.clone()),
                 Some(ctx.secrets.as_ref()),
                 self.builtins_arc(),
+                ctx.schedule_store.clone(),
+                ctx.memory_store.clone(),
+                ctx.frontend_context.clone(),
             )
             .await
     }
@@ -332,14 +371,14 @@ mod tests {
         let info = ToolInfo {
             name: "rss".to_string(),
             description: "Fetch RSS feeds".to_string(),
-            params: vec!["url".to_string(), "topic".to_string()],
+            params: vec![("URL".to_string(), true), ("TOPIC".to_string(), false)],
             returns: vec!["items".to_string()],
             builtin: true,
         };
         let line = info.usage_line();
-        assert!(line.contains("[built-in]"));
-        assert!(line.contains("params: url, topic"));
-        assert!(line.contains("returns: items"));
+        assert!(line.contains("rss({URL, TOPIC?})"));
+        assert!(line.contains("-> {items}"));
+        assert!(line.contains("Fetch RSS feeds"));
     }
 
     #[tokio::test]

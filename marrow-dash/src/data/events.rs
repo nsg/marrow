@@ -38,8 +38,7 @@ pub struct TaskDetail {
 pub struct OverviewStats {
     pub total_tasks: usize,
     pub total_steps: usize,
-    pub total_tool_calls: usize,
-    pub total_code_runs: usize,
+    pub total_lua_runs: usize,
     pub success_rate: f64,
     pub activity_buckets: Vec<ActivityBucket>,
     pub event_timespan: Option<(u64, u64)>,
@@ -109,8 +108,7 @@ impl EventData {
     pub fn overview(&self) -> OverviewStats {
         let mut total_tasks = 0usize;
         let mut total_steps = 0usize;
-        let mut total_tool_calls = 0usize;
-        let mut total_code_runs = 0usize;
+        let mut total_lua_runs = 0usize;
         let mut step_successes = 0usize;
         let mut step_total = 0usize;
 
@@ -127,38 +125,16 @@ impl EventData {
                     if *success {
                         step_successes += 1;
                     }
-                    if action_type.contains("call_tool") {
-                        total_tool_calls += 1;
-                    } else if action_type.contains("run_code") {
-                        total_code_runs += 1;
+                    if action_type.contains("run_code") || action_type.contains("call_tool") {
+                        total_lua_runs += 1;
                     }
                 }
-                Event::AgentAction { action_type, .. } => {
-                    if action_type == "call_tool" {
-                        total_tool_calls += 1;
-                    } else if action_type == "run_code" {
-                        total_code_runs += 1;
-                    }
+                Event::AgentAction { action_type, .. }
+                    if (action_type == "run_code" || action_type == "call_tool") =>
+                {
+                    total_lua_runs += 1;
                 }
                 _ => {}
-            }
-        }
-
-        // If step_completed events exist, use those for tool/code counts instead
-        // (they're more accurate). Otherwise fall back to agent_action counts.
-        if total_steps > 0 {
-            // Recount from step_completed only
-            total_tool_calls = 0;
-            total_code_runs = 0;
-            for entry in &self.entries {
-                if let Event::StepCompleted { action_type, .. } = &entry.parsed.event {
-                    if action_type.contains("call_tool") {
-                        total_tool_calls += 1;
-                    }
-                    if action_type.contains("run_code") {
-                        total_code_runs += 1;
-                    }
-                }
             }
         }
 
@@ -204,8 +180,7 @@ impl EventData {
         OverviewStats {
             total_tasks,
             total_steps,
-            total_tool_calls,
-            total_code_runs,
+            total_lua_runs,
             success_rate,
             activity_buckets,
             event_timespan,

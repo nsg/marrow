@@ -70,15 +70,11 @@ async fn noop_log() -> EventLog {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn agent_parse_call_tool() {
+fn agent_parse_call_tool_returns_error() {
     let input = r#"{"action": "call_tool", "tool": "weather", "params": {"LOCATION": "Tokyo"}}"#;
-    match agent::parse_action(input) {
-        agent::Action::CallTool { tool, params } => {
-            assert_eq!(tool, "weather");
-            assert_eq!(params.get("LOCATION").unwrap(), "Tokyo");
-        }
-        other => panic!("expected CallTool, got {other:?}"),
-    }
+    let parsed = agent::parse_response(input);
+    assert!(!parsed.errors.is_empty(), "call_tool should produce error");
+    assert!(parsed.errors[0].contains("call_tool is not available"));
 }
 
 #[test]
@@ -346,6 +342,9 @@ async fn lua_provider_receives_params_table() {
             None,
             None,
             Arc::new(HashMap::new()),
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -402,6 +401,9 @@ async fn run_tool_calls_another_tool() {
             Some(dir.path().to_path_buf()),
             None,
             Arc::new(HashMap::new()),
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -435,6 +437,9 @@ async fn run_tool_passes_params() {
             Some(dir.path().to_path_buf()),
             None,
             Arc::new(HashMap::new()),
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -468,6 +473,9 @@ async fn run_tool_recursion_guard() {
             Some(dir.path().to_path_buf()),
             None,
             Arc::new(HashMap::new()),
+            None,
+            None,
+            None,
         )
         .await;
     assert!(result.is_err());
@@ -480,11 +488,11 @@ async fn run_tool_recursion_guard() {
 }
 
 #[tokio::test]
-async fn run_tool_not_available_without_toolbox() {
+async fn run_tool_always_available() {
     let provider = LuaProvider::new("test", r#"return { has_run_tool = (run_tool ~= nil) }"#);
     let client = Arc::new(Client::new());
     let result = provider.execute("test", client).await.unwrap();
-    assert_eq!(result["has_run_tool"], false);
+    assert_eq!(result["has_run_tool"], true);
 }
 
 #[tokio::test]
@@ -536,6 +544,9 @@ async fn run_tool_glue_composition() {
             Some(dir.path().to_path_buf()),
             None,
             Arc::new(HashMap::new()),
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();

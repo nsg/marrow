@@ -144,12 +144,6 @@ impl EventHandler for Handler {
             let reaction = |emoji: &str| ReactionType::Unicode(emoji.to_string());
             while let Some(update) = progress_rx.recv().await {
                 match update {
-                    ProgressUpdate::ToolCallStart => {
-                        let _ = user_msg.react(&http, reaction("🔧")).await;
-                    }
-                    ProgressUpdate::ToolCallEnd => {
-                        let _ = user_msg.delete_reaction(&http, None, reaction("🔧")).await;
-                    }
                     ProgressUpdate::CodeRunStart => {
                         let _ = user_msg.react(&http, reaction("⚡")).await;
                     }
@@ -352,7 +346,11 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(name = "marrow-discord", about = "Marrow agent as a Discord bot", version)]
+#[command(
+    name = "marrow-discord",
+    about = "Marrow agent as a Discord bot",
+    version
+)]
 struct Cli {
     #[arg(short, long, default_value = "config.toml")]
     config: String,

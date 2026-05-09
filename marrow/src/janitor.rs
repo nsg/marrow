@@ -27,7 +27,7 @@ pub fn format_builtins_for_prompt(builtins: &[BuiltinInfo]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "\nBuilt-in tools (compiled into the application, always available via run_tool()):\n\
+        "\nBuilt-in tools (compiled into the application, always available as Lua functions):\n\
          {list}\n\
          These are NOT Lua tools — they cannot be reviewed, modified, or deleted.\n"
     )
@@ -53,7 +53,7 @@ Available host functions in the sandbox:
 - xml_parse(string) -> table (parses XML into {{ tag, attrs?, text?, children? }} tree; namespace URIs are prefixed to tag names)
 - xml_encode(table) -> string (encodes a {{ tag, attrs?, text?, children? }} tree back to XML)
 - log(message) -> nil
-- run_tool(name, params_table) -> table (call another tool by name, passing it a params table)
+- All built-in tools are also available as Lua global functions (see builtins list below)
 - secret(name) -> string (retrieve a secret by name, e.g. API keys — NEVER hardcode credentials)
 {builtins}
 Global tables available:
@@ -62,7 +62,7 @@ Global tables available:
 
 Review criteria:
 1. Does the code actually do what the description claims?
-2. Tool design: A data tool should do ONE thing (fetch one data source). A glue tool may call run_tool() to compose data tools — that is fine. But a data tool should NOT do multiple unrelated things.
+2. Tool design: A data tool should do ONE thing (fetch one data source). A glue tool may call other tool functions to compose data tools — that is fine. But a data tool should NOT do multiple unrelated things.
 3. Is the tool reusable/generic, or does it have hardcoded values that contradict a generic description? (e.g., description says "any location" but code hardcodes "London")
 4. Does the name accurately reflect what the tool does?
 5. Does the code use host functions correctly?
@@ -106,7 +106,7 @@ Available host functions in the sandbox:
 - xml_parse(string) -> table (parses XML into {{ tag, attrs?, text?, children? }} tree; namespace URIs are prefixed to tag names)
 - xml_encode(table) -> string (encodes a {{ tag, attrs?, text?, children? }} tree back to XML)
 - log(message) -> nil
-- run_tool(name, params_table) -> table (call another tool by name, passing it a params table)
+- All built-in tools are also available as Lua global functions (see builtins list below)
 - secret(name) -> string (retrieve a secret by name, e.g. API keys — NEVER hardcode credentials)
 {builtins}
 Global tables available:
@@ -379,7 +379,7 @@ pub async fn cleanup_toolbox(
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "\nBuilt-in tools (compiled into application, cannot be modified or deleted):\n{list}\n"
+            "\nBuilt-in tools (available as Lua functions, cannot be modified or deleted):\n{list}\n"
         )
     };
 

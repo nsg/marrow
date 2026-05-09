@@ -137,10 +137,8 @@ pub struct TaskMetrics {
     pub wall_time: Duration,
     /// Number of agent loop iterations completed.
     pub steps: u32,
-    /// Number of tool calls executed.
-    pub tool_calls: u32,
-    /// Number of inline code runs executed.
-    pub code_runs: u32,
+    /// Number of Lua executions (tool calls + inline code).
+    pub lua_runs: u32,
     /// Per-role model call statistics (timing + tokens).
     pub model_roles: Vec<(String, RoleMetrics)>,
     /// True when the agent exhausted the step limit and the answer was forced.
@@ -173,19 +171,12 @@ impl TaskMetrics {
             parts.push(format!("({})", step_strs.join(", ")));
         }
 
-        if self.tool_calls > 0 {
+        if self.lua_runs > 0 {
             parts.push(format!(
                 "{} {}",
-                self.tool_calls,
-                if self.tool_calls == 1 {
-                    "tool"
-                } else {
-                    "tools"
-                }
+                self.lua_runs,
+                if self.lua_runs == 1 { "run" } else { "runs" }
             ));
-        }
-        if self.code_runs > 0 {
-            parts.push(format!("{} code", self.code_runs));
         }
 
         let mut total_tokens = 0u64;
@@ -210,15 +201,14 @@ impl TaskMetrics {
         eprintln!("\n--- Task Metrics ---");
         eprintln!("Wall time: {:.1}s", self.wall_time.as_secs_f64());
         eprintln!(
-            "Steps: {}{}, Tool calls: {}, Code runs: {}",
+            "Steps: {}{}, Lua runs: {}",
             self.steps,
             if self.hit_step_limit {
                 " (hit limit)"
             } else {
                 ""
             },
-            self.tool_calls,
-            self.code_runs
+            self.lua_runs
         );
         for (role, m) in &self.model_roles {
             let cached_info = if m.cached_tokens > 0 {

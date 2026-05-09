@@ -31,8 +31,7 @@ pub enum Outcome {
 pub struct LoopResult {
     pub outcome: Outcome,
     pub steps: u32,
-    pub tool_calls: u32,
-    pub code_runs: u32,
+    pub lua_runs: u32,
     /// True when the loop exhausted `MAX_AGENT_STEPS` and the answer was forced.
     pub hit_step_limit: bool,
     /// Per-step timing breakdown.
@@ -44,11 +43,9 @@ pub struct LoopResult {
 #[derive(Debug, Clone)]
 pub enum ProgressUpdate {
     // Temporary — paired start/end
-    ToolCallStart, // 🔧
-    ToolCallEnd,   // 🔧
-    CodeRunStart,  // ⚡
-    CodeRunEnd,    // ⚡
-    Thinking,      // 💭
+    CodeRunStart, // ⚡
+    CodeRunEnd,   // ⚡
+    Thinking,     // 💭
 
     // Persistent
     ToolCreated,   // ⚙️
@@ -64,8 +61,6 @@ pub enum ProgressUpdate {
 impl std::fmt::Display for ProgressUpdate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ToolCallStart => write!(f, "🔧 Calling tool"),
-            Self::ToolCallEnd => write!(f, "🔧 Tool call done"),
             Self::CodeRunStart => write!(f, "⚡ Running inline Lua..."),
             Self::CodeRunEnd => write!(f, "⚡ Code execution done"),
             Self::Thinking => write!(f, "💭 Thinking..."),
@@ -138,36 +133,29 @@ pub struct LoopConfig<'a> {
 /// Placed in the system message so API providers can cache it.
 const AGENT_SYSTEM_PROMPT: &str = r#"You are an agent that completes tasks step by step.
 
-CRITICAL: You have NO shell access. No curl, no bash, no command line. You can ONLY interact through the actions below.
+CRITICAL: You have NO shell access. No curl, no bash, no command line. You can ONLY interact through Lua code blocks and JSON control actions.
 
-Each response can contain any combination of ```lua code blocks and JSON actions. They all execute in parallel.
+Each response can contain ```lua code blocks and/or JSON control actions. They all execute in parallel.
 
-## Inline Lua code (for custom HTTP calls and data processing)
+## Lua code — calling tools and writing logic
 
-Write ```lua code blocks and they will be executed in a sandbox with ONLY these functions:
+Write ```lua code blocks to call tools, make HTTP requests, and process data. All tools listed under "Available Lua functions" are callable directly as Lua functions.
+
+Available sandbox functions:
 - http_request({ method, url, body?, headers? }) / http_get(url) / http_post(url, body)
 - json_parse(string) / json_encode(table)
 - xml_parse(string) / xml_encode(table)
-- secret(name) — retrieve API keys/passwords (ONLY names listed under "Available secrets" above)
-NOTE: For call_tool actions, pass secrets as param values with "secret:" prefix (e.g. "secret:my_api_key"). They are resolved automatically — the tool receives the actual value.
-- run_tool(name, params) — call an existing tool from inside Lua (for tool composition only — if you just need to call a single tool, use call_tool instead)
+- secret(name) — retrieve API keys/passwords. ALWAYS use secret("name") and concatenate into your URL or header. NEVER write "secret:name" as a literal string — it will NOT be resolved.
 - log(message)
 - Standard Lua: string.*, table.*, math.*, tonumber, tostring, type, pairs, ipairs, pcall
-
-CRITICAL: When to use call_tool vs Lua:
-- To call an existing tool (built-in or saved): ALWAYS use call_tool. It is faster, more reliable, and has proper error handling.
-- NEVER write Lua that replicates what a built-in tool already does. If rss_feed exists, do NOT write Lua to http_get an RSS URL and parse XML. If caldav_calendar exists, do NOT write Lua to http_request a CalDAV server. If http_fetch exists, do NOT write Lua with http_get for simple fetches. The built-in tool is always the right choice.
-- Use Lua ONLY for: (1) data processing/transformation of results you already have, (2) tool composition via run_tool() when you need to combine multiple tools in one block, (3) HTTP calls to APIs/services that have NO matching built-in tool.
-- If a built-in tool call was blocked as a duplicate, that means you ALREADY HAVE the data from a previous step. Do NOT work around the block by rewriting the same call in Lua — use the existing result.
 
 UNAVAILABLE (sandboxed out): require, os, io, debug, dofile, loadfile, package, base64.
 There is no base64 library — for HTTP Basic auth, embed credentials in the URL (https://user:pass@host).
 
 Return a table with the results. Example:
 ```lua
-local resp = http_get("https://api.example.com/data")
-local data = json_parse(resp.body)
-return { result = data }
+local events = caldav_calendar({CALENDAR_URL = "https://cal.example.com/cal", FROM = "2025-01-01", TO = "2025-01-31"})
+return events
 ```
 
 ### Multiple Lua blocks & naming
@@ -176,32 +164,21 @@ You can write multiple ```lua blocks in one response. They run in parallel in se
 
 ```lua
 -- name: fetch_weather
-local resp = http_get("https://api.example.com/weather")
-return json_parse(resp.body)
+return rss_feed({URL = "https://weather.example.com/feed"})
 ```
 
 ```lua
--- name: fetch_news
-local resp = http_get("https://api.example.com/news")
-return json_parse(resp.body)
+-- name: get_state
+return state_get({KEY = "last_check"})
 ```
 
-Results come back labeled by name (e.g. [fetch_weather]: ..., [fetch_news]: ...). If you omit the name, blocks are labeled by index ([inline 1], [inline 2]).
+Results come back labeled by name (e.g. [fetch_weather]: ..., [get_state]: ...). If you omit the name, blocks are labeled by index ([inline 1], [inline 2]).
 
-## JSON actions
+## JSON control actions
 
-Multiple JSON actions can appear in one response. Wrap them in a JSON array:
-[{"action": "call_tool", "tool": "TOOL_A", "params": {}}, {"action": "call_tool", "tool": "TOOL_B", "params": {}}]
+JSON actions handle control flow only — NOT tool calls. A single action can be a plain object (no array needed).
 
-A single action can be a plain object (no array needed):
-{"action": "call_tool", "tool": "TOOL_NAME", "params": {"KEY": "value"}}
-
-Available actions:
-
-**call_tool** — call an existing tool:
-{"action": "call_tool", "tool": "TOOL_NAME", "params": {"KEY": "value"}}
-
-**save_tool** — save a previously successful ```lua block as a reusable tool. Reference the block by name or index:
+**save_tool** — save a previously successful ```lua block as a reusable tool (it becomes a Lua function prefixed with tool_, e.g. saving "weather" creates tool_weather()):
 {"action": "save_tool", "name": "generic_tool_name", "description": "one line description", "block": "fetch_weather"}
 
 **remove_tool** — remove a broken tool from the toolbox:
@@ -215,15 +192,15 @@ Available actions:
 
 **done** — give your final answer (this text is shown directly to the user — make it complete and well-formatted):
 {"action": "done", "text": "your complete answer to the user"}
-IMPORTANT: done MUST be the only action in a response. If you combine done with other actions (Lua blocks, tool calls, etc.), the done will be IGNORED and all other actions will execute. You will be asked to resubmit done on its own.
+IMPORTANT: done MUST be the only action in a response. If you combine done with other actions, the done will be IGNORED and all other actions will execute.
 
 **dismiss** — exit silently with NO message to the user:
 {"action": "dismiss"}
-dismiss vs done: done always sends a message to the user. dismiss exits the loop without sending anything — the user sees nothing. Use dismiss when the task is complete but there is genuinely nothing to tell the user. Typical case: a scheduled or monitoring task checked a condition and the condition was not met (e.g. "notify me if the deploy fails" — the deploy succeeded, so there is nothing to report). Do NOT use dismiss to avoid answering a direct question from the user — if a human asked something, they expect a response via done. Like done, dismiss must be the only action in a response.
+Use dismiss when a task completes with nothing to report (e.g. a monitoring check found no issues). Do NOT use dismiss to avoid answering a direct question. Like done, dismiss must be the only action in a response.
 
-## Mixing actions
+## Mixing Lua and control actions
 
-You can freely combine ```lua blocks with JSON actions (call_tool, save_tool, remove_tool, progress) in a single response. Everything executes in parallel. The only exceptions are done and dismiss, which must appear alone.
+You can freely combine ```lua blocks with JSON actions (save_tool, remove_tool, progress, load_skill) in a single response. Everything executes in parallel. The only exceptions are done and dismiss, which must appear alone.
 
 Example — fetch data and save a previous block in the same response:
 ```lua
@@ -235,24 +212,22 @@ return json_parse(resp.body)
 
 ## Rules
 
-- IMPORTANT: If a relevant skill exists (especially ones marked "suggested"), load it FIRST before calling the tool. Skills contain the correct URLs, credentials, parameter formats, and known workarounds. Guessing these values wastes steps.
-- After inline Lua succeeds: if the code is generally useful (API calls, data fetching, etc.), save it with save_tool. You can save a block in the same response as new work, or in a subsequent response.
-- CRITICAL: When a step already returned the data you need, do NOT rewrite the code. Use save_tool referencing the successful block. Rewriting working code risks regression.
-- If a tool or code fails, read the error carefully. Do NOT repeat the same approach — fix the specific issue.
-- NEVER retry something that already failed with the same error. If "require" failed, it will always fail. If a secret name was not found, try a different name.
-- If something worked in a previous step, reuse that exact approach. Do not regress to a pattern that already failed.
-- Do NOT answer prematurely. If data collection failed, try a different approach before giving up. Only use done when you have actual data or have exhausted all reasonable approaches.
-- If a follow-up question asks about different data (different dates, different items, etc.), you MUST fetch new data — previous conversation results do not cover it.
-- If a saved tool fails repeatedly, use remove_tool to delete it — you can always recreate it or use inline Lua instead.
-- Match tool to purpose: read each tool's description and output fields carefully. Consider ALL data a tool returns — check "returns" fields for secondary data before writing new code.
-- NEVER use inline Lua as a workaround when a built-in tool call is blocked or fails. If a tool was blocked as duplicate, use the data from the earlier step. If a tool failed, fix the parameters — do not rewrite the same operation in Lua.
-- When saving tools, prefer generic names and use PARAMS for inputs (e.g. PARAMS["LOCATION"] instead of hardcoded "Stockholm"). This makes tools reusable for different inputs.
-- Use known facts to fill in real parameter values (actual URLs, locations, etc.)
-- The done action text should be a natural language response, NOT a JSON action. It is sent directly to the user — include all relevant details from your findings.
-- CRITICAL: Every response MUST contain at least one action (JSON or ```lua block). Plain text without an action will be treated as your final answer and sent to the user immediately. Do NOT output bare text as a thinking or planning step — if you are not ready to answer, use an action.
-- Use progress sparingly — only when the user would genuinely benefit from an intermediate update during a long multi-step task.
-- When you can do independent work in parallel (e.g. fetch from multiple APIs), use multiple ```lua blocks in one response instead of sequential steps.
-- If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly — they may be correcting, clarifying, or cancelling."#;
+- CRITICAL: Before writing ANY http_request/http_get/http_post code, check the "Available Lua functions" list. If a built-in function already does what you need (rss_feed for RSS, http_fetch for HTTP, caldav_calendar for CalDAV, etc.), call it directly — it handles auth, parsing, and error cases that raw HTTP will not. Only use http_get/http_request for APIs that have NO matching function.
+- IMPORTANT: If a relevant skill exists (especially ones marked "suggested"), load it FIRST. Skills contain the correct URLs, credentials, parameter formats, and known workarounds. Guessing these values wastes steps.
+- After inline Lua succeeds: if the code is generally useful, save it with save_tool. You can save a block in the same response as new work.
+- CRITICAL: When a step already returned the data you need, do NOT rewrite the code. Use save_tool referencing the successful block.
+- If code fails, read the error carefully. Do NOT repeat the same approach — fix the specific issue.
+- NEVER retry something that already failed with the same error.
+- If something worked in a previous step, reuse that exact approach.
+- Do NOT answer prematurely. If data collection failed, try a different approach before giving up.
+- If a follow-up question asks about different data, you MUST fetch new data.
+- If a saved tool fails repeatedly, use remove_tool to delete it.
+- When saving tools, prefer generic names and use PARAMS for inputs (e.g. PARAMS["LOCATION"]).
+- Use known facts to fill in real parameter values.
+- The done action text should be a natural language response. Include all relevant details from your findings.
+- CRITICAL: Every response MUST contain at least one action (JSON or ```lua block). Plain text without an action will be treated as your final answer.
+- When you can do independent work in parallel, use multiple ```lua blocks in one response.
+- If the user sends a follow-up message during your work, you'll see it in the history. Adjust your plan accordingly."#;
 
 /// Dynamic user prompt — ordered for prompt cache efficiency: stable sections
 /// first (skills, memories, secrets, conversation, context, task), then
@@ -260,18 +235,14 @@ return json_parse(resp.body)
 /// only invalidate the tail.
 const AGENT_USER_PROMPT_TEMPLATE: &str = r#"{memories}{conversation}{execution_context}{prior_context}Task: {task}
 
-Available tools:
+Available Lua functions (load lua.md skill for full docs):
 {tools}
 
 {history}Current date/time: {datetime}
-Your action:"#;
+Step {step} of {max_steps}. Your action:"#;
 
 #[derive(Debug, Clone)]
 pub enum Action {
-    CallTool {
-        tool: String,
-        params: HashMap<String, String>,
-    },
     RunCode {
         name: String,
         code: String,
@@ -317,7 +288,6 @@ pub struct ParsedResponse {
 impl Action {
     fn type_str(&self) -> &'static str {
         match self {
-            Action::CallTool { .. } => "call_tool",
             Action::RunCode { .. } => "run_code",
             Action::SaveTool { .. } => "save_tool",
             Action::RemoveTool { .. } => "remove_tool",
@@ -353,8 +323,10 @@ pub struct StepResult {
 enum Transition {
     /// No guardrail fired — normal continuation.
     None,
-    /// A tool returned output identical to a previous call. The duplicate
-    /// was NOT executed or added to history.
+    /// A tool was called with identical params/output to a previous call.
+    /// On first repeat: warn but still execute. On second repeat: block.
+    ToolRepeatWarned { tool: String, original_step: u32 },
+    /// A tool has been called 3+ times with identical params/output. Blocked.
     ToolRepeatBlocked { tool: String, original_step: u32 },
     /// A tool has failed too many times and is now blocked.
     ToolFailBlocked { tool: String, fail_count: u32 },
@@ -367,13 +339,22 @@ impl Transition {
     fn system_message(&self) -> Option<String> {
         match self {
             Transition::None => Option::None,
+            Transition::ToolRepeatWarned {
+                tool,
+                original_step,
+            } => Some(format!(
+                "SYSTEM: Tool \"{tool}\" returned the same data as step {original_step}. \
+                 The result was included this time, but calling it again will be BLOCKED. \
+                 Use the data you have to proceed or finish the task."
+            )),
             Transition::ToolRepeatBlocked {
                 tool,
                 original_step,
             } => Some(format!(
-                "SYSTEM: Tool \"{tool}\" was already called and returned the same data at \
-                 step {original_step}. The duplicate call was blocked and NOT added to history. \
-                 Use the result from step {original_step} to proceed or finish the task."
+                "SYSTEM: Tool \"{tool}\" was already called with the same result at \
+                 step {original_step}. This is the third identical call — it was blocked and \
+                 NOT executed. Use the result from previous steps to proceed or finish the task. \
+                 Do NOT rewrite the same call in Lua as a workaround."
             )),
             Transition::ToolFailBlocked { tool, fail_count } => Some(format!(
                 "SYSTEM: Tool \"{tool}\" has failed {fail_count} times and is now blocked. \
@@ -390,6 +371,7 @@ impl Transition {
     fn type_str(&self) -> &'static str {
         match self {
             Transition::None => "none",
+            Transition::ToolRepeatWarned { .. } => "tool_repeat_warned",
             Transition::ToolRepeatBlocked { .. } => "tool_repeat_blocked",
             Transition::ToolFailBlocked { .. } => "tool_fail_blocked",
             Transition::StepBudgetWarning { .. } => "step_budget_warning",
@@ -399,6 +381,10 @@ impl Transition {
     fn detail_str(&self) -> String {
         match self {
             Transition::None => String::new(),
+            Transition::ToolRepeatWarned {
+                tool,
+                original_step,
+            } => format!("{tool} (repeat of step {original_step}, warned)"),
             Transition::ToolRepeatBlocked {
                 tool,
                 original_step,
@@ -418,18 +404,6 @@ fn hash_output(s: &str) -> u64 {
     hasher.finish()
 }
 
-/// Compute a u64 hash of sorted tool params for call signature deduplication.
-fn hash_params(params: &HashMap<String, String>) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut sorted: Vec<_> = params.iter().collect();
-    sorted.sort_by_key(|(k, _)| *k);
-    for (k, v) in &sorted {
-        k.hash(&mut hasher);
-        v.hash(&mut hasher);
-    }
-    hasher.finish()
-}
-
 /// Number of steps remaining before we warn the model about the budget.
 const BUDGET_WARNING_THRESHOLD: u32 = 5;
 
@@ -445,6 +419,8 @@ pub fn build_agent_prompt(
     conversation: &[Message],
     frontend: &str,
     prior_context: Option<&str>,
+    step: u32,
+    max_steps: u32,
 ) -> Vec<Message> {
     let tools_section = if tools_section.is_empty() {
         "(none available — create one if needed)"
@@ -507,9 +483,7 @@ pub fn build_agent_prompt(
             })
             .collect::<Vec<_>>()
             .join("\n");
-        format!(
-            "Available secrets (pass as \"secret:NAME\" in tool params, or use secret(\"NAME\") in Lua):\n{list}\n\n"
-        )
+        format!("Available secrets (use secret(\"NAME\") in Lua to retrieve):\n{list}\n\n")
     };
 
     let conversation_section = if conversation.is_empty() {
@@ -572,7 +546,9 @@ pub fn build_agent_prompt(
         .replace("{prior_context}", &prior_section)
         .replace("{datetime}", &datetime)
         .replace("{task}", task)
-        .replace("{history}", &history_section);
+        .replace("{history}", &history_section)
+        .replace("{step}", &step.to_string())
+        .replace("{max_steps}", &max_steps.to_string());
 
     vec![
         Message::system(AGENT_SYSTEM_PROMPT),
@@ -809,6 +785,7 @@ fn parse_json_action(json_str: &str) -> Result<Action, String> {
         #[serde(default)]
         block: Option<String>,
         #[serde(default)]
+        #[allow(dead_code)]
         params: HashMap<String, serde_json::Value>,
     }
 
@@ -828,30 +805,13 @@ fn parse_json_action(json_str: &str) -> Result<Action, String> {
         }
     };
 
-    let coerce_params = |params: HashMap<String, serde_json::Value>| -> HashMap<String, String> {
-        params
-            .into_iter()
-            .map(|(k, v)| {
-                let s = match v {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                };
-                (k, s)
-            })
-            .collect()
-    };
-
     match raw.action.as_str() {
         "call_tool" => {
-            let tool = raw.tool.ok_or_else(|| {
-                "call_tool action is missing the required \"tool\" field. \
-                 Correct format: {\"action\": \"call_tool\", \"tool\": \"TOOL_NAME\", \"params\": {\"KEY\": \"value\"}}"
-                    .to_string()
-            })?;
-            Ok(Action::CallTool {
-                tool,
-                params: coerce_params(raw.params),
-            })
+            let tool = raw.tool.unwrap_or_default();
+            Err(format!(
+                "call_tool is not available. Call tools directly as Lua functions inside a ```lua block: \
+                 ```lua\nreturn {tool}({{KEY = \"value\"}})\n```"
+            ))
         }
         "save_tool" => {
             let name = raw.name.ok_or_else(|| {
@@ -907,23 +867,11 @@ fn parse_json_action(json_str: &str) -> Result<Action, String> {
             })
         }
         "dismiss" => Ok(Action::Dismiss),
-        // Unknown action name — if it has a tool field or params, treat as call_tool.
-        // Models sometimes use the tool name as the action (e.g. "action": "remove_schedule").
-        unknown => {
-            let tool = raw.tool.unwrap_or_else(|| unknown.to_string());
-            if !raw.params.is_empty() || tool != unknown {
-                Ok(Action::CallTool {
-                    tool,
-                    params: coerce_params(raw.params),
-                })
-            } else {
-                Err(format!(
-                    "Unknown action \"{unknown}\". Available actions: call_tool, save_tool, \
-                     remove_tool, progress, load_skill, done, dismiss. To call a tool, use: \
-                     {{\"action\": \"call_tool\", \"tool\": \"{unknown}\", \"params\": {{}}}}"
-                ))
-            }
-        }
+        unknown => Err(format!(
+            "Unknown action \"{unknown}\". Available actions: save_tool, \
+                 remove_tool, progress, load_skill, done, dismiss. To call a tool, \
+                 use a ```lua block: ```lua\nreturn {unknown}({{}})\n```"
+        )),
     }
 }
 
@@ -1137,14 +1085,6 @@ fn looks_incomplete(text: &str) -> bool {
 
 fn format_action_short(action: &Action) -> String {
     match action {
-        Action::CallTool { tool, params } => {
-            let params_str = params
-                .iter()
-                .map(|(k, v)| format!("{k}: {v}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("Called tool \"{tool}\" ({params_str})")
-        }
         Action::RunCode { name, .. } => format!("Ran inline Lua [{name}]"),
         Action::SaveTool { name, .. } => format!("Saved tool \"{name}\""),
         Action::RemoveTool { name } => format!("Removed tool \"{name}\""),
@@ -1174,25 +1114,6 @@ fn extract_error_reason(output: &str) -> String {
     }
     // Fallback: first 120 chars of output
     truncate_preview(output, 120)
-}
-
-fn is_sensitive_key(key: &str) -> bool {
-    let key = key.to_ascii_lowercase();
-    key.contains("token")
-        || key.contains("password")
-        || key.contains("secret")
-        || key.contains("api_key")
-        || key == "key"
-        || key.contains("authorization")
-        || key.contains("cookie")
-}
-
-fn format_param_for_log(key: &str, value: &str) -> String {
-    if is_sensitive_key(key) {
-        format!("  {key} = \"[redacted]\"")
-    } else {
-        format!("  {key} = \"{value}\"")
-    }
 }
 
 /// Produce a finding for the working context.
@@ -1275,16 +1196,11 @@ fn extract_lua_blocks(text: &str) -> Vec<(String, String)> {
     blocks
 }
 
-fn loop_stats(history: &[StepResult]) -> (u32, u32) {
-    let tool_calls = history
-        .iter()
-        .filter(|s| matches!(s.action, Action::CallTool { .. }))
-        .count() as u32;
-    let code_runs = history
+fn loop_stats(history: &[StepResult]) -> u32 {
+    history
         .iter()
         .filter(|s| matches!(s.action, Action::RunCode { .. }))
-        .count() as u32;
-    (tool_calls, code_runs)
+        .count() as u32
 }
 
 pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Error + Send + Sync>> {
@@ -1329,7 +1245,6 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
     let mut history: Vec<StepResult> = Vec::new();
     let mut checkpoint: Option<Checkpoint> = None;
     let mut step_timings: Vec<StepTiming> = Vec::new();
-    let mut tool_fail_counts: HashMap<String, u32> = HashMap::new();
     let mut last_successful_code: Option<String> = None; // fallback for save_tool without block ref
     let mut successful_blocks: HashMap<String, String> = HashMap::new(); // name -> code
     let mut incomplete_nudges: u32 = 0;
@@ -1337,10 +1252,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
 
     // Transition state: determined at end of iteration, injected at start of next.
     let mut pending_transition = Transition::None;
-    // Track (tool_name, params_hash) -> step for pre-execution repeat blocking.
-    let mut tool_call_signatures: HashMap<(String, u64), u32> = HashMap::new();
-    // Track (tool_name, output_hash) -> step for post-execution output dedup.
-    let mut tool_output_seen: HashMap<(String, u64), u32> = HashMap::new();
+    // Track (source, output_hash) -> (first_step, hit_count) for post-execution output dedup.
+    let mut tool_output_seen: HashMap<(String, u64), (u32, u32)> = HashMap::new();
     // Track Lua error hash -> count for fail-blocking across differently-named blocks.
     let mut lua_error_counts: HashMap<u64, u32> = HashMap::new();
     // Track loaded skills to avoid re-loading the same skill multiple times.
@@ -1394,7 +1307,7 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
             eprintln!("[agent] step {step}: tools shown to model:\n{tools_section}");
         }
 
-        let skill_catalog = skill_store.catalog().unwrap_or_default();
+        let skill_catalog = skill_store.catalog_with_lua().unwrap_or_default();
         let secret_descs = secrets.map(|s| s.descriptions()).unwrap_or_default();
         let mut messages = build_agent_prompt(
             task,
@@ -1407,6 +1320,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
             conversation,
             frontend,
             prior_context.as_deref(),
+            step,
+            max_steps,
         );
 
         // Check if we need a checkpoint before sending
@@ -1426,6 +1341,8 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                 conversation,
                 frontend,
                 prior_context.as_deref(),
+                step,
+                max_steps,
             );
         }
 
@@ -1478,18 +1395,6 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
             eprintln!("[agent] step {step}: parsed {} action(s)", actions.len());
             for a in &actions {
                 match a {
-                    Action::CallTool { tool, params } => {
-                        let params_str = params
-                            .iter()
-                            .map(|(k, v)| format_param_for_log(k, v))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let expected = registry.extract_params(tool);
-                        eprintln!(
-                            "[agent] step {step}:   call_tool \"{tool}\"\n  params passed:\n{params_str}\n  tool expects: {:?}",
-                            expected
-                        );
-                    }
                     Action::RunCode { name, code } => {
                         let preview = truncate_preview(code, 200);
                         eprintln!("[agent] step {step}:   run_code [{name}]:\n{preview}");
@@ -1562,12 +1467,11 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                 success: true,
             })
             .await;
-            let (tool_calls, code_runs) = loop_stats(&history);
+            let lua_runs = loop_stats(&history);
             return Ok(LoopResult {
                 outcome: Outcome::Dismissed,
                 steps: step,
-                tool_calls,
-                code_runs,
+                lua_runs,
                 hit_step_limit: false,
                 step_timings,
             });
@@ -1653,12 +1557,11 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                         success: true,
                     })
                     .await;
-                    let (tool_calls, code_runs) = loop_stats(&history);
+                    let lua_runs = loop_stats(&history);
                     return Ok(LoopResult {
                         outcome: Outcome::Answer(text.clone()),
                         steps: step,
-                        tool_calls,
-                        code_runs,
+                        lua_runs,
                         hit_step_limit: false,
                         step_timings,
                     });
@@ -1691,12 +1594,11 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                     success: true,
                 })
                 .await;
-                let (tool_calls, code_runs) = loop_stats(&history);
+                let lua_runs = loop_stats(&history);
                 return Ok(LoopResult {
                     outcome: Outcome::Answer(answer),
                     steps: step,
-                    tool_calls,
-                    code_runs,
+                    lua_runs,
                     hit_step_limit: false,
                     step_timings,
                 });
@@ -1709,90 +1611,6 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
 
         for action in &actions {
             match action {
-                Action::CallTool { tool, params } => {
-                    // Pre-execution repeat detection: same tool + same params
-                    let params_hash = hash_params(params);
-                    let sig_key = (tool.clone(), params_hash);
-                    if let Some(&original_step) = tool_call_signatures.get(&sig_key) {
-                        if log.is_verbose() {
-                            eprintln!(
-                                "[agent] step {step}: BLOCKED tool \"{tool}\" — identical call already made at step {original_step}"
-                            );
-                        }
-                        // Don't execute, don't add to history — set transition for next iteration
-                        pending_transition = Transition::ToolRepeatBlocked {
-                            tool: tool.clone(),
-                            original_step,
-                        };
-                        continue;
-                    }
-
-                    let fail_count = tool_fail_counts.get(tool.as_str()).copied().unwrap_or(0);
-                    if fail_count >= 2 {
-                        if log.is_verbose() {
-                            eprintln!(
-                                "[agent] step {step}: BLOCKED tool \"{tool}\" — failed {fail_count} times already"
-                            );
-                        }
-                        pending_transition = Transition::ToolFailBlocked {
-                            tool: tool.clone(),
-                            fail_count,
-                        };
-                        continue;
-                    }
-
-                    log.emit(Event::AgentAction {
-                        task_id: task_id.to_string(),
-                        step,
-                        action_type: "call_tool".to_string(),
-                        detail: tool.clone(),
-                        params_json: Some(serde_json::to_string(params).unwrap_or_default()),
-                        code: None,
-                    })
-                    .await;
-
-                    emit(ProgressUpdate::ToolCallStart);
-
-                    let upper_params: HashMap<String, String> = params
-                        .iter()
-                        .map(|(k, v)| (k.to_uppercase(), v.clone()))
-                        .collect();
-
-                    let tool_name = tool.clone();
-                    let action_clone = action.clone();
-                    let registry = registry.clone();
-                    let tool_ctx_client = tool_ctx.client.clone();
-                    let tool_ctx_secrets = tool_ctx.secrets.clone();
-                    let tool_ctx_task = tool_ctx.task_description.clone();
-                    let tool_ctx_schedule = tool_ctx.schedule_store.clone();
-                    let tool_ctx_memory = tool_ctx.memory_store.clone();
-                    let tool_ctx_frontend = tool_ctx.frontend_context.clone();
-
-                    let ctx = ToolContext {
-                        client: tool_ctx_client,
-                        secrets: tool_ctx_secrets,
-                        task_description: tool_ctx_task,
-                        schedule_store: tool_ctx_schedule,
-                        memory_store: tool_ctx_memory,
-                        frontend_context: tool_ctx_frontend,
-                    };
-
-                    join_set.spawn(async move {
-                        let (output, success) =
-                            match registry.execute_tool(&tool_name, &upper_params, &ctx).await {
-                                Ok(value) => {
-                                    let has_error = value.get("error").is_some();
-                                    (value.to_string(), !has_error)
-                                }
-                                Err(e) => (
-                                    format!("{{\"error\": \"tool execution failed: {e}\"}}"),
-                                    false,
-                                ),
-                            };
-                        (action_clone, output, success)
-                    });
-                }
-
                 Action::RunCode { name, code } => {
                     log.emit(Event::AgentAction {
                         task_id: task_id.to_string(),
@@ -1814,6 +1632,9 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                     let secrets_clone = secrets.cloned();
                     let builtins = registry.builtins_arc();
                     let action_clone = action.clone();
+                    let sched_store = tool_ctx.schedule_store.clone();
+                    let mem_store = tool_ctx.memory_store.clone();
+                    let fe_ctx = tool_ctx.frontend_context.clone();
 
                     join_set.spawn(async move {
                         let provider = crate::context::LuaProvider::new(&block_name, &code);
@@ -1825,6 +1646,9 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                                 toolbox_dir,
                                 secrets_clone.as_ref(),
                                 builtins,
+                                sched_store,
+                                mem_store,
+                                fe_ctx,
                             )
                             .await
                         {
@@ -1868,7 +1692,7 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                             Ok(()) => {
                                 emit(ProgressUpdate::ToolCreated);
                                 format!(
-                                    "Tool \"{name}\" saved. You can now call it with call_tool."
+                                    "Tool \"{name}\" saved. You can now call it as tool_{name}() in Lua."
                                 )
                             }
                             Err(e) => format!("Failed to save tool: {e}"),
@@ -1959,7 +1783,9 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                     })
                     .await;
 
-                    let (output, success) = match skill_store.load(&normalized) {
+                    let (output, success) = match skill_store
+                        .load_dynamic(&normalized, &available_tools)
+                    {
                         Ok(content) => {
                             loaded_skills.insert(normalized.clone());
                             (content, true)
@@ -2011,58 +1837,6 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
         while let Some(result) = join_set.join_next().await {
             match result {
                 Ok((action, output, success)) => {
-                    // Track tool fail counts and output dedup for CallTool
-                    if let Action::CallTool {
-                        ref tool,
-                        ref params,
-                    } = action
-                    {
-                        if !success {
-                            *tool_fail_counts.entry(tool.clone()).or_insert(0) += 1;
-                        } else {
-                            // Track call signature for pre-execution repeat blocking
-                            let params_hash = hash_params(params);
-                            tool_call_signatures
-                                .entry((tool.clone(), params_hash))
-                                .or_insert(step);
-
-                            // Post-execution output dedup: if a different call to the
-                            // same tool produced identical output, suppress this result
-                            let out_hash = hash_output(&output);
-                            let out_key = (tool.clone(), out_hash);
-                            if let Some(&original_step) = tool_output_seen.get(&out_key) {
-                                if log.is_verbose() {
-                                    eprintln!(
-                                        "[agent] step {step}: tool \"{tool}\" returned identical output to step {original_step}, suppressing"
-                                    );
-                                }
-                                pending_transition = Transition::ToolRepeatBlocked {
-                                    tool: tool.clone(),
-                                    original_step,
-                                };
-                                emit(ProgressUpdate::ToolCallEnd);
-                                log.emit(Event::AgentToolResult {
-                                    task_id: task_id.to_string(),
-                                    step,
-                                    tool: tool.clone(),
-                                    success,
-                                    output_len: output.len(),
-                                })
-                                .await;
-                                continue; // skip adding to history
-                            }
-                            tool_output_seen.entry(out_key).or_insert(step);
-                        }
-                        emit(ProgressUpdate::ToolCallEnd);
-                        log.emit(Event::AgentToolResult {
-                            task_id: task_id.to_string(),
-                            step,
-                            tool: tool.clone(),
-                            success,
-                            output_len: output.len(),
-                        })
-                        .await;
-                    }
                     if let Action::RunCode { ref name, ref code } = action {
                         if success {
                             successful_blocks.insert(name.clone(), code.clone());
@@ -2074,28 +1848,41 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
                             // both returning the same RSS data).
                             let out_hash = hash_output(&output);
                             let out_key = ("__lua__".to_string(), out_hash);
-                            if let Some(&original_step) = tool_output_seen.get(&out_key) {
+                            let out_entry = tool_output_seen.entry(out_key).or_insert((step, 0));
+                            out_entry.1 += 1;
+                            if out_entry.1 > 1 && out_entry.0 != step {
+                                let original_step = out_entry.0;
+                                if out_entry.1 >= 3 {
+                                    if log.is_verbose() {
+                                        eprintln!(
+                                            "[agent] step {step}: code block \"{name}\" returned identical output to a block at step {original_step}, suppressing"
+                                        );
+                                    }
+                                    pending_transition = Transition::ToolRepeatBlocked {
+                                        tool: name.clone(),
+                                        original_step,
+                                    };
+                                    emit(ProgressUpdate::CodeRunEnd);
+                                    log.emit(Event::AgentToolResult {
+                                        task_id: task_id.to_string(),
+                                        step,
+                                        tool: name.clone(),
+                                        success,
+                                        output_len: output.len(),
+                                    })
+                                    .await;
+                                    continue; // skip adding to history
+                                }
                                 if log.is_verbose() {
                                     eprintln!(
-                                        "[agent] step {step}: code block \"{name}\" returned identical output to a block at step {original_step}, suppressing"
+                                        "[agent] step {step}: code block \"{name}\" returned identical output to step {original_step}, warning"
                                     );
                                 }
-                                pending_transition = Transition::ToolRepeatBlocked {
+                                pending_transition = Transition::ToolRepeatWarned {
                                     tool: name.clone(),
                                     original_step,
                                 };
-                                emit(ProgressUpdate::CodeRunEnd);
-                                log.emit(Event::AgentToolResult {
-                                    task_id: task_id.to_string(),
-                                    step,
-                                    tool: name.clone(),
-                                    success,
-                                    output_len: output.len(),
-                                })
-                                .await;
-                                continue; // skip adding to history
                             }
-                            tool_output_seen.entry(out_key).or_insert(step);
                         } else {
                             // Track Lua failures by error hash so differently-named
                             // blocks hitting the same error accumulate correctly.
@@ -2247,12 +2034,11 @@ pub async fn run_loop(config: LoopConfig<'_>) -> Result<LoopResult, Box<dyn Erro
         success: true,
     })
     .await;
-    let (tool_calls, code_runs) = loop_stats(&history);
+    let lua_runs = loop_stats(&history);
     Ok(LoopResult {
         outcome: Outcome::Answer(answer),
         steps: max_steps,
-        tool_calls,
-        code_runs,
+        lua_runs,
         hit_step_limit: true,
         step_timings,
     })
@@ -2321,8 +2107,7 @@ async fn format_answer(
     let data = history
         .iter()
         .filter_map(|s| match &s.action {
-            Action::CallTool { tool, .. } => Some(format!("[{tool}]: {}", s.output)),
-            Action::RunCode { .. } => Some(format!("[inline]: {}", s.output)),
+            Action::RunCode { name, .. } => Some(format!("[{name}]: {}", s.output)),
             Action::LoadSkill { name, .. } => Some(format!("[skill:{name}]: {}", s.output)),
             Action::UserMessage { text } => Some(format!("[User follow-up]: {text}")),
             _ => None,
@@ -2353,16 +2138,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_call_tool_action() {
+    fn parse_call_tool_returns_error() {
         let input =
             r#"{"action": "call_tool", "tool": "weather", "params": {"LOCATION": "Tokyo"}}"#;
-        match parse_action(input) {
-            Action::CallTool { tool, params } => {
-                assert_eq!(tool, "weather");
-                assert_eq!(params.get("LOCATION").unwrap(), "Tokyo");
-            }
-            other => panic!("expected CallTool, got {other:?}"),
-        }
+        let parsed = parse_response(input);
+        assert!(!parsed.errors.is_empty(), "call_tool should produce error");
+        assert!(parsed.errors[0].contains("call_tool is not available"));
     }
 
     #[test]
@@ -2407,17 +2188,6 @@ mod tests {
                 assert!(fallback, "malformed input should be fallback");
             }
             other => panic!("expected Done, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_numeric_params() {
-        let input = r#"{"action": "call_tool", "tool": "test", "params": {"COUNT": 5}}"#;
-        match parse_action(input) {
-            Action::CallTool { params, .. } => {
-                assert_eq!(params.get("COUNT").unwrap(), "5");
-            }
-            other => panic!("expected CallTool, got {other:?}"),
         }
     }
 
@@ -2610,26 +2380,20 @@ mod tests {
 
     #[test]
     fn parse_response_mixed_lua_and_json() {
-        let input = "```lua\n-- name: fetch\nreturn {}\n```\n{\"action\": \"call_tool\", \"tool\": \"weather\", \"params\": {}}";
+        let input = "```lua\n-- name: fetch\nreturn {}\n```\n{\"action\": \"progress\", \"text\": \"fetching\"}";
         let parsed = parse_response(input);
         assert_eq!(parsed.actions.len(), 2);
         assert!(matches!(parsed.actions[0], Action::RunCode { .. }));
-        assert!(matches!(parsed.actions[1], Action::CallTool { .. }));
+        assert!(matches!(parsed.actions[1], Action::Progress { .. }));
     }
 
     #[test]
     fn parse_response_json_array() {
-        let input = r#"[{"action": "call_tool", "tool": "a", "params": {}}, {"action": "call_tool", "tool": "b", "params": {}}]"#;
+        let input = r#"[{"action": "progress", "text": "a"}, {"action": "progress", "text": "b"}]"#;
         let parsed = parse_response(input);
         assert_eq!(parsed.actions.len(), 2);
-        match &parsed.actions[0] {
-            Action::CallTool { tool, .. } => assert_eq!(tool, "a"),
-            other => panic!("expected CallTool, got {other:?}"),
-        }
-        match &parsed.actions[1] {
-            Action::CallTool { tool, .. } => assert_eq!(tool, "b"),
-            other => panic!("expected CallTool, got {other:?}"),
-        }
+        assert!(matches!(parsed.actions[0], Action::Progress { .. }));
+        assert!(matches!(parsed.actions[1], Action::Progress { .. }));
     }
 
     #[test]
@@ -2694,34 +2458,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_unknown_action_with_tool_field_becomes_call_tool() {
-        // Model used tool name as action instead of "call_tool"
-        let input = r#"{"action": "remove_schedule", "tool": "remove_schedule", "params": {"SCHEDULE_ID": "abc-123"}}"#;
-        match parse_action(input) {
-            Action::CallTool { tool, params } => {
-                assert_eq!(tool, "remove_schedule");
-                assert_eq!(params.get("SCHEDULE_ID").unwrap(), "abc-123");
-            }
-            other => panic!("expected CallTool, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_unknown_action_with_params_only_uses_action_as_tool() {
-        // Model used tool name as action, no separate tool field
-        let input = r#"{"action": "memory_update", "params": {"ID": "x", "FACT": "something"}}"#;
-        match parse_action(input) {
-            Action::CallTool { tool, params } => {
-                assert_eq!(tool, "memory_update");
-                assert_eq!(params.get("FACT").unwrap(), "something");
-            }
-            other => panic!("expected CallTool, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_unknown_action_without_tool_or_params_reports_error() {
-        // Truly unknown action with no useful fields — reports helpful error
+    fn parse_unknown_action_reports_error() {
         let input = r#"{"action": "something_random"}"#;
         let parsed = parse_response(input);
         assert_eq!(parsed.actions.len(), 1);
@@ -2732,35 +2469,6 @@ mod tests {
         assert_eq!(parsed.errors.len(), 1);
         assert!(parsed.errors[0].contains("Unknown action"));
         assert!(parsed.errors[0].contains("something_random"));
-        assert!(parsed.errors[0].contains("call_tool"));
-    }
-
-    #[test]
-    fn parse_double_brace_json_recovery() {
-        // Model generated double braces (legacy behavior)
-        let input =
-            r#"{{"action": "call_tool", "tool": "weather", "params": {{"CITY": "Stockholm"}}}}"#;
-        match parse_action(input) {
-            Action::CallTool { tool, params } => {
-                assert_eq!(tool, "weather");
-                assert_eq!(params.get("CITY").unwrap(), "Stockholm");
-            }
-            other => panic!("expected CallTool, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_call_tool_missing_tool_field_reports_error() {
-        let input = r#"{"action": "call_tool", "params": {"X": "1"}}"#;
-        let parsed = parse_response(input);
-        assert_eq!(parsed.actions.len(), 1);
-        assert!(matches!(
-            parsed.actions[0],
-            Action::Done { fallback: true, .. }
-        ));
-        assert_eq!(parsed.errors.len(), 1);
-        assert!(parsed.errors[0].contains("call_tool"));
-        assert!(parsed.errors[0].contains("tool"));
     }
 
     #[test]
@@ -2793,8 +2501,7 @@ mod tests {
 
     #[test]
     fn valid_actions_produce_no_errors() {
-        let input =
-            r#"{"action": "call_tool", "tool": "weather", "params": {"CITY": "Stockholm"}}"#;
+        let input = r#"{"action": "done", "text": "hello"}"#;
         let parsed = parse_response(input);
         assert_eq!(parsed.actions.len(), 1);
         assert!(
@@ -2805,7 +2512,7 @@ mod tests {
 
     #[test]
     fn parse_malformed_json_with_action_key_reports_error() {
-        let input = r#"{"action": "call_tool", "tool": }"#;
+        let input = r#"{"action": "done", "text": }"#;
         let parsed = parse_response(input);
         // Malformed JSON with "action" key should report helpful error
         assert!(

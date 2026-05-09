@@ -98,6 +98,94 @@ impl SkillStore {
         let path = self.dir.join(name);
         Ok(std::fs::read_to_string(path)?)
     }
+
+    pub fn load_dynamic(
+        &self,
+        name: &str,
+        tools: &[ToolInfo],
+    ) -> Result<String, Box<dyn Error + Send + Sync>> {
+        let normalized = name.strip_suffix(".md").unwrap_or(name);
+        if normalized == "lua" {
+            return Ok(generate_lua_reference(tools));
+        }
+        self.load(name)
+    }
+
+    pub fn catalog_with_lua(&self) -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>> {
+        let mut entries = self.catalog()?;
+        entries.push((
+            "lua.md".to_string(),
+            "Lua API Reference — All available functions and tools".to_string(),
+        ));
+        Ok(entries)
+    }
+}
+
+fn generate_lua_reference(tools: &[ToolInfo]) -> String {
+    let mut out = String::from("# Lua API Reference\n\n");
+
+    out.push_str("## Sandbox built-in functions\n\n");
+    out.push_str("### HTTP\n");
+    out.push_str("- `http_request({method, url, body?, headers?})` → `{status, body}` — General HTTP request\n");
+    out.push_str("- `http_get(url)` → `{status, body}` — GET shorthand\n");
+    out.push_str("- `http_post(url, body)` → `{status, body}` — POST shorthand (Content-Type: application/json)\n\n");
+
+    out.push_str("### JSON / XML\n");
+    out.push_str("- `json_parse(string)` → table — Parse JSON string into Lua table\n");
+    out.push_str("- `json_encode(table)` → string — Encode Lua table as JSON string\n");
+    out.push_str(
+        "- `xml_parse(string)` → table — Parse XML into `{tag, attrs?, text?, children?}` tree\n",
+    );
+    out.push_str("- `xml_encode(table)` → string — Encode table tree back to XML\n\n");
+
+    out.push_str("### Secrets\n");
+    out.push_str("- `secret(name)` → string — Retrieve an API key or password by name. Use `secret(\"name\")` and concatenate into URLs/headers. Never write `\"secret:name\"` as a literal string.\n\n");
+
+    out.push_str("### Utility\n");
+    out.push_str("- `log(message)` — Print to stderr (for debugging)\n\n");
+
+    out.push_str("### Standard Lua (available)\n");
+    out.push_str("string.*, table.*, math.*, tonumber, tostring, type, pairs, ipairs, pcall, select, unpack\n\n");
+
+    out.push_str("### Unavailable (sandboxed out)\n");
+    out.push_str("require, os, io, debug, dofile, loadfile, package, base64, collectgarbage\n\n");
+
+    if !tools.is_empty() {
+        out.push_str("## Tool functions\n\n");
+        out.push_str("All tools are available as Lua global functions. Built-in tools use their name directly. Saved toolbox tools are prefixed with `tool_`.\n\n");
+        for t in tools {
+            let params_str = if t.params.is_empty() {
+                String::new()
+            } else {
+                let inner: Vec<String> = t
+                    .params
+                    .iter()
+                    .map(|(name, required)| {
+                        if *required {
+                            name.clone()
+                        } else {
+                            format!("{name}?")
+                        }
+                    })
+                    .collect();
+                format!("{{{}}}", inner.join(", "))
+            };
+            let returns_str = if t.returns.is_empty() {
+                String::new()
+            } else {
+                format!(" → `{{{}}}`", t.returns.join(", "))
+            };
+            out.push_str(&format!(
+                "### `{}({})`{}\n{}\n\n",
+                t.lua_name(),
+                params_str,
+                returns_str,
+                t.description
+            ));
+        }
+    }
+
+    out
 }
 
 const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for a workflow automation agent. Review the agent's memory facts and tools, then create or update procedural skill guides.

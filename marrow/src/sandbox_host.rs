@@ -1,16 +1,20 @@
 use mlua::{Lua, LuaSerdeExt, Result, Value};
 use reqwest::Client;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::memory::MemoryStore;
 use crate::sandbox::create_sandbox;
+use crate::schedule::ScheduleStore;
 use crate::secrets::Secrets;
-use crate::tool::{Tool, ToolContext};
+use crate::tool::{FrontendContext, Tool, ToolContext};
 use crate::xml::XmlNode;
 
 const MAX_RECURSION_DEPTH: u32 = 5;
+
+const TOOLBOX_PREFIX: &str = "tool_";
 
 pub struct HostConfig {
     pub client: Arc<Client>,
@@ -19,6 +23,9 @@ pub struct HostConfig {
     pub recursion_depth: Arc<AtomicU32>,
     pub secrets: Arc<HashMap<String, String>>,
     pub builtins: Arc<HashMap<String, Arc<dyn Tool>>>,
+    pub schedule_store: Option<Arc<ScheduleStore>>,
+    pub memory_store: Option<Arc<MemoryStore>>,
+    pub frontend_context: Option<FrontendContext>,
 }
 
 impl HostConfig {
@@ -30,6 +37,9 @@ impl HostConfig {
             recursion_depth: Arc::new(AtomicU32::new(0)),
             secrets: Arc::new(HashMap::new()),
             builtins: Arc::new(HashMap::new()),
+            schedule_store: None,
+            memory_store: None,
+            frontend_context: None,
         }
     }
 }
@@ -45,30 +55,24 @@ pub fn register_host_functions(lua: &Lua, config: &HostConfig) -> Result<()> {
     register_log(lua)?;
     register_secret(lua, config.secrets.clone())?;
 
-    if let Some(ref toolbox_dir) = config.toolbox_dir {
-        register_run_tool(
-            lua,
-            config.client.clone(),
-            toolbox_dir.clone(),
-            config.task_description.clone(),
-            config.recursion_depth.clone(),
-            config.secrets.clone(),
-            config.builtins.clone(),
-        )?;
-    }
+    register_run_tool(lua, config)?;
+    register_builtin_tools(lua, config)?;
+    register_toolbox_tools(lua, config)?;
 
     Ok(())
 }
 
-fn register_run_tool(
-    lua: &Lua,
-    client: Arc<Client>,
-    toolbox_dir: PathBuf,
-    task_description: String,
-    depth: Arc<AtomicU32>,
-    secrets: Arc<HashMap<String, String>>,
-    builtins: Arc<HashMap<String, Arc<dyn Tool>>>,
-) -> Result<()> {
+fn register_run_tool(lua: &Lua, config: &HostConfig) -> Result<()> {
+    let client = config.client.clone();
+    let toolbox_dir = config.toolbox_dir.clone();
+    let task_description = config.task_description.clone();
+    let depth = config.recursion_depth.clone();
+    let secrets = config.secrets.clone();
+    let builtins = config.builtins.clone();
+    let schedule_store = config.schedule_store.clone();
+    let memory_store = config.memory_store.clone();
+    let frontend_context = config.frontend_context.clone();
+
     let func =
         lua.create_async_function(move |lua, (name, params): (String, Option<mlua::Table>)| {
             let client = client.clone();
@@ -77,6 +81,9 @@ fn register_run_tool(
             let depth = depth.clone();
             let secrets = secrets.clone();
             let builtins = builtins.clone();
+            let schedule_store = schedule_store.clone();
+            let memory_store = memory_store.clone();
+            let frontend_context = frontend_context.clone();
             async move {
                 let current = depth.fetch_add(1, Ordering::SeqCst);
                 if current >= MAX_RECURSION_DEPTH {
@@ -86,17 +93,19 @@ fn register_run_tool(
                     )));
                 }
 
-                let result = run_tool_inner(
-                    &name,
-                    params.as_ref(),
-                    &client,
-                    &toolbox_dir,
-                    &task_description,
-                    &depth,
-                    &secrets,
-                    &builtins,
-                )
-                .await;
+                let inner_config = HostConfig {
+                    client,
+                    toolbox_dir,
+                    task_description,
+                    recursion_depth: depth.clone(),
+                    secrets,
+                    builtins,
+                    schedule_store,
+                    memory_store,
+                    frontend_context,
+                };
+
+                let result = run_tool_inner(&name, params.as_ref(), &inner_config).await;
 
                 depth.fetch_sub(1, Ordering::SeqCst);
 
@@ -110,35 +119,162 @@ fn register_run_tool(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+fn register_builtin_tools(lua: &Lua, config: &HostConfig) -> Result<()> {
+    for (name, tool) in config.builtins.as_ref() {
+        let tool = tool.clone();
+        let client = config.client.clone();
+        let secrets = config.secrets.clone();
+        let task_desc = config.task_description.clone();
+        let schedule_store = config.schedule_store.clone();
+        let memory_store = config.memory_store.clone();
+        let frontend_context = config.frontend_context.clone();
+        let tool_name = name.clone();
+
+        let func = lua.create_async_function(move |lua, params: Option<mlua::Table>| {
+            let tool = tool.clone();
+            let client = client.clone();
+            let secrets = secrets.clone();
+            let task_desc = task_desc.clone();
+            let schedule_store = schedule_store.clone();
+            let memory_store = memory_store.clone();
+            let frontend_context = frontend_context.clone();
+            let tool_name = tool_name.clone();
+            async move {
+                let params_map = lua_params_to_hashmap(params.as_ref())
+                    .map_err(|e| mlua::Error::external(format!("{tool_name}: {e}")))?;
+                let secrets_obj = secrets_map_to_secrets(&secrets);
+                let resolved = secrets_obj.resolve_params(&params_map);
+                let ctx = ToolContext {
+                    client,
+                    secrets: Arc::new(secrets_obj),
+                    task_description: task_desc,
+                    schedule_store,
+                    memory_store,
+                    frontend_context,
+                };
+                let result = tool
+                    .execute(resolved, ctx)
+                    .await
+                    .map_err(|e| mlua::Error::external(format!("{tool_name}: {e}")))?;
+                lua.to_value(&result)
+            }
+        })?;
+        lua.globals().set(name.as_str(), func)?;
+    }
+    Ok(())
+}
+
+fn register_toolbox_tools(lua: &Lua, config: &HostConfig) -> Result<()> {
+    let toolbox_dir = match config.toolbox_dir {
+        Some(ref dir) => dir,
+        None => return Ok(()),
+    };
+
+    let entries = match std::fs::read_dir(toolbox_dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+            continue;
+        }
+        let name = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        if config.builtins.contains_key(&name) {
+            continue;
+        }
+
+        let lua_path = toolbox_dir.join(format!("{name}.lua"));
+        if !lua_path.exists() {
+            continue;
+        }
+
+        let client = config.client.clone();
+        let tb_dir = toolbox_dir.clone();
+        let task_desc = config.task_description.clone();
+        let depth = config.recursion_depth.clone();
+        let secrets = config.secrets.clone();
+        let builtins = config.builtins.clone();
+        let schedule_store = config.schedule_store.clone();
+        let memory_store = config.memory_store.clone();
+        let frontend_context = config.frontend_context.clone();
+        let tool_name = name.clone();
+
+        let func = lua.create_async_function(move |lua, params: Option<mlua::Table>| {
+            let client = client.clone();
+            let tb_dir = tb_dir.clone();
+            let task_desc = task_desc.clone();
+            let depth = depth.clone();
+            let secrets = secrets.clone();
+            let builtins = builtins.clone();
+            let schedule_store = schedule_store.clone();
+            let memory_store = memory_store.clone();
+            let frontend_context = frontend_context.clone();
+            let tool_name = tool_name.clone();
+            async move {
+                let current = depth.fetch_add(1, Ordering::SeqCst);
+                if current >= MAX_RECURSION_DEPTH {
+                    depth.fetch_sub(1, Ordering::SeqCst);
+                    return Err(mlua::Error::external(format!(
+                        "{tool_name}: max recursion depth ({MAX_RECURSION_DEPTH}) exceeded"
+                    )));
+                }
+
+                let inner_config = HostConfig {
+                    client,
+                    toolbox_dir: Some(tb_dir),
+                    task_description: task_desc,
+                    recursion_depth: depth.clone(),
+                    secrets,
+                    builtins,
+                    schedule_store,
+                    memory_store,
+                    frontend_context,
+                };
+
+                let result = run_tool_inner(&tool_name, params.as_ref(), &inner_config).await;
+                depth.fetch_sub(1, Ordering::SeqCst);
+
+                let json_value =
+                    result.map_err(|e| mlua::Error::external(format!("{tool_name}: {e}")))?;
+                lua.to_value(&json_value)
+            }
+        })?;
+        let global_name = format!("{TOOLBOX_PREFIX}{name}");
+        lua.globals().set(global_name.as_str(), func)?;
+    }
+    Ok(())
+}
+
 async fn run_tool_inner(
     name: &str,
     params: Option<&mlua::Table>,
-    client: &Client,
-    toolbox_dir: &Path,
-    task_description: &str,
-    depth: &Arc<AtomicU32>,
-    secrets: &Arc<HashMap<String, String>>,
-    builtins: &HashMap<String, Arc<dyn Tool>>,
+    config: &HostConfig,
 ) -> std::result::Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    // Check built-in tools first
-    if let Some(tool) = builtins.get(name) {
+    if let Some(tool) = config.builtins.get(name) {
         let params_map = lua_params_to_hashmap(params)?;
-        let secrets_obj = secrets_map_to_secrets(secrets);
-        // Resolve secret: prefixed param values before dispatching
+        let secrets_obj = secrets_map_to_secrets(&config.secrets);
         let resolved = secrets_obj.resolve_params(&params_map);
         let ctx = ToolContext {
-            client: Arc::new(client.clone()),
+            client: config.client.clone(),
             secrets: Arc::new(secrets_obj),
-            task_description: task_description.to_string(),
-            schedule_store: None,
-            memory_store: None,
-            frontend_context: None,
+            task_description: config.task_description.clone(),
+            schedule_store: config.schedule_store.clone(),
+            memory_store: config.memory_store.clone(),
+            frontend_context: config.frontend_context.clone(),
         };
         return tool.execute(resolved, ctx).await;
     }
 
-    // Fall back to Lua toolbox
+    let toolbox_dir = config
+        .toolbox_dir
+        .as_ref()
+        .ok_or_else(|| format!("tool '{name}' not found (no toolbox configured)"))?;
     let lua_path = toolbox_dir.join(format!("{name}.lua"));
     let source = std::fs::read_to_string(&lua_path)
         .map_err(|e| format!("failed to load tool '{name}': {e}"))?;
@@ -146,17 +282,20 @@ async fn run_tool_inner(
     let inner_lua = create_sandbox()?;
 
     let inner_config = HostConfig {
-        client: Arc::new(client.clone()),
+        client: config.client.clone(),
         toolbox_dir: Some(toolbox_dir.to_path_buf()),
-        task_description: task_description.to_string(),
-        recursion_depth: depth.clone(),
-        secrets: secrets.clone(),
-        builtins: Arc::new(builtins.clone()),
+        task_description: config.task_description.clone(),
+        recursion_depth: config.recursion_depth.clone(),
+        secrets: config.secrets.clone(),
+        builtins: config.builtins.clone(),
+        schedule_store: config.schedule_store.clone(),
+        memory_store: config.memory_store.clone(),
+        frontend_context: config.frontend_context.clone(),
     };
     register_host_functions(&inner_lua, &inner_config)?;
 
     let task_table = inner_lua.create_table()?;
-    task_table.set("description", task_description.to_string())?;
+    task_table.set("description", config.task_description.clone())?;
     inner_lua.globals().set("TASK", task_table)?;
 
     let params_table = inner_lua.create_table()?;
