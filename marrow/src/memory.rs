@@ -16,6 +16,13 @@ pub struct KvEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryCluster {
+    pub cluster_id: usize,
+    pub summary: String,
+    pub member_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memory {
     pub id: Uuid,
     pub fact: String,
@@ -154,6 +161,15 @@ fn open_db(path: &Path) -> Result<Connection, Box<dyn Error + Send + Sync>> {
             key     TEXT PRIMARY KEY NOT NULL,
             value   TEXT NOT NULL,
             updated TEXT NOT NULL
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS memory_clusters (
+            cluster_id  INTEGER NOT NULL,
+            memory_id   TEXT NOT NULL,
+            summary     TEXT NOT NULL,
+            FOREIGN KEY (memory_id) REFERENCES memories(id)
         )",
         [],
     )?;
@@ -462,6 +478,71 @@ impl MemoryStore {
             rusqlite::params![key],
         )?;
         Ok(changed > 0)
+    }
+
+    // -- Memory clusters --
+
+    pub fn save_clusters(
+        &self,
+        clusters: &[MemoryCluster],
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM memory_clusters", [])?;
+        let mut stmt = conn.prepare(
+            "INSERT INTO memory_clusters (cluster_id, memory_id, summary) VALUES (?1, ?2, ?3)",
+        )?;
+        for cluster in clusters {
+            for member_id in &cluster.member_ids {
+                stmt.execute(rusqlite::params![
+                    cluster.cluster_id as i64,
+                    member_id,
+                    cluster.summary,
+                ])?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn load_clusters(&self) -> Result<Vec<MemoryCluster>, Box<dyn Error + Send + Sync>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT cluster_id, memory_id, summary FROM memory_clusters ORDER BY cluster_id",
+        )?;
+        let rows: Vec<(usize, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as usize,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut map: std::collections::HashMap<usize, MemoryCluster> =
+            std::collections::HashMap::new();
+        for (cid, mid, summary) in rows {
+            let entry = map.entry(cid).or_insert_with(|| MemoryCluster {
+                cluster_id: cid,
+                summary: summary.clone(),
+                member_ids: Vec::new(),
+            });
+            entry.member_ids.push(mid);
+        }
+
+        let mut clusters: Vec<MemoryCluster> = map.into_values().collect();
+        clusters.sort_by_key(|c| c.cluster_id);
+        Ok(clusters)
+    }
+
+    pub fn cluster_count(&self) -> Result<usize, Box<dyn Error + Send + Sync>> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT cluster_id) FROM memory_clusters",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 
     pub fn kv_list(&self) -> Result<Vec<KvEntry>, Box<dyn Error + Send + Sync>> {
