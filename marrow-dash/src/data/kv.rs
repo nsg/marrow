@@ -33,8 +33,7 @@ impl KvData {
             .unwrap_or(0);
 
         let mut entries = Vec::new();
-        if let Ok(mut stmt) =
-            conn.prepare("SELECT key, value, updated FROM kv_state ORDER BY key")
+        if let Ok(mut stmt) = conn.prepare("SELECT key, value, updated FROM kv_state ORDER BY key")
             && let Ok(rows) = stmt.query_map([], |row| {
                 Ok(KvItem {
                     key: row.get(0)?,
