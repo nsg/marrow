@@ -175,7 +175,7 @@ impl OpenAIBackend {
                 let resp = match req.send().await {
                     Ok(r) => r,
                     Err(e) => {
-                        let msg = e.to_string();
+                        let msg = super::describe_network_error(&e);
                         if let Some(ref rl) = err_log {
                             rl.log_error(&err_role, &err_url, 0, &msg).await;
                         }
