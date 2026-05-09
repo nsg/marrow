@@ -17,6 +17,8 @@ struct OverviewResponse {
     schedules: ScheduleOverview,
     skills_count: usize,
     kv_count: usize,
+    events_count: usize,
+    backend_errors_count: usize,
     config: crate::data::config::ConfigInfo,
 }
 
@@ -80,6 +82,17 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
         .unwrap_or_else(|e| e.into_inner())
         .entries
         .len();
+    let events_count = state
+        .events
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .entries
+        .len();
+    let backend_errors_count = state
+        .backend_errors
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .total();
 
     // Clone config for serialization
     let config = crate::data::config::ConfigInfo {
@@ -103,6 +116,8 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
         schedules: schedules_overview,
         skills_count,
         kv_count,
+        events_count,
+        backend_errors_count,
         config,
     })
 }

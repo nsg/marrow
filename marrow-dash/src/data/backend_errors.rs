@@ -96,6 +96,10 @@ fn truncate_body(body: &str, max: usize) -> String {
 }
 
 impl BackendErrorData {
+    pub fn total(&self) -> usize {
+        self.entries.len()
+    }
+
     pub fn load(path: &Path) -> Self {
         let mut data = Self::default();
         data.read_from(path);

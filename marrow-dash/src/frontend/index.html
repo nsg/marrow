@@ -1855,9 +1855,28 @@ tr.clickable:hover td:first-child {
       html += infoRow("Disabled", sched.disabled || 0);
       html += '</div>';
 
+      // Skills card
+      html += '<div class="info-card" data-tab="skills"><h3>Skills</h3>';
+      html += infoRow("Loaded", data.skills_count || 0);
+      html += '</div>';
+
       // KV Store card
       html += '<div class="info-card" data-tab="kv"><h3>KV Store</h3>';
       html += infoRow("Entries", data.kv_count || 0);
+      html += '</div>';
+
+      // Events card
+      html += '<div class="info-card" data-tab="events"><h3>Events</h3>';
+      html += infoRow("Total", data.events_count || 0);
+      if (data.event_timespan) {
+        html += infoRow("First", formatDate(data.event_timespan[0]));
+        html += infoRow("Latest", formatDate(data.event_timespan[1]));
+      }
+      html += '</div>';
+
+      // Backend Errors card
+      html += '<div class="info-card" data-tab="backend"><h3>Backend Errors</h3>';
+      html += infoRow("Total", data.backend_errors_count || 0);
       html += '</div>';
 
       html += '</div>';
@@ -1872,21 +1891,6 @@ tr.clickable:hover td:first-child {
           html += '<tr><td data-label="Role">' + esc(r.name) + '</td><td data-label="Provider" class="mono">' + esc(r.provider) + '</td><td data-label="Model" class="mono">' + esc(r.model) + '</td></tr>';
         }
         html += '</table></div>';
-      }
-
-      // Timespan
-      if (data.event_timespan) {
-        html += '<div class="section-title fade-child">Event Log Timespan</div>';
-        html += '<div class="fade-child" style="font-size:13px;color:var(--text-secondary);font-family:var(--font-mono)">';
-        html += esc(formatTime(data.event_timespan[0])) + '  →  ' + esc(formatTime(data.event_timespan[1]));
-        html += '</div>';
-      }
-
-      // Skills
-      if (data.skills_count != null) {
-        html += '<div class="fade-child" style="margin-top:16px;font-size:13px;color:var(--text-secondary)">';
-        html += 'Skills loaded: <span class="mono">' + esc(data.skills_count) + '</span>';
-        html += '</div>';
       }
 
       setContent("overview-content", html);
