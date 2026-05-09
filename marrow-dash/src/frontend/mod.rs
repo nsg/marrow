@@ -13,5 +13,8 @@ async fn index() -> Html<&'static str> {
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new().route("/", get(index))
+    Router::new()
+        .route("/", get(index))
+        .route("/{tab}", get(index))
+        .route("/{tab}/{*rest}", get(index))
 }

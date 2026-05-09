@@ -70,8 +70,12 @@ impl AppState {
             ev.refresh(log);
         }
         {
-            let mut mem = self.memory.write().unwrap_or_else(|e| e.into_inner());
-            *mem = data::memory::MemoryStats::load(memory);
+            let mem = self.memory.read().unwrap_or_else(|e| e.into_inner());
+            if mem.needs_reload(memory) {
+                drop(mem);
+                let mut mem = self.memory.write().unwrap_or_else(|e| e.into_inner());
+                *mem = data::memory::MemoryStats::load(memory);
+            }
         }
         {
             let mut tb = self.toolbox.write().unwrap_or_else(|e| e.into_inner());

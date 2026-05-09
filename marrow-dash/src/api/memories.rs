@@ -28,6 +28,7 @@ struct MemoriesResponse {
     total: usize,
     stats: MemoryStatsResponse,
     search_mode: &'static str,
+    cluster_summaries: std::collections::HashMap<usize, String>,
 }
 
 #[derive(Serialize)]
@@ -43,7 +44,7 @@ async fn list_memories(
     Query(params): Query<MemoryQuery>,
 ) -> Json<MemoriesResponse> {
     // Grab stats snapshot without holding lock across awaits
-    let (stats, search_mode, page, total) = {
+    let (stats, search_mode, page, total, cluster_summaries) = {
         let mem = state.memory.read().unwrap_or_else(|e| e.into_inner());
         let stats = MemoryStatsResponse {
             total: mem.total,
@@ -51,10 +52,10 @@ async fn list_memories(
             user_count: mem.user_count,
             embedded_count: mem.embedded_count,
         };
+        let cluster_summaries = mem.cluster_summaries.clone();
 
         match &params.search {
             Some(q) if !q.is_empty() => {
-                // Text search — no await needed
                 let results = mem.search(q);
                 let total = results.len();
                 let page: Vec<MemoryRow> = results
@@ -63,7 +64,7 @@ async fn list_memories(
                     .take(params.limit)
                     .cloned()
                     .collect();
-                (stats, "text", page, total)
+                (stats, "text", page, total, cluster_summaries)
             }
             _ => {
                 let total = mem.memories.len();
@@ -74,7 +75,7 @@ async fn list_memories(
                     .take(params.limit)
                     .cloned()
                     .collect();
-                (stats, "none", page, total)
+                (stats, "none", page, total, cluster_summaries)
             }
         }
     };
@@ -100,6 +101,7 @@ async fn list_memories(
                 total,
                 stats,
                 search_mode: "vector",
+                cluster_summaries,
             });
         }
     }
@@ -109,6 +111,7 @@ async fn list_memories(
         total,
         stats,
         search_mode,
+        cluster_summaries,
     })
 }
 

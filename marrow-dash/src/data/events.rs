@@ -44,10 +44,16 @@ pub struct OverviewStats {
     pub event_timespan: Option<(u64, u64)>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default, Clone)]
 pub struct ActivityBucket {
     pub hour_ms: u64,
     pub count: usize,
+    pub task: usize,
+    pub agent: usize,
+    pub tool: usize,
+    pub janitor: usize,
+    pub schedule: usize,
+    pub other: usize,
 }
 
 impl EventData {
@@ -152,19 +158,43 @@ impl EventData {
         let bucket_duration_ms = 3_600_000u64; // 1 hour
         let window_start = now_ms.saturating_sub(48 * bucket_duration_ms);
 
-        let mut buckets: HashMap<u64, usize> = HashMap::new();
+        let mut buckets: HashMap<u64, ActivityBucket> = HashMap::new();
         for entry in &self.entries {
             if entry.parsed.timestamp_ms >= window_start {
-                let bucket = (entry.parsed.timestamp_ms - window_start) / bucket_duration_ms;
-                *buckets.entry(bucket).or_default() += 1;
+                let idx = (entry.parsed.timestamp_ms - window_start) / bucket_duration_ms;
+                let b = buckets.entry(idx).or_default();
+                b.count += 1;
+                match &entry.parsed.event {
+                    Event::TaskCreated { .. } | Event::TaskExecuted { .. } => b.task += 1,
+                    Event::AgentAction { .. }
+                    | Event::AgentModelResponse { .. }
+                    | Event::AgentToolResult { .. }
+                    | Event::AgentTransition { .. }
+                    | Event::StepCompleted { .. }
+                    | Event::PlanTriageResult { .. }
+                    | Event::PlanCreated { .. }
+                    | Event::PlanItemStarted { .. }
+                    | Event::PlanItemCompleted { .. } => b.agent += 1,
+                    Event::ToolGenerated { .. } | Event::ToolSelected { .. } => b.tool += 1,
+                    Event::JanitorReview { .. }
+                    | Event::JanitorRegenerate { .. }
+                    | Event::JanitorEscalated { .. }
+                    | Event::JanitorDeleted { .. } => b.janitor += 1,
+                    Event::ScheduleCreated { .. }
+                    | Event::ScheduleDeleted { .. }
+                    | Event::ScheduleTriggered { .. }
+                    | Event::ScheduleCompleted { .. } => b.schedule += 1,
+                    _ => b.other += 1,
+                }
             }
         }
 
         let activity_buckets: Vec<ActivityBucket> = (0..48)
             .map(|i| {
                 let hour_ms = window_start + i * bucket_duration_ms;
-                let count = buckets.get(&i).copied().unwrap_or(0);
-                ActivityBucket { hour_ms, count }
+                let mut b = buckets.remove(&i).unwrap_or_default();
+                b.hour_ms = hour_ms;
+                b
             })
             .collect();
 
@@ -374,7 +404,8 @@ fn event_category(event: &Event) -> &'static str {
         Event::ScheduleCreated { .. }
         | Event::ScheduleDeleted { .. }
         | Event::ScheduleTriggered { .. }
-        | Event::ScheduleCompleted { .. } => "schedule",
+        | Event::ScheduleCompleted { .. }
+        | Event::ScheduleReviewed { .. } => "schedule",
         Event::PlanTriageResult { .. }
         | Event::PlanCreated { .. }
         | Event::PlanItemStarted { .. }

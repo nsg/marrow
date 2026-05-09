@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Once;
 
@@ -29,6 +29,9 @@ pub struct MemoryStats {
     pub user_count: usize,
     pub embedded_count: usize,
     pub memories: Vec<MemoryRow>,
+    pub cluster_summaries: HashMap<usize, String>,
+    #[serde(skip)]
+    pub row_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -38,9 +41,18 @@ pub struct MemoryRow {
     pub source: String,
     pub created: String,
     pub has_embedding: bool,
+    pub cluster: usize,
 }
 
 impl MemoryStats {
+    pub fn needs_reload(&self, memory_dir: &Path) -> bool {
+        let Some(conn) = open_readonly(memory_dir) else {
+            return self.row_count > 0;
+        };
+        let current = count(&conn, "SELECT COUNT(*) FROM memories");
+        current != self.row_count
+    }
+
     pub fn load(memory_dir: &Path) -> Self {
         let Some(conn) = open_readonly(memory_dir) else {
             return Self::default();
@@ -72,8 +84,42 @@ impl MemoryStats {
                     source: row.2,
                     created: row.3,
                     has_embedding,
+                    cluster: 0,
                 });
             }
+        }
+
+        // Load cluster assignments from DB
+        let mut cluster_map: HashMap<String, (usize, String)> = HashMap::new();
+        if let Ok(mut stmt) =
+            conn.prepare("SELECT cluster_id, memory_id, summary FROM memory_clusters")
+            && let Ok(rows) = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as usize,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+        {
+            for row in rows.flatten() {
+                cluster_map.insert(row.1, (row.0, row.2));
+            }
+        }
+        let mut next_cluster = cluster_map.values().map(|(id, _)| *id).max().unwrap_or(0) + 1;
+        for row in &mut memories {
+            if let Some((cid, _)) = cluster_map.get(&row.id) {
+                row.cluster = *cid;
+            } else {
+                row.cluster = next_cluster;
+                next_cluster += 1;
+            }
+        }
+
+        let mut cluster_summaries: HashMap<usize, String> = HashMap::new();
+        for (cid, summary) in cluster_map.values() {
+            cluster_summaries
+                .entry(*cid)
+                .or_insert_with(|| summary.clone());
         }
 
         Self {
@@ -81,7 +127,9 @@ impl MemoryStats {
             auto_count,
             user_count,
             embedded_count,
+            row_count: total,
             memories,
+            cluster_summaries,
         }
     }
 
@@ -129,6 +177,7 @@ impl MemoryStats {
                 source,
                 created,
                 has_embedding: true,
+                cluster: 0,
             })
         }) else {
             return Vec::new();

@@ -393,30 +393,85 @@ body {
 .chart-bar {
   flex: 1;
   min-width: 2px;
-  background: linear-gradient(to top, var(--accent), var(--accent-glow));
   opacity: 0.7;
   transition: opacity 0.15s;
   position: relative;
-  border-radius: 1px 1px 0 0;
 }
 .chart-bar:hover {
   opacity: 1;
 }
+.chart-bar-segs {
+  display: flex;
+  flex-direction: column-reverse;
+  height: 100%;
+  border-radius: 1px 1px 0 0;
+  overflow: hidden;
+}
+.chart-seg { flex: none; }
+.chart-seg-task { background: #5EC269; }
+.chart-seg-agent { background: #A87FDB; }
+.chart-seg-tool { background: #3DC0B0; }
+.chart-seg-janitor { background: #E5A832; }
+.chart-seg-schedule { background: #4A9EF5; }
+.chart-seg-other { background: #777; }
+.chart-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.chart-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
 .chart-bar-tooltip {
   display: none;
   position: absolute;
-  bottom: calc(100% + 6px);
+  bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
   background: var(--bg-raised);
   border: 1px solid var(--border);
-  padding: 4px 10px;
+  padding: 8px 12px;
   font-size: 11px;
   white-space: nowrap;
   z-index: 10;
   font-family: var(--font-mono);
   pointer-events: none;
   color: var(--text-primary);
+  min-width: 120px;
+}
+.chart-bar-tooltip .tip-header {
+  font-weight: 600;
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.chart-bar-tooltip .tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0;
+}
+.chart-bar-tooltip .tip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+.chart-bar-tooltip .tip-count {
+  margin-left: auto;
+  color: var(--text-secondary);
 }
 .chart-bar:hover .chart-bar-tooltip { display: block; }
 .chart-labels {
@@ -439,6 +494,14 @@ body {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   padding: 18px;
+}
+.info-card[data-tab] {
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.info-card[data-tab]:hover {
+  border-color: var(--border-focus);
+  background: var(--bg-hover);
 }
 .info-card h3 {
   font-family: var(--font-display);
@@ -1195,6 +1258,15 @@ tr.clickable:hover td:first-child {
   font-weight: 600;
   font-size: 14px;
   color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sched-card.open .sched-title {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
 }
 .sched-badges { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
 .sched-meta {
@@ -1223,6 +1295,39 @@ tr.clickable:hover td:first-child {
 .sched-card.open .skill-row-chevron { transform: rotate(90deg); }
 .sched-title { flex: 1; min-width: 0; }
 .sched-badges { flex-shrink: 0; }
+
+/* Memory clusters */
+.mem-cluster {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.mem-cluster-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: background 0.15s;
+}
+.mem-cluster-header:hover { background: var(--bg-hover); }
+.mem-cluster-header .mono { color: var(--text-muted); font-size: 11px; }
+.mem-cluster-label { flex: 1; min-width: 0; }
+.mem-cluster-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.mem-cluster-body {
+  display: none;
+  border-top: 1px solid var(--border);
+}
+.mem-cluster.open .mem-cluster-body { display: block; }
+.mem-cluster.open .skill-row-chevron { transform: rotate(90deg); }
+.mem-cluster-body table { margin: 0; }
+.mem-cluster-body .table-wrap { margin: 0; }
 
 /* Theme toggle */
 .theme-toggle { border-left: none !important; }
@@ -1454,9 +1559,24 @@ tr.clickable:hover td:first-child {
     backend: "Backend Errors"
   };
 
+  // --- URL helpers ---
+  function parseRoute() {
+    var parts = location.pathname.replace(/^\//, "").split("/").filter(Boolean);
+    var tab = parts[0] || "overview";
+    var item = parts.length > 1 ? decodeURIComponent(parts.slice(1).join("/")) : null;
+    return { tab: tab, item: item };
+  }
+
+  function buildPath(tab, item) {
+    var path = tab === "overview" ? "/" : "/" + tab;
+    if (item) path += "/" + encodeURIComponent(item);
+    return path;
+  }
+
   // --- State ---
   const state = {
     activeTab: "overview",
+    pendingItem: null,
     autoRefresh: false,
     refreshTimer: null,
     tasks: { offset: 0, limit: 50, total: 0, expanded: null },
@@ -1687,10 +1807,9 @@ tr.clickable:hover td:first-child {
 
       // Stat cards
       html += '<div class="stat-row fade-child">';
-      html += statCard("Tasks", data.total_tasks, "blue");
-      html += statCard("Steps", data.total_steps, "");
-      html += statCard("Tool Calls", data.total_tool_calls, "teal");
-      html += statCard("Code Runs", data.total_code_runs, "purple");
+      html += statCard("Tasks", data.total_tasks || 0, "blue");
+      html += statCard("Steps", data.total_steps || 0, "");
+      html += statCard("Tool Calls", data.total_lua_runs || 0, "teal");
       html += statCard("Success Rate", data.success_rate != null ? (data.success_rate * 100).toFixed(1) + "%" : "--", "green");
       html += '</div>';
 
@@ -1703,7 +1822,7 @@ tr.clickable:hover td:first-child {
 
       // Memory card
       const mem = data.memory || {};
-      html += '<div class="info-card"><h3>Memory</h3>';
+      html += '<div class="info-card" data-tab="memory"><h3>Memory</h3>';
       html += infoRow("Total", mem.total || 0);
       html += infoRow("Auto", mem.auto_count || 0);
       html += infoRow("User", mem.user_count || 0);
@@ -1712,7 +1831,7 @@ tr.clickable:hover td:first-child {
 
       // Toolbox card
       const tb = data.toolbox || {};
-      html += '<div class="info-card"><h3>Toolbox</h3>';
+      html += '<div class="info-card" data-tab="tools"><h3>Toolbox</h3>';
       html += infoRow("Total", tb.total || 0);
       html += infoRow("Validated", tb.validated || 0);
       html += infoRow("Unvalidated", tb.unvalidated || 0);
@@ -1720,7 +1839,7 @@ tr.clickable:hover td:first-child {
 
       // Schedules card
       const sched = data.schedules || {};
-      html += '<div class="info-card"><h3>Schedules</h3>';
+      html += '<div class="info-card" data-tab="schedules"><h3>Schedules</h3>';
       html += infoRow("Total", sched.total || 0);
       html += infoRow("Enabled", sched.enabled || 0);
       html += infoRow("Disabled", sched.disabled || 0);
@@ -1769,21 +1888,49 @@ tr.clickable:hover td:first-child {
     return '<div class="info-row"><span class="info-label">' + esc(label) + '</span><span class="info-value">' + esc(String(value)) + '</span></div>';
   }
 
+  var activityCategories = [
+    { key: "task", label: "Task", cls: "chart-seg-task", color: "#5EC269" },
+    { key: "agent", label: "Agent", cls: "chart-seg-agent", color: "#A87FDB" },
+    { key: "tool", label: "Tool", cls: "chart-seg-tool", color: "#3DC0B0" },
+    { key: "janitor", label: "Janitor", cls: "chart-seg-janitor", color: "#E5A832" },
+    { key: "schedule", label: "Schedule", cls: "chart-seg-schedule", color: "#4A9EF5" },
+    { key: "other", label: "Other", cls: "chart-seg-other", color: "#777" }
+  ];
+
   function renderActivityChart(buckets) {
     if (!buckets.length) {
       return '<div class="activity-chart"><div class="state-msg">No activity data</div></div>';
     }
     const max = Math.max(1, ...buckets.map(b => b.count));
+
+    var legend = '<div class="chart-legend">';
+    for (var c of activityCategories) {
+      legend += '<span class="chart-legend-item"><span class="chart-legend-dot ' + c.cls + '"></span>' + c.label + '</span>';
+    }
+    legend += '</div>';
+
     let bars = "";
     for (const b of buckets) {
-      const pct = Math.max(1, (b.count / max) * 100);
-      bars += '<div class="chart-bar" style="height:' + pct + '%">'
-        + '<div class="chart-bar-tooltip">' + esc(formatTimeShort(b.hour_ms)) + ': ' + b.count + '</div>'
+      const pct = (b.count / max) * 100;
+      var segs = "";
+      var tipRows = "";
+      for (var c of activityCategories) {
+        var v = b[c.key] || 0;
+        if (v > 0) {
+          var segPct = (v / b.count) * 100;
+          segs += '<div class="chart-seg ' + c.cls + '" style="height:' + segPct + '%"></div>';
+          tipRows += '<div class="tip-row"><span class="tip-dot" style="background:' + c.color + '"></span>' + c.label + '<span class="tip-count">' + v + '</span></div>';
+        }
+      }
+      var tip = '<div class="chart-bar-tooltip"><div class="tip-header">' + esc(formatTimeShort(b.hour_ms)) + ' — ' + b.count + ' events</div>' + tipRows + '</div>';
+      bars += '<div class="chart-bar" style="height:' + Math.max(1, pct) + '%">'
+        + '<div class="chart-bar-segs">' + segs + '</div>' + tip
         + '</div>';
     }
     const firstLabel = buckets.length > 0 ? formatTimeShort(buckets[0].hour_ms) : "";
     const lastLabel = buckets.length > 0 ? formatTimeShort(buckets[buckets.length - 1].hour_ms) : "";
     return '<div class="activity-chart">'
+      + legend
       + '<div class="chart-bars">' + bars + '</div>'
       + '<div class="chart-labels"><span>' + esc(firstLabel) + '</span><span>' + esc(lastLabel) + '</span></div>'
       + '</div>';
@@ -1817,6 +1964,11 @@ tr.clickable:hover td:first-child {
       html += renderPagination(state.tasks, "tasks");
       setContent("tasks-content", html);
       bindTaskClicks();
+      if (state.pendingItem) {
+        var pending = state.pendingItem;
+        state.pendingItem = null;
+        toggleTaskDetail(pending);
+      }
     } catch (e) {
       setContent("tasks-content", errorMsg(e));
     }
@@ -1838,6 +1990,7 @@ tr.clickable:hover td:first-child {
     if (detailRow.style.display !== "none") {
       detailRow.style.display = "none";
       state.tasks.expanded = null;
+      updateItemUrl(null);
       return;
     }
     const allDetails = document.querySelectorAll(".task-detail-row");
@@ -1845,6 +1998,7 @@ tr.clickable:hover td:first-child {
 
     detailRow.style.display = "";
     state.tasks.expanded = taskId;
+    updateItemUrl(taskId);
     const inner = detailRow.querySelector(".task-detail-inner");
     inner.innerHTML = '<span class="spinner"></span> Loading...';
     try {
@@ -2135,8 +2289,8 @@ tr.clickable:hover td:first-child {
         html += '<div class="tool-list fade-child">';
         for (const t of tools) {
           var hasSource = t.source && t.source.trim().length > 0;
-          html += '<div class="tool-row">';
-          html += '<div class="tool-row-header"' + (hasSource ? ' onclick="this.parentElement.classList.toggle(\'open\')"' : '') + '>';
+          html += '<div class="tool-row"' + (hasSource ? ' data-item-name="' + esc(t.name) + '"' : '') + '>';
+          html += '<div class="tool-row-header">';
           html += '<span class="tool-row-name">' + esc(t.name) + '</span>';
           if (t.description) html += '<span class="tool-row-desc">' + esc(t.description) + '</span>';
           html += '<div class="tool-row-badges">';
@@ -2176,6 +2330,7 @@ tr.clickable:hover td:first-child {
       }
 
       setContent("tools-content", html);
+      bindItemToggle("tools-content", ".tool-row");
     } catch (e) {
       setContent("tools-content", errorMsg(e));
     }
@@ -2216,22 +2371,44 @@ tr.clickable:hover td:first-child {
       if (memories.length === 0) {
         html += emptyMsg(search ? "No memories match your search." : "No memories stored.");
       } else {
-        html += '<div class="table-wrap responsive"><table>';
-        html += '<tr><th>ID</th><th>Fact</th><th>Source</th><th>Embedded</th><th>Created</th></tr>';
+        // Group by cluster
+        var clusterMap = {};
+        var summaries = data.cluster_summaries || {};
         for (const m of memories) {
-          const shortId = m.id ? String(m.id).slice(0, 8) : "--";
-          const embeddedIcon = m.has_embedding
-            ? '<span style="color:var(--green)" title="has embedding">&#x25cf;</span>'
-            : '<span style="color:var(--text-muted)" title="no embedding">&#x25cb;</span>';
-          html += '<tr>';
-          html += '<td data-label="ID" class="mono">' + esc(shortId) + '</td>';
-          html += '<td data-label="Fact">' + esc(m.fact) + '</td>';
-          html += '<td data-label="Source">' + sourceBadge(m.source) + '</td>';
-          html += '<td data-label="Embedded" style="text-align:center">' + embeddedIcon + '</td>';
-          html += '<td data-label="Created" class="mono">' + esc(formatDate(m.created)) + '</td>';
-          html += '</tr>';
+          var cid = m.cluster != null ? m.cluster : 0;
+          if (!clusterMap[cid]) clusterMap[cid] = [];
+          clusterMap[cid].push(m);
         }
-        html += '</table></div>';
+        var clusterIds = Object.keys(clusterMap).sort(function(a, b) {
+          return clusterMap[b].length - clusterMap[a].length;
+        });
+
+        for (var ci = 0; ci < clusterIds.length; ci++) {
+          var cid = clusterIds[ci];
+          var group = clusterMap[cid];
+          var label = summaries[cid] || (group[0].fact.length > 60 ? group[0].fact.slice(0, 60) + "…" : group[0].fact);
+          html += '<div class="mem-cluster">';
+          html += '<div class="mem-cluster-header" onclick="this.parentElement.classList.toggle(\'open\')">';
+          html += '<span class="mem-cluster-label">' + esc(label) + '</span>';
+          html += '<span class="mem-cluster-count">' + group.length + '</span>';
+          html += '<svg class="skill-row-chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>';
+          html += '</div>';
+          html += '<div class="mem-cluster-body"><div class="table-wrap responsive"><table>';
+          html += '<tr><th>Fact</th><th>Source</th><th>Embedded</th><th>Created</th></tr>';
+          for (const m of group) {
+            const embeddedIcon = m.has_embedding
+              ? '<span style="color:var(--green)" title="has embedding">&#x25cf;</span>'
+              : '<span style="color:var(--text-muted)" title="no embedding">&#x25cb;</span>';
+            html += '<tr>';
+            html += '<td data-label="Fact">' + esc(m.fact) + '</td>';
+            html += '<td data-label="Source">' + sourceBadge(m.source) + '</td>';
+            html += '<td data-label="Embedded" style="text-align:center">' + embeddedIcon + '</td>';
+            html += '<td data-label="Created" class="mono">' + esc(formatDate(m.created)) + '</td>';
+            html += '</tr>';
+          }
+          html += '</table></div></div>';
+          html += '</div>';
+        }
         html += renderPagination(state.memory, "memory");
       }
 
@@ -2260,17 +2437,13 @@ tr.clickable:hover td:first-child {
       let html = '<div class="sched-list">';
       for (const s of schedules) {
         var desc = s.description || "";
-        var lines = desc.split("\n");
-        var title = "";
-        for (var i = 0; i < lines.length; i++) {
-          var stripped = lines[i].replace(/^#+\s*/, "").trim();
-          if (stripped) { title = stripped; break; }
-        }
-        if (!title) title = "--";
-        var hasBody = desc.replace(/^#[^\n]*\n?/, "").trim().length > 0;
+        var parts = desc.split(/\n\s*\n/);
+        var title = (parts[0] || "").replace(/^#+\s*/, "").trim() || "--";
+        var body = parts.length > 1 ? parts.slice(1).join("\n\n").trim() : "";
+        var hasBody = body.length > 0;
         var disabledCls = s.enabled ? "" : " sched-disabled";
-        html += '<div class="sched-card' + disabledCls + '">';
-        html += '<div class="sched-header" onclick="this.parentElement.classList.toggle(\'open\')">';
+        html += '<div class="sched-card' + disabledCls + '"' + (hasBody ? ' data-item-name="' + esc(title) + '"' : '') + '>';
+        html += '<div class="sched-header">';
         html += '<span class="sched-title">' + esc(title) + '</span>';
         html += '<div class="sched-badges">';
         if (!s.enabled) html += '<span class="badge badge-disabled">disabled</span>';
@@ -2286,12 +2459,13 @@ tr.clickable:hover td:first-child {
         if (s.channel_id) html += '<div class="sched-meta-item"><span class="sched-meta-label">Channel</span><span class="sched-meta-value">' + esc(s.channel_id) + '</span></div>';
         html += '</div>';
         if (hasBody) {
-          html += '<div class="sched-expand"><div class="skill-content md">' + renderMarkdown(desc) + '</div></div>';
+          html += '<div class="sched-expand"><div class="skill-content md">' + renderMarkdown(body) + '</div></div>';
         }
         html += '</div>';
       }
       html += '</div>';
       setContent("schedules-content", html);
+      bindItemToggle("schedules-content", ".sched-card");
     } catch (e) {
       setContent("schedules-content", errorMsg(e));
     }
@@ -2316,8 +2490,8 @@ tr.clickable:hover td:first-child {
           if (line.startsWith("#")) { pastHeading = true; continue; }
           if (pastHeading && line.trim().length > 0 && !desc) { desc = line.trim(); break; }
         }
-        html += '<div class="skill-row">';
-        html += '<div class="skill-row-header" onclick="this.parentElement.classList.toggle(\'open\')">';
+        html += '<div class="skill-row" data-item-name="' + esc(s.name) + '">';
+        html += '<div class="skill-row-header">';
         html += '<span class="skill-row-name">' + esc(title) + '</span>';
         if (desc) html += '<span class="skill-row-desc">' + esc(desc) + '</span>';
         html += '<svg class="skill-row-chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>';
@@ -2329,6 +2503,7 @@ tr.clickable:hover td:first-child {
       }
       html += '</div>';
       setContent("skills-content", html);
+      bindItemToggle("skills-content", ".skill-row");
     } catch (e) {
       setContent("skills-content", errorMsg(e));
     }
@@ -2550,8 +2725,10 @@ tr.clickable:hover td:first-child {
   }
 
   // --- Tab management ---
-  function switchTab(tab) {
+  function switchTab(tab, pushState, item) {
+    if (!viewNames[tab]) tab = "overview";
     state.activeTab = tab;
+    state.pendingItem = item || null;
     document.querySelectorAll(".nav-btn").forEach(function(btn) {
       btn.classList.toggle("active", btn.getAttribute("data-tab") === tab);
     });
@@ -2559,7 +2736,48 @@ tr.clickable:hover td:first-child {
       panel.classList.toggle("active", panel.id === "panel-" + tab);
     });
     document.getElementById("view-title").textContent = viewNames[tab] || tab;
+    var path = buildPath(tab, item);
+    if (pushState !== false) {
+      history.pushState({ tab: tab, item: item || null }, "", path);
+    }
     loadTab(tab);
+  }
+
+  function updateItemUrl(item) {
+    var path = buildPath(state.activeTab, item);
+    history.replaceState({ tab: state.activeTab, item: item || null }, "", path);
+  }
+
+  function bindItemToggle(containerId, rowSelector) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    var rows = container.querySelectorAll(rowSelector + "[data-item-name]");
+    for (var r of rows) {
+      (function(row) {
+        var header = row.children[0];
+        if (!header) return;
+        header.addEventListener("click", function() {
+          var wasOpen = row.classList.contains("open");
+          row.classList.toggle("open");
+          if (wasOpen) {
+            updateItemUrl(null);
+          } else {
+            updateItemUrl(row.getAttribute("data-item-name"));
+          }
+        });
+      })(r);
+    }
+    if (state.pendingItem) {
+      var pending = state.pendingItem;
+      state.pendingItem = null;
+      for (var r of rows) {
+        if (r.getAttribute("data-item-name") === pending) {
+          r.classList.add("open");
+          r.scrollIntoView({ behavior: "smooth", block: "start" });
+          break;
+        }
+      }
+    }
   }
 
   function loadTab(tab) {
@@ -2597,6 +2815,13 @@ tr.clickable:hover td:first-child {
     }
   }
 
+  // --- History API: back/forward ---
+  window.addEventListener("popstate", function(e) {
+    var tab = (e.state && e.state.tab) || "overview";
+    var item = (e.state && e.state.item) || null;
+    switchTab(tab, false, item);
+  });
+
   // --- Init ---
   function init() {
     // Nav clicks
@@ -2604,6 +2829,12 @@ tr.clickable:hover td:first-child {
       btn.addEventListener("click", function() {
         switchTab(this.getAttribute("data-tab"));
       });
+    });
+
+    // Info card clicks (overview → tab navigation)
+    document.getElementById("overview-content").addEventListener("click", function(e) {
+      var card = e.target.closest(".info-card[data-tab]");
+      if (card) switchTab(card.getAttribute("data-tab"));
     });
 
     // Auto-refresh toggle
@@ -2644,8 +2875,10 @@ tr.clickable:hover td:first-child {
     // Expose pagination for inline onclick
     window.__dash = { paginate: paginate };
 
-    // Initial load
-    loadTab("overview");
+    // Initial load from URL path
+    var route = parseRoute();
+    switchTab(route.tab, false, route.item);
+    history.replaceState({ tab: state.activeTab, item: route.item }, "", location.pathname);
   }
 
   if (document.readyState === "loading") {
