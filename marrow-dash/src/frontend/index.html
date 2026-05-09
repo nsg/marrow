@@ -2376,6 +2376,30 @@ tr.clickable:hover td:first-child {
     return '<span class="badge ' + cls + '">' + esc(label) + '</span>';
   }
 
+  function errorKindBadge(kind) {
+    if (!kind) return "";
+    var cls = "badge-agent";
+    var k = kind.toLowerCase();
+    if (k === "timeout") cls = "badge-schedule";
+    else if (k.startsWith("connection") || k === "broken_pipe") cls = "badge-failed";
+    else if (k === "dns" || k === "tls") cls = "badge-janitor";
+    else if (k === "server_error") cls = "badge-failed";
+    else if (k === "rate_limit") cls = "badge-schedule";
+    else if (k === "client_error") cls = "badge-janitor";
+    return '<span class="badge ' + cls + '">' + esc(kind) + '</span>';
+  }
+
+  function renderSourceChain(chain) {
+    if (!chain || chain.length === 0) return "";
+    var html = '<div style="margin-top:4px;font-size:11px;color:var(--text-muted)" class="mono">';
+    for (var i = 0; i < chain.length; i++) {
+      if (i > 0) html += ' <span style="color:var(--accent)">→</span> ';
+      html += esc(chain[i]);
+    }
+    html += '</div>';
+    return html;
+  }
+
   async function loadBackendErrors() {
     try {
       var url = "/api/backend-errors?limit=" + state.backend.limit
@@ -2476,7 +2500,7 @@ tr.clickable:hover td:first-child {
         html += '<div class="card fade-child">';
         html += '<div class="card-title">Recent Errors</div>';
         html += '<div class="table-wrap responsive"><table>';
-        html += '<tr><th>Time</th><th>Status</th><th>Role</th><th>URL</th><th>Response Body</th></tr>';
+        html += '<tr><th>Time</th><th>Status</th><th>Kind</th><th>Role</th><th>URL</th><th>Detail</th></tr>';
         for (var i = 0; i < errors.length; i++) {
           var e = errors[i];
           var ts = e.ts.replace("T", " ").replace("Z", "").slice(0, 19);
@@ -2484,9 +2508,13 @@ tr.clickable:hover td:first-child {
           html += '<tr>';
           html += '<td data-label="Time" class="mono" style="white-space:nowrap">' + esc(ts) + '</td>';
           html += '<td data-label="Status">' + httpStatusBadge(e.status) + '</td>';
+          html += '<td data-label="Kind">' + errorKindBadge(e.error_kind) + '</td>';
           html += '<td data-label="Role">' + esc(e.role) + '</td>';
           html += '<td data-label="URL" class="mono" style="font-size:12px">' + esc(urlShort) + '</td>';
-          html += '<td data-label="Body" style="word-break:break-all;max-width:400px;font-size:12px" class="mono">' + esc(e.body) + '</td>';
+          html += '<td data-label="Detail" style="word-break:break-all;max-width:400px;font-size:12px">';
+          html += '<span class="mono">' + esc(e.body) + '</span>';
+          html += renderSourceChain(e.source_chain);
+          html += '</td>';
           html += '</tr>';
         }
         html += '</table></div></div>';

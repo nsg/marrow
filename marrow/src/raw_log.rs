@@ -18,8 +18,11 @@ pub struct ErrorEntry {
     pub role: String,
     pub url: String,
     pub error_type: String,
+    pub error_kind: String,
     pub status: u16,
     pub body: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source_chain: Vec<String>,
 }
 
 async fn open_append(path: &PathBuf) -> std::io::Result<tokio::fs::File> {
@@ -72,15 +75,25 @@ impl RawLog {
         self.write(&header, body).await;
     }
 
-    pub async fn log_error(&self, role: &str, url: &str, status: u16, body: &str) {
+    pub async fn log_error(
+        &self,
+        role: &str,
+        url: &str,
+        status: u16,
+        body: &str,
+        error_kind: &str,
+        source_chain: Vec<String>,
+    ) {
         let error_type = if status == 0 { "network" } else { "http" };
         let entry = ErrorEntry {
             ts: Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
             role: role.to_string(),
             url: url.to_string(),
             error_type: error_type.to_string(),
+            error_kind: error_kind.to_string(),
             status,
             body: body.to_string(),
+            source_chain,
         };
         let mut guard = self.error_file.lock().await;
         if let Some(f) = guard.as_mut()

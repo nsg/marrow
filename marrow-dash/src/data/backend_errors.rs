@@ -10,8 +10,12 @@ struct RawEntry {
     role: String,
     url: String,
     error_type: String,
+    #[serde(default)]
+    error_kind: String,
     status: u16,
     body: String,
+    #[serde(default)]
+    source_chain: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -21,8 +25,10 @@ pub struct ErrorRecord {
     pub role: String,
     pub url: String,
     pub error_type: String,
+    pub error_kind: String,
     pub status: u16,
     pub body: String,
+    pub source_chain: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -137,8 +143,10 @@ impl BackendErrorData {
                 role: raw.role,
                 url: raw.url,
                 error_type: raw.error_type,
+                error_kind: raw.error_kind,
                 status: raw.status,
                 body: raw.body,
+                source_chain: raw.source_chain,
             });
         }
         self.byte_offset = meta.len();
@@ -240,7 +248,9 @@ impl BackendErrorData {
                 role: e.role.clone(),
                 url: e.url.clone(),
                 error_type: e.error_type.clone(),
+                error_kind: e.error_kind.clone(),
                 status: e.status,
+                source_chain: e.source_chain.clone(),
             })
             .collect();
 

@@ -3,7 +3,12 @@ pub mod openai;
 
 use std::error::Error;
 
-pub(crate) fn describe_network_error(err: &reqwest::Error) -> String {
+pub(crate) struct NetworkErrorDetail {
+    pub kind: String,
+    pub chain: Vec<String>,
+}
+
+pub(crate) fn classify_network_error(err: &reqwest::Error) -> NetworkErrorDetail {
     let mut kind = "network";
     if err.is_timeout() {
         kind = "timeout";
@@ -19,9 +24,8 @@ pub(crate) fn describe_network_error(err: &reqwest::Error) -> String {
         kind = "redirect";
     }
 
-    let mut detail = String::new();
+    let mut chain = Vec::new();
 
-    // Walk the source chain for low-level details (connection reset, refused, etc.)
     let mut source = err.source();
     while let Some(cause) = source {
         let msg = cause.to_string();
@@ -39,23 +43,25 @@ pub(crate) fn describe_network_error(err: &reqwest::Error) -> String {
             kind = "broken_pipe";
         } else if lower.contains("timed out") || lower.contains("deadline has elapsed") {
             kind = "timeout";
-        } else if lower.contains("dns") || lower.contains("resolve") || lower.contains("no such host") {
+        } else if lower.contains("dns")
+            || lower.contains("resolve")
+            || lower.contains("no such host")
+        {
             kind = "dns";
         } else if lower.contains("ssl") || lower.contains("tls") || lower.contains("certificate") {
             kind = "tls";
         }
 
-        if !detail.is_empty() {
-            detail.push_str(" -> ");
-        }
-        detail.push_str(&msg);
-
+        chain.push(msg);
         source = cause.source();
     }
 
-    if detail.is_empty() {
-        detail = err.to_string();
+    if chain.is_empty() {
+        chain.push(err.to_string());
     }
 
-    format!("[{kind}] {detail}")
+    NetworkErrorDetail {
+        kind: kind.to_string(),
+        chain,
+    }
 }

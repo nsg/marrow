@@ -120,9 +120,17 @@ impl OllamaBackend {
                 let resp = match req.send().await {
                     Ok(r) => r,
                     Err(e) => {
-                        let msg = super::describe_network_error(&e);
+                        let detail = super::classify_network_error(&e);
                         if let Some(ref rl) = err_log {
-                            rl.log_error(&err_role, &err_url, 0, &msg).await;
+                            rl.log_error(
+                                &err_role,
+                                &err_url,
+                                0,
+                                &e.to_string(),
+                                &detail.kind,
+                                detail.chain,
+                            )
+                            .await;
                         }
                         return Err(BackendError::Network(e.into()));
                     }
@@ -136,7 +144,13 @@ impl OllamaBackend {
                         .and_then(parse_retry_after);
                     let body = resp.text().await.unwrap_or_default();
                     if let Some(ref rl) = err_log {
-                        rl.log_error(&err_role, &err_url, status, &body).await;
+                        let kind = match status {
+                            429 => "rate_limit",
+                            s if s >= 500 => "server_error",
+                            _ => "client_error",
+                        };
+                        rl.log_error(&err_role, &err_url, status, &body, kind, vec![])
+                            .await;
                     }
                     return Err(BackendError::Http {
                         status,
