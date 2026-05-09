@@ -3,5 +3,5 @@ members = ["marrow", "marrow-cli", "marrow-discord", "marrow-dash"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.23"
+version = "0.1.24"
 edition = "2024"
