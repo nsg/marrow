@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::memory::MemorySource;
+use crate::memory::{Memory, MemorySource};
 use crate::tool::{ExecuteResult, ParamDef, Tool, ToolContext};
 use crate::toolbox::ToolMeta;
 
@@ -12,7 +12,7 @@ impl Tool for MemoryUpdateTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             name: "memory_update".to_string(),
-            description: "Updates an existing stored fact by its ID".to_string(),
+            description: "Creates or updates a stored fact. Omit ID to create a new memory (server assigns the ID). Provide ID to update an existing one.".to_string(),
             provides: vec!["memory_update".to_string()],
             validated: true,
         }
@@ -20,7 +20,7 @@ impl Tool for MemoryUpdateTool {
 
     fn params(&self) -> Vec<ParamDef> {
         vec![
-            ParamDef::required("ID"),
+            ParamDef::optional("ID"),
             ParamDef::required("FACT"),
             ParamDef::optional("SOURCE"),
         ]
@@ -39,21 +39,7 @@ impl Tool for MemoryUpdateTool {
                 }
             };
 
-            let id_str = match params.get("ID") {
-                Some(s) if !s.is_empty() => s,
-                _ => {
-                    return Ok(serde_json::json!({"error": "missing required parameter: ID"}));
-                }
-            };
-
-            let id: Uuid = match id_str.parse() {
-                Ok(id) => id,
-                Err(_) => {
-                    return Ok(serde_json::json!({"error": format!("invalid UUID: {id_str}")}));
-                }
-            };
-
-            let new_fact = match params.get("FACT") {
+            let fact = match params.get("FACT") {
                 Some(f) if !f.is_empty() => f.clone(),
                 _ => {
                     return Ok(serde_json::json!({"error": "missing required parameter: FACT"}));
@@ -72,13 +58,41 @@ impl Tool for MemoryUpdateTool {
                 _ => None,
             };
 
-            match store.update_with_source(id, new_fact.clone(), source) {
-                Ok(()) => Ok(serde_json::json!({
-                    "id": id.to_string(),
-                    "fact": new_fact,
-                    "status": "updated",
-                })),
-                Err(e) => Ok(serde_json::json!({"error": format!("failed to update: {e}")})),
+            match params.get("ID").filter(|s| !s.is_empty()) {
+                Some(id_str) => {
+                    let id: Uuid = match id_str.parse() {
+                        Ok(id) => id,
+                        Err(_) => {
+                            return Ok(
+                                serde_json::json!({"error": format!("invalid UUID: {id_str}")}),
+                            );
+                        }
+                    };
+                    match store.update_with_source(id, fact.clone(), source) {
+                        Ok(()) => Ok(serde_json::json!({
+                            "id": id.to_string(),
+                            "fact": fact,
+                            "status": "updated",
+                        })),
+                        Err(e) => {
+                            Ok(serde_json::json!({"error": format!("failed to update: {e}")}))
+                        }
+                    }
+                }
+                None => {
+                    let memory = Memory::new(fact, source.unwrap_or(MemorySource::User));
+                    let id = memory.id;
+                    match store.save(&memory) {
+                        Ok(()) => Ok(serde_json::json!({
+                            "id": id.to_string(),
+                            "fact": memory.fact,
+                            "status": "created",
+                        })),
+                        Err(e) => {
+                            Ok(serde_json::json!({"error": format!("failed to create: {e}")}))
+                        }
+                    }
+                }
             }
         })
     }
