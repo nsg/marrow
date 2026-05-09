@@ -763,16 +763,23 @@ async fn janitor_generate_skills_creates_file() {
     let skill_store = SkillStore::new(skill_dir.path());
     let mem_store = MemoryStore::new(mem_dir.path()).unwrap();
 
+    let mem = Memory::new("User name is Alice, uses Nextcloud", MemorySource::User);
+    let mem_id = mem.id.to_string();
+    mem_store.save(&mem).unwrap();
     mem_store
-        .save(&Memory::new(
-            "User name is Alice, uses Nextcloud",
-            MemorySource::User,
-        ))
+        .save_clusters(&[marrow::memory::MemoryCluster {
+            cluster_id: 0,
+            summary: "User Info".to_string(),
+            member_ids: vec![mem_id],
+        }])
         .unwrap();
 
-    let response =
+    let plan_response = r#"```json
+{"check-calendar.md": [0]}
+```"#;
+    let gen_response =
         "```skill:check-calendar.md\n# Check Calendar\n1. Use nextcloud_events tool\n```";
-    let backend = MockBackend::new(vec![response]);
+    let backend = MockBackend::new(vec![plan_response, gen_response]);
 
     let count = marrow::skills::generate_skills(&skill_store, &mem_store, &[], &backend, &log)
         .await
@@ -793,15 +800,25 @@ async fn janitor_generate_skills_from_facts_only() {
     let skill_store = SkillStore::new(skill_dir.path());
     let mem_store = MemoryStore::new(mem_dir.path()).unwrap();
 
+    let mem = Memory::new(
+        "Deploy target is deploy.example.com via SSH",
+        MemorySource::User,
+    );
+    let mem_id = mem.id.to_string();
+    mem_store.save(&mem).unwrap();
     mem_store
-        .save(&Memory::new(
-            "Deploy target is deploy.example.com via SSH",
-            MemorySource::User,
-        ))
+        .save_clusters(&[marrow::memory::MemoryCluster {
+            cluster_id: 0,
+            summary: "Deployment".to_string(),
+            member_ids: vec![mem_id],
+        }])
         .unwrap();
 
-    let response = "```skill:deploy.md\n# Deploy\n1. SSH to deploy.example.com\n```";
-    let backend = MockBackend::new(vec![response]);
+    let plan_response = r#"```json
+{"deploy.md": [0]}
+```"#;
+    let gen_response = "```skill:deploy.md\n# Deploy\n1. SSH to deploy.example.com\n```";
+    let backend = MockBackend::new(vec![plan_response, gen_response]);
 
     let count = marrow::skills::generate_skills(&skill_store, &mem_store, &[], &backend, &log)
         .await

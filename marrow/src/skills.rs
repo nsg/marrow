@@ -188,11 +188,11 @@ fn generate_lua_reference(tools: &[ToolInfo]) -> String {
     out
 }
 
-const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for a workflow automation agent. Review the agent's memory facts and tools, then create or update procedural skill guides.
+const SKILL_PLANNING_PROMPT: &str = r#"You are planning which skills to create for a workflow automation agent. Below are numbered clusters of related memory facts and the available tools.
 
-## Memory facts
+## Memory clusters
 
-{facts}
+{clusters}
 
 ## Available tools
 
@@ -204,28 +204,53 @@ const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for a workflow a
 
 ## Instructions
 
-Create markdown skill files that combine memory facts with tool references into step-by-step procedural guides. Each skill should help the agent accomplish a specific category of task.
+Decide which clusters contain enough facts AND have relevant tools to form useful procedural skills.
 
-Good skills:
-- "Check calendar" — combines calendar service URL + authentication details + the right tool to call
-- "Deploy blog" — step-by-step using known infrastructure + available tools
-- "Send notification" — which service to use, what credentials, which tool
+For each skill worth creating or updating, output a JSON object mapping skill filename to the cluster numbers it needs:
 
-Output each skill as a fenced block:
-```skill:filename.md
+```json
+{{
+  "check-calendar.md": [1, 3],
+  "deploy-blog.md": [5]
+}}
+```
+
+Rules:
+- A skill can reference multiple clusters (e.g. a "morning briefing" skill might need calendar + RSS clusters)
+- Only select clusters that have matching tools — facts without tools aren't actionable
+- Use kebab-case .md filenames
+- If an existing skill's clusters have changed, include it for regeneration
+- If nothing useful can be created or updated, output: `{{}}`"#;
+
+const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for a workflow automation agent. Create or update the following skill using the provided facts and tools.
+
+## Relevant facts
+
+{facts}
+
+## Available tools
+
+{tools}
+
+## Existing skill content (if updating)
+
+{existing_skill}
+
+## Instructions
+
+Create a markdown skill file that combines the facts with tool references into a step-by-step procedural guide.
+
+Output the skill as a fenced block:
+```skill:{filename}
 # Skill Title
 <procedural markdown content>
 ```
 
 Rules:
-- Only create skills when there's enough facts AND relevant tools to make them useful
-- Facts may contain specific details worth embedding in skills
-- Skill filenames should be short, descriptive, kebab-case (e.g. check-calendar.md)
 - Include specific parameter values the agent should use (URLs, service names, etc.)
 - Reference tools by name so the agent knows what to call
-- Keep each skill focused on one task category
-- Update existing skills if the facts have changed
-- If there's nothing useful to create or update, output nothing"#;
+- Keep it focused on one task category
+- If updating, preserve any working instructions and incorporate new facts"#;
 
 pub fn parse_skill_blocks(response: &str) -> Vec<(String, String)> {
     let mut skills = Vec::new();
@@ -267,20 +292,43 @@ pub async fn generate_skills(
     backend: &dyn ModelBackend,
     log: &EventLog,
 ) -> Result<u32, Box<dyn Error + Send + Sync>> {
-    let facts = store.list().unwrap_or_default();
-    if facts.is_empty() {
+    let db_clusters = store.load_clusters()?;
+    if db_clusters.is_empty() {
         return Ok(0);
     }
 
-    let facts_section = if facts.is_empty() {
-        "(no individual facts)".to_string()
-    } else {
-        facts
-            .iter()
-            .map(|m| format!("- {}", m.fact))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    // Build a map from memory ID to fact text
+    let all_facts = store.list().unwrap_or_default();
+    let fact_map: std::collections::HashMap<String, &str> = all_facts
+        .iter()
+        .map(|m| (m.id.to_string(), m.fact.as_str()))
+        .collect();
+
+    // Build cluster summaries for the planning prompt
+    let clusters_section = db_clusters
+        .iter()
+        .map(|c| {
+            let facts: String = c
+                .member_ids
+                .iter()
+                .take(3)
+                .filter_map(|id| fact_map.get(id.as_str()))
+                .map(|f| format!("\n  - {f}"))
+                .collect();
+            let more = if c.member_ids.len() > 3 {
+                format!("\n  ... and {} more", c.member_ids.len() - 3)
+            } else {
+                String::new()
+            };
+            format!(
+                "Cluster {} — {} ({} facts){facts}{more}",
+                c.cluster_id,
+                c.summary,
+                c.member_ids.len()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let tools_section = if tools.is_empty() {
         "(no tools available)".to_string()
@@ -298,33 +346,78 @@ pub async fn generate_skills(
     } else {
         existing
             .iter()
-            .map(|(name, content)| format!("### {name}\n{content}"))
+            .map(|(name, _)| format!("- {name}"))
             .collect::<Vec<_>>()
-            .join("\n\n")
+            .join("\n")
     };
 
-    let prompt = SKILL_GENERATION_PROMPT
-        .replace("{facts}", &facts_section)
+    // Pass 1: plan which clusters map to which skills
+    let plan_prompt = SKILL_PLANNING_PROMPT
+        .replace("{clusters}", &clusters_section)
         .replace("{tools}", &tools_section)
         .replace("{existing_skills}", &existing_section);
 
-    let response = backend.complete(prompt).await?;
-    let skill_blocks = parse_skill_blocks(&response);
+    let plan_response = backend.complete(plan_prompt).await?;
+    let plan_json = crate::janitor::extract_json_block(&plan_response);
+    let plan: std::collections::HashMap<String, Vec<usize>> =
+        serde_json::from_str(&plan_json).unwrap_or_default();
+
+    if plan.is_empty() {
+        return Ok(0);
+    }
+
+    // Pass 2: generate each skill with only its relevant facts
     let mut count: u32 = 0;
 
-    for (filename, content) in &skill_blocks {
-        // Sanitize filename
-        let safe_name = filename
+    for (filename, cluster_ids) in &plan {
+        let safe_name: String = filename
             .chars()
             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
-            .collect::<String>();
+            .collect();
         if safe_name.is_empty() || !safe_name.ends_with(".md") {
             continue;
         }
-        if let Err(e) = skill_store.save(&safe_name, content) {
-            eprintln!("[janitor] skill save error: {e}");
-        } else {
-            count += 1;
+
+        let selected_facts: String = cluster_ids
+            .iter()
+            .filter_map(|&id| db_clusters.iter().find(|c| c.cluster_id == id))
+            .flat_map(|c| c.member_ids.iter())
+            .filter_map(|mid| fact_map.get(mid.as_str()))
+            .map(|f| format!("- {f}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if selected_facts.is_empty() {
+            continue;
+        }
+
+        let existing_content = existing
+            .iter()
+            .find(|(name, _)| name == &safe_name)
+            .map(|(_, content)| content.as_str())
+            .unwrap_or("(new skill)");
+
+        let gen_prompt = SKILL_GENERATION_PROMPT
+            .replace("{facts}", &selected_facts)
+            .replace("{tools}", &tools_section)
+            .replace("{existing_skill}", existing_content)
+            .replace("{filename}", &safe_name);
+
+        let gen_response = match backend.complete(gen_prompt).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[janitor] skill generation error for {safe_name}: {e}");
+                continue;
+            }
+        };
+
+        let skill_blocks = parse_skill_blocks(&gen_response);
+        for (_, content) in &skill_blocks {
+            if let Err(e) = skill_store.save(&safe_name, content) {
+                eprintln!("[janitor] skill save error: {e}");
+            } else {
+                count += 1;
+            }
         }
     }
 

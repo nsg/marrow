@@ -8,6 +8,7 @@ use tokio::time::sleep;
 use crate::events::{Event, EventLog};
 use crate::memory::{Memory, MemorySource, MemoryStore};
 use crate::model::ModelBackend;
+use crate::schedule::ScheduleStore;
 use crate::toolbox::{ToolMeta, Toolbox};
 
 const MAX_FIX_ATTEMPTS: u32 = 3;
@@ -515,21 +516,20 @@ fn extract_significant_words(text: &str) -> HashSet<String> {
         .collect()
 }
 
-fn cluster_memories(memories: &[Memory]) -> Vec<Vec<&Memory>> {
+fn cluster_with_threshold<'a>(
+    memories: &[&'a Memory],
+    min_shared: usize,
+) -> (Vec<Vec<&'a Memory>>, Vec<&'a Memory>) {
     if memories.is_empty() {
-        return vec![];
+        return (vec![], vec![]);
     }
 
-    // Build word -> memory indices map
-    let mut word_map: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, mem) in memories.iter().enumerate() {
-        for word in extract_significant_words(&mem.fact) {
-            word_map.entry(word).or_default().push(i);
-        }
-    }
-
-    // Union-find
     let n = memories.len();
+    let word_sets: Vec<HashSet<String>> = memories
+        .iter()
+        .map(|m| extract_significant_words(&m.fact))
+        .collect();
+
     let mut parent: Vec<usize> = (0..n).collect();
 
     fn find(parent: &mut [usize], mut x: usize) -> usize {
@@ -548,26 +548,62 @@ fn cluster_memories(memories: &[Memory]) -> Vec<Vec<&Memory>> {
         }
     }
 
-    // Merge indices that share words
-    for indices in word_map.values() {
-        for window in indices.windows(2) {
-            union(&mut parent, window[0], window[1]);
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let shared = word_sets[i].intersection(&word_sets[j]).count();
+            if shared >= min_shared {
+                union(&mut parent, i, j);
+            }
         }
     }
 
-    // Collect clusters
-    let mut clusters: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
     for i in 0..n {
         let root = find(&mut parent, i);
-        clusters.entry(root).or_default().push(i);
+        groups.entry(root).or_default().push(i);
     }
 
-    // Return only clusters with 2+ members
+    let mut clusters = Vec::new();
+    let mut singletons = Vec::new();
+    for indices in groups.into_values() {
+        if indices.len() >= 2 {
+            clusters.push(indices.into_iter().map(|i| memories[i]).collect());
+        } else {
+            singletons.push(memories[indices[0]]);
+        }
+    }
+    (clusters, singletons)
+}
+
+/// Cluster memories requiring 2+ shared words. Returns only clusters with 2+ members.
+pub fn cluster_memories(memories: &[Memory]) -> Vec<Vec<&Memory>> {
+    let refs: Vec<&Memory> = memories.iter().collect();
+    let (clusters, _) = cluster_with_threshold(&refs, 2);
     clusters
-        .into_values()
-        .filter(|c| c.len() >= 2)
-        .map(|c| c.into_iter().map(|i| &memories[i]).collect())
-        .collect()
+}
+
+/// Two-tier clustering: tight clusters (2+ shared words), then loose groups
+/// (1+ shared word) for the remaining singletons. Every memory is accounted for.
+pub fn cluster_all_memories(memories: &[Memory]) -> Vec<Vec<&Memory>> {
+    let refs: Vec<&Memory> = memories.iter().collect();
+
+    // Pass 1: tight clusters
+    let (mut clusters, singletons) = cluster_with_threshold(&refs, 2);
+
+    if singletons.is_empty() {
+        return clusters;
+    }
+
+    // Pass 2: looser grouping on leftovers
+    let (loose_clusters, remaining) = cluster_with_threshold(&singletons, 1);
+    clusters.extend(loose_clusters);
+
+    // Anything still ungrouped stays as individual clusters
+    for m in remaining {
+        clusters.push(vec![m]);
+    }
+
+    clusters
 }
 
 const MEMORY_CLEANUP_PROMPT: &str = r#"You are a memory janitor. Review the following cluster of related memory facts.
@@ -790,6 +826,94 @@ fn parse_fact_array(response: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(json_str).unwrap_or_default()
 }
 
+// ---------------------------------------------------------------------------
+// Memory cluster summarization
+// ---------------------------------------------------------------------------
+
+const CLUSTER_SUMMARY_PROMPT: &str = r#"Generate a short topic label (2-4 words) for each group of related memory facts.
+
+{clusters}
+
+Respond with a JSON object mapping group number to label:
+```json
+{{"0": "Nextcloud Infrastructure", "1": "Blog & RSS"}}
+```
+
+Rules:
+- Labels should be concise topic descriptions, not sentences
+- Title case
+- If a group has just one fact, derive the label from that fact"#;
+
+pub async fn summarize_clusters(
+    store: &MemoryStore,
+    backend: &dyn ModelBackend,
+    log: &EventLog,
+) -> Result<u32, Box<dyn Error + Send + Sync>> {
+    let memories = store.list()?;
+    if memories.is_empty() {
+        store.save_clusters(&[])?;
+        return Ok(0);
+    }
+
+    let clusters = cluster_all_memories(&memories);
+    if clusters.is_empty() {
+        return Ok(0);
+    }
+
+    // Build prompt with numbered clusters
+    let clusters_text = clusters
+        .iter()
+        .enumerate()
+        .map(|(i, cluster)| {
+            let facts: String = cluster
+                .iter()
+                .map(|m| format!("  - {}", m.fact))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("Group {i}:\n{facts}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let prompt = CLUSTER_SUMMARY_PROMPT.replace("{clusters}", &clusters_text);
+    let response = backend.complete(prompt).await?;
+    let json_str = extract_json_block(&response);
+    let summaries: HashMap<String, String> = serde_json::from_str(&json_str).unwrap_or_default();
+
+    let result: Vec<crate::memory::MemoryCluster> = clusters
+        .iter()
+        .enumerate()
+        .map(|(i, cluster)| {
+            let summary = summaries
+                .get(&i.to_string())
+                .cloned()
+                .unwrap_or_else(|| cluster[0].fact.chars().take(40).collect());
+            crate::memory::MemoryCluster {
+                cluster_id: i,
+                summary,
+                member_ids: cluster.iter().map(|m| m.id.to_string()).collect(),
+            }
+        })
+        .collect();
+
+    let count = result.len() as u32;
+    store.save_clusters(&result)?;
+
+    eprintln!(
+        "[janitor] clustered {} memories into {} groups",
+        memories.len(),
+        count
+    );
+
+    log.emit(Event::MemoryCleanupResult {
+        updated: count,
+        deleted: 0,
+    })
+    .await;
+
+    Ok(count)
+}
+
 async fn backfill_embeddings(
     store: &MemoryStore,
     embed_backend: &dyn crate::model::EmbedBackend,
@@ -813,6 +937,119 @@ async fn backfill_embeddings(
     Ok(count)
 }
 
+// ---------------------------------------------------------------------------
+// Schedule description review
+// ---------------------------------------------------------------------------
+
+const SCHEDULE_REVIEW_PROMPT: &str = r#"You are reviewing a scheduled task description. The description serves two purposes:
+1. The FIRST LINE is shown as the card title in the dashboard (keep it under 60 chars)
+2. The rest (after a blank line) is the full instruction the agent follows at runtime
+
+Current description:
+---
+{description}
+---
+
+User memories that may be relevant to this schedule:
+{memories}
+
+Tasks:
+1. FORMAT: If the description doesn't start with a short plain-text title line followed by a blank line, restructure it. The title must be plain text (no markdown, no `#` prefix). The body keeps ALL the original instructions — do not remove or simplify them.
+2. MEMORIES: If any user memories contain preferences, corrections, or context relevant to this schedule's purpose, incorporate them into the body instructions. Only incorporate clearly relevant memories — don't stretch.
+3. If the description already has proper format AND no relevant memories need incorporating, respond with SKIP.
+
+Respond in this exact format:
+
+If changes needed:
+```description
+Short title here
+
+Full instructions here, incorporating any relevant memory context...
+```
+
+If no changes needed:
+```verdict
+SKIP
+```"#;
+
+const SCHEDULE_MEMORY_LIMIT: usize = 15;
+
+fn format_memories_for_prompt(memories: &[(Memory, f32)]) -> String {
+    if memories.is_empty() {
+        return "(no relevant memories found)".to_string();
+    }
+    memories
+        .iter()
+        .map(|(m, _)| format!("- ({}) {}", m.source.as_str(), m.fact))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub async fn review_schedules(
+    schedule_store: &ScheduleStore,
+    memory_store: &MemoryStore,
+    backend: &dyn ModelBackend,
+    log: &EventLog,
+    embed_backend: &dyn crate::model::EmbedBackend,
+) -> Result<u32, Box<dyn Error + Send + Sync>> {
+    let schedules = schedule_store.list()?;
+    if schedules.is_empty() {
+        return Ok(0);
+    }
+
+    let mut updated = 0u32;
+
+    for schedule in &schedules {
+        let query_vec = embed_backend
+            .embed(vec![schedule.description.clone()])
+            .await?;
+        let query_vec = query_vec.first().ok_or("embedding returned no vectors")?;
+        let relevant = memory_store.nearest(query_vec, SCHEDULE_MEMORY_LIMIT)?;
+        let memory_text = format_memories_for_prompt(&relevant);
+
+        let prompt = SCHEDULE_REVIEW_PROMPT
+            .replace("{description}", &schedule.description)
+            .replace("{memories}", &memory_text);
+
+        let response = match backend.complete(prompt).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[janitor] schedule review model error: {e}");
+                continue;
+            }
+        };
+
+        if response.contains("SKIP") && extract_block(&response, "verdict").is_some() {
+            log.emit(Event::ScheduleReviewed {
+                schedule_id: schedule.id.to_string(),
+                updated: false,
+            })
+            .await;
+            continue;
+        }
+
+        if let Some(new_desc) = extract_block(&response, "description") {
+            let new_desc = new_desc.trim().to_string();
+            if !new_desc.is_empty() && new_desc != schedule.description {
+                let mut updated_schedule = schedule.clone();
+                updated_schedule.description = new_desc;
+                if let Err(e) = schedule_store.update(&updated_schedule) {
+                    eprintln!("[janitor] schedule update error: {e}");
+                    continue;
+                }
+                log.emit(Event::ScheduleReviewed {
+                    schedule_id: schedule.id.to_string(),
+                    updated: true,
+                })
+                .await;
+                updated += 1;
+            }
+        }
+    }
+
+    Ok(updated)
+}
+
 /// Run a single janitor pass: review all unvalidated tools, then run cleanup.
 /// Returns the number of tools processed.
 #[allow(clippy::too_many_arguments)]
@@ -824,6 +1061,8 @@ pub async fn run_once(
     store: &MemoryStore,
     skill_store: &crate::skills::SkillStore,
     tools: &[crate::tool::ToolInfo],
+    schedule_store: &ScheduleStore,
+    embed_backend: Option<&dyn crate::model::EmbedBackend>,
 ) -> Result<u32, Box<dyn Error + Send + Sync>> {
     let unvalidated = toolbox.list_unvalidated()?;
     let mut processed = 0;
@@ -850,6 +1089,20 @@ pub async fn run_once(
         Err(e) => eprintln!("[janitor] memory cleanup error: {e}"),
     }
 
+    match summarize_clusters(store, backend, log).await {
+        Ok(_) => {}
+        Err(e) => eprintln!("[janitor] cluster summarization error: {e}"),
+    }
+
+    if let Some(eb) = embed_backend {
+        match review_schedules(schedule_store, store, backend, log, eb).await {
+            Ok(_) => {}
+            Err(e) => eprintln!("[janitor] schedule review error: {e}"),
+        }
+    } else {
+        eprintln!("[janitor] skipping schedule review: no embedding backend configured");
+    }
+
     match crate::skills::generate_skills(skill_store, store, tools, backend, log).await {
         Ok(_) => {}
         Err(e) => eprintln!("[janitor] skill generation error: {e}"),
@@ -869,13 +1122,16 @@ pub async fn run(
     tools: &[crate::tool::ToolInfo],
     memory_changed: &AtomicBool,
     embed_backend: Option<&dyn crate::model::EmbedBackend>,
+    schedule_store: &ScheduleStore,
 ) {
     let mut idle_cycles: u32 = 0;
     let mut cleanup_backed_off = false;
     let mut decompose_backed_off = false;
     let mut memory_cleanup_backed_off = false;
     let mut embeddings_backed_off = false;
+    let mut clusters_backed_off = false;
     let mut skills_backed_off = false;
+    let mut schedules_backed_off = false;
 
     loop {
         let unvalidated = match toolbox.list_unvalidated() {
@@ -895,7 +1151,9 @@ pub async fn run(
                 decompose_backed_off = false;
                 memory_cleanup_backed_off = false;
                 embeddings_backed_off = false;
+                clusters_backed_off = false;
                 skills_backed_off = false;
+                schedules_backed_off = false;
                 idle_cycles = idle_cycles.min(10);
             }
 
@@ -931,6 +1189,14 @@ pub async fn run(
                 }
             }
 
+            // Cluster and summarize memories (~85s after idle)
+            if !clusters_backed_off && idle_cycles == 17 {
+                match summarize_clusters(store, backend, log).await {
+                    Ok(_) => clusters_backed_off = true,
+                    Err(e) => eprintln!("[janitor] cluster summarization error: {e}"),
+                }
+            }
+
             // Backfill embeddings for facts that don't have them yet (~100s after idle)
             if !embeddings_backed_off && idle_cycles == 20 {
                 if let Some(eb) = embed_backend {
@@ -956,6 +1222,18 @@ pub async fn run(
                 }
             }
 
+            // Review schedule descriptions (~150s after idle)
+            if !schedules_backed_off && idle_cycles == 30 {
+                if let Some(eb) = embed_backend {
+                    match review_schedules(schedule_store, store, backend, log, eb).await {
+                        Ok(_) => schedules_backed_off = true,
+                        Err(e) => eprintln!("[janitor] schedule review error: {e}"),
+                    }
+                } else {
+                    schedules_backed_off = true;
+                }
+            }
+
             sleep(Duration::from_secs(5)).await;
             continue;
         }
@@ -965,7 +1243,9 @@ pub async fn run(
         decompose_backed_off = false;
         memory_cleanup_backed_off = false;
         embeddings_backed_off = false;
+        clusters_backed_off = false;
         skills_backed_off = false;
+        schedules_backed_off = false;
         for tool in &unvalidated {
             if let Err(e) = review_and_fix(toolbox, &tool.name, backend, log, builtins).await {
                 eprintln!("[janitor] error processing '{}': {e}", tool.name);
@@ -1058,25 +1338,24 @@ FAIL
     fn test_cluster_memories_groups_related() {
         let mems = vec![
             Memory::new(
-                "Nextcloud runs on port 8443",
+                "Nextcloud server runs on port 8443",
                 crate::memory::MemorySource::Auto,
             ),
             Memory::new(
-                "Blog uses WordPress at blog.example.com",
+                "Blog deployment uses WordPress hosting",
                 crate::memory::MemorySource::Auto,
             ),
             Memory::new(
-                "Nextcloud storage limit is 50GB",
+                "Nextcloud server storage limit is 50GB",
                 crate::memory::MemorySource::Auto,
             ),
             Memory::new(
-                "Blog theme is flavor-flavor",
+                "Blog deployment theme is flavor-flavor",
                 crate::memory::MemorySource::Auto,
             ),
         ];
         let clusters = cluster_memories(&mems);
         assert_eq!(clusters.len(), 2);
-        // Each cluster should have 2 members
         for c in &clusters {
             assert_eq!(c.len(), 2);
         }

@@ -141,6 +141,7 @@ impl Runtime {
             let janitor_skills = SkillStore::new(&options.skills_path);
             let janitor_tools = registry.list_all();
             let janitor_memory_changed = memory_changed.clone();
+            let janitor_schedules = schedule_store.clone();
             let janitor_embed: Option<Box<dyn crate::model::EmbedBackend>> = router
                 .embed_backend("embedding")
                 .ok()
@@ -161,6 +162,7 @@ impl Runtime {
                     &janitor_tools,
                     &janitor_memory_changed,
                     janitor_embed.as_deref(),
+                    &janitor_schedules,
                 )
                 .await;
             });
@@ -201,6 +203,7 @@ impl Runtime {
         let code_backend = self.router.backend("janitor")?;
         let builtins = self.registry.builtin_info();
         let tools = self.registry.list_all();
+        let embed_backend = self.router.embed_backend("embedding").ok();
         janitor::run_once(
             self.registry.toolbox(),
             code_backend,
@@ -209,6 +212,8 @@ impl Runtime {
             self.memory_store.as_ref(),
             self.skill_store.as_ref(),
             &tools,
+            self.schedule_store.as_ref(),
+            embed_backend,
         )
         .await
     }
