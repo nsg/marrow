@@ -1749,6 +1749,8 @@ tr.clickable:hover td:first-child {
     if (t === "agent_transition") cls = "badge-transition";
     else if (t.startsWith("task") || t.includes("task")) cls = "badge-task";
     else if (t.startsWith("janitor") || t.includes("janitor")) cls = "badge-janitor";
+    else if (t.startsWith("memory") || t.includes("memory")) cls = "badge-janitor";
+    else if (t.startsWith("skills") || t === "skills_generated") cls = "badge-janitor";
     else if (t.startsWith("schedule") || t.includes("schedule")) cls = "badge-schedule";
     else if (t.startsWith("agent") || t.includes("agent")) cls = "badge-agent";
     else if (t.startsWith("tool") || t.includes("tool")) cls = "badge-tool";
@@ -1773,8 +1775,30 @@ tr.clickable:hover td:first-child {
       case "janitor_regenerate": return (ev.tool || "") + " attempt " + ev.attempt;
       case "janitor_deleted": return (ev.tool || "") + (ev.reason ? " — " + truncate(ev.reason, 80) : "");
       case "janitor_escalated": return (ev.tool || "") + (ev.reason ? " — " + truncate(ev.reason, 80) : "");
+      case "memory_cleanup_started": return ev.clusters + " cluster" + (ev.clusters !== 1 ? "s" : "");
+      case "memory_cleanup_result": return (ev.updated || 0) + " updated, " + (ev.deleted || 0) + " deleted";
+      case "skills_generated": return ev.count + " skill" + (ev.count !== 1 ? "s" : "") + " generated";
+      case "schedule_reviewed": return (ev.schedule_id || "") + (ev.updated ? " — updated" : " — no changes");
       default: return JSON.stringify(ev).slice(0, 150);
     }
+  }
+
+  function renderTimeline(history, title) {
+    if (!history || history.length === 0) return "";
+    let html = '<div class="section-title fade-child">' + esc(title) + '</div>';
+    html += '<ul class="timeline fade-child">';
+    for (const h of history) {
+      html += '<li class="timeline-item">';
+      html += '<span class="timeline-time">' + esc(formatTime(h.timestamp_ms)) + '</span>';
+      html += '<span class="timeline-content">';
+      html += eventTypeBadge(h.type) + ' ';
+      if (h.tool) html += '<span class="mono">' + esc(h.tool) + '</span> ';
+      html += esc(eventSummary(h));
+      html += '</span>';
+      html += '</li>';
+    }
+    html += '</ul>';
+    return html;
   }
 
   function truncate(s, max) {
@@ -2332,21 +2356,7 @@ tr.clickable:hover td:first-child {
         html += '</div>';
       }
 
-      if (history.length > 0) {
-        html += '<div class="section-title fade-child">Janitor History</div>';
-        html += '<ul class="timeline fade-child">';
-        for (const h of history) {
-          html += '<li class="timeline-item">';
-          html += '<span class="timeline-time">' + esc(formatTime(h.timestamp_ms)) + '</span>';
-          html += '<span class="timeline-content">';
-          html += eventTypeBadge(h.type) + ' ';
-          if (h.tool) html += '<span class="mono">' + esc(h.tool) + '</span> ';
-          html += esc(eventSummary(h));
-          html += '</span>';
-          html += '</li>';
-        }
-        html += '</ul>';
-      }
+      html += renderTimeline(history, "Janitor History");
 
       setContent("tools-content", html);
       bindItemToggle("tools-content", ".tool-row");
@@ -2431,6 +2441,8 @@ tr.clickable:hover td:first-child {
         html += renderPagination(state.memory, "memory");
       }
 
+      html += renderTimeline(data.janitor_history, "Janitor History");
+
       setContent("memory-content", html);
     } catch (e) {
       setContent("memory-content", errorMsg(e));
@@ -2448,9 +2460,10 @@ tr.clickable:hover td:first-child {
   async function loadSchedules() {
     try {
       const data = await apiFetch("/api/schedules");
-      const schedules = Array.isArray(data) ? data : [];
+      const schedules = data.schedules || [];
       if (schedules.length === 0) {
-        setContent("schedules-content", emptyMsg("No schedules configured."));
+        let html = renderTimeline(data.janitor_history, "Janitor History");
+        setContent("schedules-content", emptyMsg("No schedules configured.") + html);
         return;
       }
       let html = '<div class="sched-list">';
@@ -2483,6 +2496,7 @@ tr.clickable:hover td:first-child {
         html += '</div>';
       }
       html += '</div>';
+      html += renderTimeline(data.janitor_history, "Janitor History");
       setContent("schedules-content", html);
       bindItemToggle("schedules-content", ".sched-card");
     } catch (e) {
@@ -2494,9 +2508,10 @@ tr.clickable:hover td:first-child {
   async function loadSkills() {
     try {
       const data = await apiFetch("/api/skills");
-      const skills = Array.isArray(data) ? data : [];
+      const skills = data.skills || [];
       if (skills.length === 0) {
-        setContent("skills-content", emptyMsg("No skills generated yet."));
+        let html = renderTimeline(data.janitor_history, "Janitor History");
+        setContent("skills-content", emptyMsg("No skills generated yet.") + html);
         return;
       }
       let html = '<div class="skills-list">';
@@ -2521,6 +2536,7 @@ tr.clickable:hover td:first-child {
         html += '</div>';
       }
       html += '</div>';
+      html += renderTimeline(data.janitor_history, "Janitor History");
       setContent("skills-content", html);
       bindItemToggle("skills-content", ".skill-row");
     } catch (e) {

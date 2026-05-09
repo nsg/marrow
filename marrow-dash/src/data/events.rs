@@ -382,6 +382,38 @@ impl EventData {
             .map(|e| e.raw.clone())
             .collect()
     }
+
+    pub fn memory_history(&self) -> Vec<serde_json::Value> {
+        self.entries
+            .iter()
+            .rev()
+            .filter(|e| {
+                matches!(
+                    e.parsed.event,
+                    Event::MemoryCleanupStarted { .. } | Event::MemoryCleanupResult { .. }
+                )
+            })
+            .map(|e| e.raw.clone())
+            .collect()
+    }
+
+    pub fn schedule_history(&self) -> Vec<serde_json::Value> {
+        self.entries
+            .iter()
+            .rev()
+            .filter(|e| matches!(e.parsed.event, Event::ScheduleReviewed { .. }))
+            .map(|e| e.raw.clone())
+            .collect()
+    }
+
+    pub fn skills_history(&self) -> Vec<serde_json::Value> {
+        self.entries
+            .iter()
+            .rev()
+            .filter(|e| matches!(e.parsed.event, Event::SkillsGenerated { .. }))
+            .map(|e| e.raw.clone())
+            .collect()
+    }
 }
 
 fn event_category(event: &Event) -> &'static str {

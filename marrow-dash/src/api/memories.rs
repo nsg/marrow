@@ -29,6 +29,7 @@ struct MemoriesResponse {
     stats: MemoryStatsResponse,
     search_mode: &'static str,
     cluster_summaries: std::collections::HashMap<usize, String>,
+    janitor_history: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -81,6 +82,12 @@ async fn list_memories(
     };
     // Lock is dropped here
 
+    let janitor_history = state
+        .events
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .memory_history();
+
     // Try vector search if we have a query and an embedding backend
     if let Some(ref q) = params.search
         && !q.is_empty()
@@ -102,6 +109,7 @@ async fn list_memories(
                 stats,
                 search_mode: "vector",
                 cluster_summaries,
+                janitor_history,
             });
         }
     }
@@ -112,6 +120,7 @@ async fn list_memories(
         stats,
         search_mode,
         cluster_summaries,
+        janitor_history,
     })
 }
 
