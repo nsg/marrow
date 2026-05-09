@@ -214,7 +214,7 @@ return json_parse(resp.body)
 
 - CRITICAL: Before writing ANY http_request/http_get/http_post code, check the "Available Lua functions" list. If a built-in function already does what you need (rss_feed for RSS, http_fetch for HTTP, caldav_calendar for CalDAV, etc.), call it directly — it handles auth, parsing, and error cases that raw HTTP will not. Only use http_get/http_request for APIs that have NO matching function.
 - IMPORTANT: If a relevant skill exists (especially ones marked "suggested"), load it FIRST. Skills contain the correct URLs, credentials, parameter formats, and known workarounds. Guessing these values wastes steps.
-- After inline Lua succeeds: if the code is generally useful, save it with save_tool. You can save a block in the same response as new work.
+- After inline Lua succeeds: save it with save_tool unless it's truly one-off (a single-use lookup with no chance of reuse). Default to saving — reusable tools avoid regenerating the same code on future runs.
 - CRITICAL: When a step already returned the data you need, do NOT rewrite the code. Use save_tool referencing the successful block.
 - If code fails, read the error carefully. Do NOT repeat the same approach — fix the specific issue.
 - NEVER retry something that already failed with the same error.
@@ -503,7 +503,8 @@ pub fn build_agent_prompt(
             "- There is no conversation history — you are starting fresh.\n",
             "- You cannot ask follow-up questions — no one will see them until the run is complete.\n",
             "- Your answer will be delivered to the frontend that created this schedule.\n",
-            "- Save any important findings to working memory so future runs can build on them.\n\n",
+            "- Save any important findings to working memory so future runs can build on them.\n",
+            "- IMPORTANT: Save working Lua as tools with save_tool — this schedule will run again, and saved tools avoid regenerating the same code every time.\n\n",
         )
         .to_string(),
         "cli" => concat!(
