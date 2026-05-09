@@ -1423,6 +1423,10 @@ tr.clickable:hover td:first-child {
       <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       <span class="nav-tooltip">Events</span>
     </button>
+    <button class="nav-btn" data-tab="kv" aria-label="KV Store">
+      <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+      <span class="nav-tooltip">KV Store</span>
+    </button>
     <button class="nav-btn" data-tab="backend" aria-label="Backend Errors">
       <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       <span class="nav-tooltip">Backend</span>
@@ -1511,6 +1515,11 @@ tr.clickable:hover td:first-child {
       <div id="events-content"><div class="state-msg"><span class="spinner"></span> Loading events...</div></div>
     </div>
 
+    <!-- KV Store -->
+    <div class="tab-panel" id="panel-kv">
+      <div id="kv-content"><div class="state-msg"><span class="spinner"></span> Loading KV store...</div></div>
+    </div>
+
     <!-- Backend Errors -->
     <div class="tab-panel" id="panel-backend">
       <div class="filter-bar">
@@ -1555,6 +1564,7 @@ tr.clickable:hover td:first-child {
     tools: "Tools",
     memory: "Memory",
     schedules: "Schedules",
+    kv: "KV Store",
     events: "Events",
     backend: "Backend Errors"
   };
@@ -1843,6 +1853,11 @@ tr.clickable:hover td:first-child {
       html += infoRow("Total", sched.total || 0);
       html += infoRow("Enabled", sched.enabled || 0);
       html += infoRow("Disabled", sched.disabled || 0);
+      html += '</div>';
+
+      // KV Store card
+      html += '<div class="info-card" data-tab="kv"><h3>KV Store</h3>';
+      html += infoRow("Entries", data.kv_count || 0);
       html += '</div>';
 
       html += '</div>';
@@ -2509,6 +2524,41 @@ tr.clickable:hover td:first-child {
     }
   }
 
+  // --- KV Store ---
+  async function loadKv() {
+    try {
+      const data = await apiFetch("/api/kv");
+      const entries = data.entries || [];
+      if (entries.length === 0) {
+        setContent("kv-content", emptyMsg("No key-value entries stored."));
+        return;
+      }
+      let html = '<div class="skills-list">';
+      for (const kv of entries) {
+        const isJson = kv.value.startsWith("{") || kv.value.startsWith("[");
+        let displayValue = kv.value;
+        if (isJson) {
+          try { displayValue = JSON.stringify(JSON.parse(kv.value), null, 2); } catch (_) {}
+        }
+        html += '<div class="skill-row" data-item-name="' + esc(kv.key) + '">';
+        html += '<div class="skill-row-header">';
+        html += '<span class="skill-row-name" style="text-transform:none;font-family:var(--font-mono);font-weight:500">' + esc(kv.key) + '</span>';
+        html += '<span class="skill-row-desc">' + esc(formatTime(kv.updated)) + '</span>';
+        html += '<svg class="skill-row-chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>';
+        html += '</div>';
+        html += '<div class="skill-expand">';
+        html += '<div class="skill-content"><pre style="margin:0;white-space:pre-wrap;word-break:break-all">' + esc(displayValue) + '</pre></div>';
+        html += '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+      setContent("kv-content", html);
+      bindItemToggle("kv-content", ".skill-row");
+    } catch (e) {
+      setContent("kv-content", errorMsg(e));
+    }
+  }
+
   // --- Events ---
   async function loadEvents() {
     try {
@@ -2788,6 +2838,7 @@ tr.clickable:hover td:first-child {
       case "memory": loadMemory(); break;
       case "schedules": loadSchedules(); break;
       case "skills": loadSkills(); break;
+      case "kv": loadKv(); break;
       case "events": loadEvents(); break;
       case "backend": loadBackendErrors(); break;
     }

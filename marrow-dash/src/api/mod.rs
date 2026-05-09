@@ -7,6 +7,7 @@ use crate::state::AppState;
 mod backend_errors;
 pub mod debug;
 mod events;
+mod kv;
 mod memories;
 mod overview;
 mod schedules;
@@ -24,4 +25,5 @@ pub fn routes() -> Router<Arc<AppState>> {
         .merge(skills::routes())
         .merge(events::routes())
         .merge(backend_errors::routes())
+        .merge(kv::routes())
 }

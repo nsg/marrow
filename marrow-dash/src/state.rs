@@ -12,6 +12,7 @@ pub struct AppState {
     pub schedules: RwLock<Vec<data::schedules::ScheduleInfo>>,
     pub skills: RwLock<Vec<data::skills::SkillInfo>>,
     pub backend_errors: RwLock<data::backend_errors::BackendErrorData>,
+    pub kv: RwLock<data::kv::KvData>,
     pub config: data::config::ConfigInfo,
     pub memory_dir: PathBuf,
     pub embed_backend: Option<Box<dyn EmbedBackend>>,
@@ -34,6 +35,7 @@ impl AppState {
         let skill_items = data::skills::load(skills);
         let config_info = data::config::ConfigInfo::load(config);
         let backend_errors = data::backend_errors::BackendErrorData::load(error_log);
+        let kv_data = data::kv::KvData::load(memory);
 
         let embed_backend = marrow::router::RouterConfig::from_file(config)
             .ok()
@@ -50,6 +52,7 @@ impl AppState {
             schedules: RwLock::new(schedule_items),
             skills: RwLock::new(skill_items),
             backend_errors: RwLock::new(backend_errors),
+            kv: RwLock::new(kv_data),
             config: config_info,
             memory_dir: memory.to_path_buf(),
             embed_backend,
@@ -95,6 +98,14 @@ impl AppState {
                 .write()
                 .unwrap_or_else(|e| e.into_inner());
             be.refresh(error_log);
+        }
+        {
+            let kv = self.kv.read().unwrap_or_else(|e| e.into_inner());
+            if kv.needs_reload(memory) {
+                drop(kv);
+                let mut kv = self.kv.write().unwrap_or_else(|e| e.into_inner());
+                *kv = data::kv::KvData::load(memory);
+            }
         }
     }
 }

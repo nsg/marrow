@@ -16,6 +16,7 @@ struct OverviewResponse {
     toolbox: ToolboxOverview,
     schedules: ScheduleOverview,
     skills_count: usize,
+    kv_count: usize,
     config: crate::data::config::ConfigInfo,
 }
 
@@ -73,6 +74,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
     };
 
     let skills_count = state.skills.read().unwrap_or_else(|e| e.into_inner()).len();
+    let kv_count = state.kv.read().unwrap_or_else(|e| e.into_inner()).entries.len();
 
     // Clone config for serialization
     let config = crate::data::config::ConfigInfo {
@@ -95,6 +97,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
         toolbox,
         schedules: schedules_overview,
         skills_count,
+        kv_count,
         config,
     })
 }
