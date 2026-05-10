@@ -14,16 +14,9 @@ struct SchedulesResponse {
 }
 
 async fn list_schedules(State(state): State<Arc<AppState>>) -> Json<SchedulesResponse> {
-    let schedules = state
-        .schedules
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
-    let janitor_history = state
-        .events
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .schedule_history();
+    let schedules = crate::data::schedules::load(&state.schedules_path);
+    let events = crate::data::events::EventData::load(&state.log_path);
+    let janitor_history = events.schedule_history();
     Json(SchedulesResponse {
         schedules,
         janitor_history,

@@ -45,13 +45,16 @@ struct ScheduleOverview {
 }
 
 async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> {
-    let stats = state
-        .events
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .overview();
+    let events = crate::data::events::EventData::load(&state.log_path);
+    let mem = crate::data::memory::MemoryStats::load(&state.memory_path);
+    let tb = crate::data::toolbox::load(&state.toolbox_path);
+    let sc = crate::data::schedules::load(&state.schedules_path);
+    let skills = crate::data::skills::load(&state.skills_path);
+    let kv = crate::data::kv::KvData::load(&state.memory_path);
+    let backend_errors = crate::data::backend_errors::BackendErrorData::load(&state.error_log_path);
 
-    let mem = state.memory.read().unwrap_or_else(|e| e.into_inner());
+    let stats = events.overview();
+
     let memory = MemoryOverview {
         total: mem.total,
         auto_count: mem.auto_count,
@@ -59,7 +62,6 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
         embedded_count: mem.embedded_count,
     };
 
-    let tb = state.toolbox.read().unwrap_or_else(|e| e.into_inner());
     let validated = tb.iter().filter(|t| t.validated).count();
     let toolbox = ToolboxOverview {
         total: tb.len(),
@@ -67,7 +69,6 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
         unvalidated: tb.len() - validated,
     };
 
-    let sc = state.schedules.read().unwrap_or_else(|e| e.into_inner());
     let enabled = sc.iter().filter(|s| s.enabled).count();
     let schedules_overview = ScheduleOverview {
         total: sc.len(),
@@ -75,26 +76,6 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
         disabled: sc.len() - enabled,
     };
 
-    let skills_count = state.skills.read().unwrap_or_else(|e| e.into_inner()).len();
-    let kv_count = state
-        .kv
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .entries
-        .len();
-    let events_count = state
-        .events
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .entries
-        .len();
-    let backend_errors_count = state
-        .backend_errors
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .total();
-
-    // Clone config for serialization
     let config = crate::data::config::ConfigInfo {
         roles: state
             .config
@@ -114,10 +95,10 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<OverviewResponse> 
         memory,
         toolbox,
         schedules: schedules_overview,
-        skills_count,
-        kv_count,
-        events_count,
-        backend_errors_count,
+        skills_count: skills.len(),
+        kv_count: kv.entries.len(),
+        events_count: events.entries.len(),
+        backend_errors_count: backend_errors.total(),
         config,
     })
 }

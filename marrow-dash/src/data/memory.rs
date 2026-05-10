@@ -30,8 +30,6 @@ pub struct MemoryStats {
     pub embedded_count: usize,
     pub memories: Vec<MemoryRow>,
     pub cluster_summaries: HashMap<usize, String>,
-    #[serde(skip)]
-    pub row_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -44,15 +42,23 @@ pub struct MemoryRow {
     pub cluster: usize,
 }
 
-impl MemoryStats {
-    pub fn needs_reload(&self, memory_dir: &Path) -> bool {
-        let Some(conn) = open_readonly(memory_dir) else {
-            return self.row_count > 0;
-        };
-        let current = count(&conn, "SELECT COUNT(*) FROM memories");
-        current != self.row_count
-    }
+fn count(conn: &Connection, sql: &str) -> usize {
+    conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
+}
 
+fn embedded_id_set(conn: &Connection) -> HashSet<String> {
+    let mut set = HashSet::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT id FROM vec_memories")
+        && let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0))
+    {
+        for id in rows.flatten() {
+            set.insert(id);
+        }
+    }
+    set
+}
+
+impl MemoryStats {
     pub fn load(memory_dir: &Path) -> Self {
         let Some(conn) = open_readonly(memory_dir) else {
             return Self::default();
@@ -127,7 +133,6 @@ impl MemoryStats {
             auto_count,
             user_count,
             embedded_count,
-            row_count: total,
             memories,
             cluster_summaries,
         }
@@ -185,21 +190,4 @@ impl MemoryStats {
 
         rows.flatten().collect()
     }
-}
-
-fn count(conn: &Connection, sql: &str) -> usize {
-    conn.query_row(sql, [], |r| r.get::<_, i64>(0).map(|v| v as usize))
-        .unwrap_or(0)
-}
-
-fn embedded_id_set(conn: &Connection) -> HashSet<String> {
-    let mut set = HashSet::new();
-    if let Ok(mut stmt) = conn.prepare("SELECT id FROM vec_memories")
-        && let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0))
-    {
-        for id in rows.flatten() {
-            set.insert(id);
-        }
-    }
-    set
 }

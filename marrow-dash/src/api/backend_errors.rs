@@ -28,10 +28,7 @@ async fn list_backend_errors(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ErrorQuery>,
 ) -> Json<BackendErrorsResponse> {
-    let data = state
-        .backend_errors
-        .read()
-        .unwrap_or_else(|e| e.into_inner());
+    let data = crate::data::backend_errors::BackendErrorData::load(&state.error_log_path);
     Json(data.query(
         params.limit,
         params.offset,

@@ -92,7 +92,7 @@ async fn main() {
         p
     };
 
-    let state = Arc::new(state::AppState::load(
+    let state = Arc::new(state::AppState::new(
         &args.log,
         &args.toolbox,
         &args.memory,
@@ -116,29 +116,6 @@ async fn main() {
         app = app.merge(axum::Router::new().nest("/debug", api::debug::routes(debug_state)));
         eprintln!("[marrow-dash] debug endpoints enabled at /debug/events and /debug/raw");
     }
-
-    // Background refresh task
-    let refresh_state = state.clone();
-    let log_path = args.log.clone();
-    let toolbox_path = args.toolbox.clone();
-    let memory_path = args.memory.clone();
-    let schedules_path = args.schedules.clone();
-    let skills_path = args.skills.clone();
-    let refresh_error_log = error_log_path.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-        loop {
-            interval.tick().await;
-            refresh_state.refresh(
-                &log_path,
-                &toolbox_path,
-                &memory_path,
-                &schedules_path,
-                &skills_path,
-                &refresh_error_log,
-            );
-        }
-    });
 
     let addr: SocketAddr = format!("{bind}:{port}").parse().unwrap();
     eprintln!("marrow-dash listening on http://{addr}");

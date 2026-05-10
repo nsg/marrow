@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -77,7 +77,6 @@ pub struct BackendErrorsResponse {
 #[derive(Default)]
 pub struct BackendErrorData {
     entries: Vec<ErrorRecord>,
-    byte_offset: u64,
 }
 
 fn parse_ts_ms(ts: &str) -> u64 {
@@ -102,36 +101,10 @@ impl BackendErrorData {
 
     pub fn load(path: &Path) -> Self {
         let mut data = Self::default();
-        data.read_from(path);
-        data
-    }
-
-    pub fn refresh(&mut self, path: &Path) {
-        self.read_from(path);
-    }
-
-    fn read_from(&mut self, path: &Path) {
-        let Ok(mut file) = std::fs::File::open(path) else {
-            return;
+        let Ok(file) = std::fs::File::open(path) else {
+            return data;
         };
-        let Ok(meta) = file.metadata() else {
-            return;
-        };
-
-        if meta.len() < self.byte_offset {
-            self.entries.clear();
-            self.byte_offset = 0;
-        }
-
-        if meta.len() == self.byte_offset {
-            return;
-        }
-
-        if self.byte_offset > 0 {
-            let _ = file.seek(SeekFrom::Start(self.byte_offset));
-        }
-
-        let reader = BufReader::new(&file);
+        let reader = BufReader::new(file);
         for line in reader.lines() {
             let Ok(line) = line else { break };
             if line.trim().is_empty() {
@@ -141,7 +114,7 @@ impl BackendErrorData {
                 continue;
             };
             let ts_ms = parse_ts_ms(&raw.ts);
-            self.entries.push(ErrorRecord {
+            data.entries.push(ErrorRecord {
                 ts: raw.ts,
                 ts_ms,
                 role: raw.role,
@@ -153,7 +126,7 @@ impl BackendErrorData {
                 source_chain: raw.source_chain,
             });
         }
-        self.byte_offset = meta.len();
+        data
     }
 
     pub fn query(

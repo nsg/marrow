@@ -13,8 +13,6 @@ pub struct KvItem {
 #[derive(Clone, Serialize, Default)]
 pub struct KvData {
     pub entries: Vec<KvItem>,
-    #[serde(skip)]
-    pub row_count: usize,
 }
 
 impl KvData {
@@ -25,12 +23,6 @@ impl KvData {
         else {
             return Self::default();
         };
-
-        let row_count = conn
-            .query_row("SELECT COUNT(*) FROM kv_state", [], |r| {
-                r.get::<_, i64>(0).map(|v| v as usize)
-            })
-            .unwrap_or(0);
 
         let mut entries = Vec::new();
         if let Ok(mut stmt) = conn.prepare("SELECT key, value, updated FROM kv_state ORDER BY key")
@@ -47,21 +39,6 @@ impl KvData {
             }
         }
 
-        Self { entries, row_count }
-    }
-
-    pub fn needs_reload(&self, memory_dir: &Path) -> bool {
-        let db_path = memory_dir.join("memory.db");
-        let Ok(conn) =
-            Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
-            return self.row_count > 0;
-        };
-        let current = conn
-            .query_row("SELECT COUNT(*) FROM kv_state", [], |r| {
-                r.get::<_, i64>(0).map(|v| v as usize)
-            })
-            .unwrap_or(0);
-        current != self.row_count
+        Self { entries }
     }
 }

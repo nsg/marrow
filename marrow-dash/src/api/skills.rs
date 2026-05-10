@@ -14,16 +14,9 @@ struct SkillsResponse {
 }
 
 async fn list_skills(State(state): State<Arc<AppState>>) -> Json<SkillsResponse> {
-    let skills = state
-        .skills
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
-    let janitor_history = state
-        .events
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .skills_history();
+    let skills = crate::data::skills::load(&state.skills_path);
+    let events = crate::data::events::EventData::load(&state.log_path);
+    let janitor_history = events.skills_history();
     Json(SkillsResponse {
         skills,
         janitor_history,

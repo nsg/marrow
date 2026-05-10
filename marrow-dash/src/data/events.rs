@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use marrow::events::{Event, LogEntry};
@@ -13,7 +13,6 @@ pub struct RawEntry {
 #[derive(Default)]
 pub struct EventData {
     pub entries: Vec<RawEntry>,
-    byte_offset: u64,
 }
 
 #[derive(Serialize)]
@@ -63,52 +62,16 @@ impl EventData {
             return data;
         };
         let reader = BufReader::new(file);
-        let mut offset = 0u64;
 
         for line in reader.lines() {
             let Ok(line) = line else { break };
-            offset += line.len() as u64 + 1;
             if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
                 let raw = serde_json::from_str::<serde_json::Value>(&line).unwrap_or_default();
                 data.entries.push(RawEntry { parsed: entry, raw });
             }
         }
 
-        data.byte_offset = offset;
         data
-    }
-
-    pub fn refresh(&mut self, path: &Path) {
-        let Ok(mut file) = std::fs::File::open(path) else {
-            return;
-        };
-        let Ok(metadata) = file.metadata() else {
-            return;
-        };
-
-        let file_len = metadata.len();
-        if file_len < self.byte_offset {
-            // File was truncated — full reload
-            *self = Self::load(path);
-            return;
-        }
-        if file_len == self.byte_offset {
-            return; // No new data
-        }
-
-        if file.seek(SeekFrom::Start(self.byte_offset)).is_err() {
-            return;
-        }
-
-        let reader = BufReader::new(file);
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            self.byte_offset += line.len() as u64 + 1;
-            if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
-                let raw = serde_json::from_str::<serde_json::Value>(&line).unwrap_or_default();
-                self.entries.push(RawEntry { parsed: entry, raw });
-            }
-        }
     }
 
     pub fn overview(&self) -> OverviewStats {

@@ -1,25 +1,20 @@
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
 
 use marrow::model::EmbedBackend;
 
-use crate::data;
-
 pub struct AppState {
-    pub events: RwLock<data::events::EventData>,
-    pub memory: RwLock<data::memory::MemoryStats>,
-    pub toolbox: RwLock<Vec<data::toolbox::ToolInfo>>,
-    pub schedules: RwLock<Vec<data::schedules::ScheduleInfo>>,
-    pub skills: RwLock<Vec<data::skills::SkillInfo>>,
-    pub backend_errors: RwLock<data::backend_errors::BackendErrorData>,
-    pub kv: RwLock<data::kv::KvData>,
-    pub config: data::config::ConfigInfo,
-    pub memory_dir: PathBuf,
+    pub log_path: PathBuf,
+    pub toolbox_path: PathBuf,
+    pub memory_path: PathBuf,
+    pub schedules_path: PathBuf,
+    pub skills_path: PathBuf,
+    pub error_log_path: PathBuf,
+    pub config: crate::data::config::ConfigInfo,
     pub embed_backend: Option<Box<dyn EmbedBackend>>,
 }
 
 impl AppState {
-    pub fn load(
+    pub fn new(
         log: &Path,
         toolbox: &Path,
         memory: &Path,
@@ -28,14 +23,7 @@ impl AppState {
         config: &Path,
         error_log: &Path,
     ) -> Self {
-        let events = data::events::EventData::load(log);
-        let memory_stats = data::memory::MemoryStats::load(memory);
-        let toolbox_items = data::toolbox::load(toolbox);
-        let schedule_items = data::schedules::load(schedules);
-        let skill_items = data::skills::load(skills);
-        let config_info = data::config::ConfigInfo::load(config);
-        let backend_errors = data::backend_errors::BackendErrorData::load(error_log);
-        let kv_data = data::kv::KvData::load(memory);
+        let config_info = crate::data::config::ConfigInfo::load(config);
 
         let embed_backend = marrow::router::RouterConfig::from_file(config)
             .ok()
@@ -46,66 +34,14 @@ impl AppState {
         }
 
         Self {
-            events: RwLock::new(events),
-            memory: RwLock::new(memory_stats),
-            toolbox: RwLock::new(toolbox_items),
-            schedules: RwLock::new(schedule_items),
-            skills: RwLock::new(skill_items),
-            backend_errors: RwLock::new(backend_errors),
-            kv: RwLock::new(kv_data),
+            log_path: log.to_path_buf(),
+            toolbox_path: toolbox.to_path_buf(),
+            memory_path: memory.to_path_buf(),
+            schedules_path: schedules.to_path_buf(),
+            skills_path: skills.to_path_buf(),
+            error_log_path: error_log.to_path_buf(),
             config: config_info,
-            memory_dir: memory.to_path_buf(),
             embed_backend,
-        }
-    }
-
-    pub fn refresh(
-        &self,
-        log: &Path,
-        toolbox: &Path,
-        memory: &Path,
-        schedules: &Path,
-        skills: &Path,
-        error_log: &Path,
-    ) {
-        {
-            let mut ev = self.events.write().unwrap_or_else(|e| e.into_inner());
-            ev.refresh(log);
-        }
-        {
-            let mem = self.memory.read().unwrap_or_else(|e| e.into_inner());
-            if mem.needs_reload(memory) {
-                drop(mem);
-                let mut mem = self.memory.write().unwrap_or_else(|e| e.into_inner());
-                *mem = data::memory::MemoryStats::load(memory);
-            }
-        }
-        {
-            let mut tb = self.toolbox.write().unwrap_or_else(|e| e.into_inner());
-            *tb = data::toolbox::load(toolbox);
-        }
-        {
-            let mut sc = self.schedules.write().unwrap_or_else(|e| e.into_inner());
-            *sc = data::schedules::load(schedules);
-        }
-        {
-            let mut sk = self.skills.write().unwrap_or_else(|e| e.into_inner());
-            *sk = data::skills::load(skills);
-        }
-        {
-            let mut be = self
-                .backend_errors
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
-            be.refresh(error_log);
-        }
-        {
-            let kv = self.kv.read().unwrap_or_else(|e| e.into_inner());
-            if kv.needs_reload(memory) {
-                drop(kv);
-                let mut kv = self.kv.write().unwrap_or_else(|e| e.into_inner());
-                *kv = data::kv::KvData::load(memory);
-            }
         }
     }
 }
