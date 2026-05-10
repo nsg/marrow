@@ -61,14 +61,15 @@ Global tables available:
 - TASK.description (string): the user's task description
 - PARAMS (table): per-tool parameters (e.g. PARAMS["LOCATION"])
 
-Review criteria:
+Review criteria — focus on CODE CORRECTNESS only, not tool design or purpose:
 1. Does the code actually do what the description claims?
-2. Tool design: A data tool should do ONE thing (fetch one data source). A glue tool may call other tool functions to compose data tools — that is fine. But a data tool should NOT do multiple unrelated things.
-3. Is the tool reusable/generic, or does it have hardcoded values that contradict a generic description? (e.g., description says "any location" but code hardcodes "London")
-4. Does the name accurately reflect what the tool does?
-5. Does the code use host functions correctly?
-6. Does the code handle errors (check HTTP status, handle parse failures)?
-7. Credentials: Does the tool use secret() for API keys and passwords? Hardcoded credentials or invented syntax (e.g. @name, ${{name}}) must be replaced with secret("name").
+2. Does the code use host functions correctly?
+3. Does the code handle errors (check HTTP status, handle parse failures)?
+4. Credentials: Does the tool use secret() for API keys and passwords? Hardcoded credentials or invented syntax (e.g. @name, ${{name}}) must be replaced with secret("name").
+5. Are there bugs (e.g., incorrect Lua patterns, nil handling, type errors)?
+6. Does the description contradict the code? (e.g., says "any location" but code hardcodes "London")
+
+DO NOT fail a tool for its design philosophy, scope, or level of generality. The user chose the tool's purpose — your job is to make the code correct, not to redesign it.
 
 Respond in this exact format:
 ```verdict
@@ -116,12 +117,11 @@ Global tables available:
 
 Rules:
 - Return a Lua table with the context data
-- Fix ALL issues mentioned above
+- Fix ALL issues mentioned above — fix the CODE, do not change the tool's purpose or scope
 - Use PARAMS for input values, not hardcoded values
 - Use secret("name") for ALL credentials (API keys, passwords, tokens) — never hardcode them, never invent alternative syntax
-- If the description is too generic for the code, update the description to match
-- If the code is too specific, make it generic (e.g., use PARAMS for variable data)
-- Keep it simple and focused
+- If the description contradicts the code, update the description to match what the code does
+- Preserve the tool's intended design — do not narrow or redesign it
 
 Respond in this exact format:
 ```name
